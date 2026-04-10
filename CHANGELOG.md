@@ -1,7 +1,7 @@
 # CHANGELOG
 
 All notable changes to TRON are documented here.
-One entry per sync from the private repo. Version is the source of truth in `VERSION`.
+Version is the source of truth in `VERSION`.
 
 ---
 
@@ -14,13 +14,7 @@ One entry per sync from the private repo. Version is the source of truth in `VER
 - `tron-local.md`: updated bus init, send, read, and poll commands to SQLite
 - `skill-tg-comms.md`: updated all bus interaction to SQLite
 - `tron-state.md`: updated spawn mode field, added `WATCHDOG_KILL` to notifications table
-- Repo restructure: OSS repo moved from nested `oss/` to sibling `../tron/`
-- Versioning: added `VERSION` file as single source of truth; sync commits now tagged with version
-
-### Infrastructure
-- `sync-oss.sh` updated to resolve OSS path as sibling (`../tron/`)
-- `sync-oss.sh` now reads `VERSION` and tags commit messages
-- `instance.md` Last Sync now records version synced
+- Versioning: added `VERSION` file as single source of truth
 
 ---
 

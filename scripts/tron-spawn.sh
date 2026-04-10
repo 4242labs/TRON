@@ -100,7 +100,6 @@ elif [ "$MODE" = "headless" ]; then
   TRON_POLL_INTERVAL=30 \
   TRON_TRANSPORT="${TRANSPORT}" \
   TRON_LAST_MSG_TIME="$(date +%s)" \
-  TRON_POLL_OFFSET=0 \
   claude --model "${MODEL}" \
     -p "${PROMPT}" \
     --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \

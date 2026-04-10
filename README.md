@@ -122,6 +122,8 @@ Before seeding, the target project must have:
 - `meta/logs/` — for log folders
 - `meta/pipeline.md` — TRON reads this at every session start
 
+**Optional — shared-knowledge:** a sibling directory (`shared-knowledge/`) with shared agent behavioral guidelines (`principles-base.md`, `skill-architect-modes.md`, `block-spec-template.md`). TRON works without it, but agents won't have shared behavioral rules. TRON-SEED will warn if absent but will not abort.
+
 ### Step-by-Step
 
 **1. Invoke TRON-SEED:**
