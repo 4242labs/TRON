@@ -1,4 +1,4 @@
-# Agent: TRON-SEED v0.2
+# Agent: TRON-SEED v2.25
 
 Orchestrator seeder. Discovers a project's structure and plants a project-local TRON instance.
 
@@ -125,8 +125,12 @@ Discovered agents:
 ```
 
 **Also ask:**
-- Default spawn mode for this project: interactive terminal or headless?
 - Max concurrent agents? (default: 5)
+
+**Spawn mode is role-based (not configurable per project):**
+- Engineer / Architect → **interactive only** (complex dev requires intervention)
+- Reviewer / Analyst → **interactive or headless** (read-only, scoped tasks)
+Inform the user of this policy. They can override per-session but the default is enforced.
 
 ### Step 5 — Configure Notifications
 
@@ -136,7 +140,7 @@ Present the full notification events table:
 ## Notification Configuration
 
 🔴 Requires-action events are always on (non-configurable):
-  BLOCKER, QUESTION, ERROR, STALL, UNRESPONSIVE, SESSION_ABORTED
+  BLOCKER, QUESTION, ERROR, STALL, UNRESPONSIVE, WATCHDOG_KILL, SESSION_ABORTED
 
 ℹ️ Informational events — enable or disable each:
   SESSION_START, SPAWNED, SV-PASS, SESSION_COMPLETE, PIPELINE_EXHAUSTED
@@ -156,6 +160,7 @@ Before writing anything, present a complete plan:
 |:--|:--|:--|
 | CREATE | meta/agents/tron.md | Project-local orchestrator |
 | CREATE | meta/logs/tron/ | TRON session log directory |
+| CREATE | meta/logs/tron/bus.db | SQLite message bus |
 | CREATE | meta/logs/tron/tron-state.md | TRON persistent state |
 | CREATE | meta/blocks/handover-reviewer-code.md | Reviewer scope file (if reviewer exists) |
 | CREATE | meta/skills/skill-tg-comms.md | Agent communication skill |
@@ -171,7 +176,7 @@ Before writing anything, present a complete plan:
 ### Configuration
 - Transport: {tg / cli}
 - TG Channel: {channel name / ID / N/A}
-- Default spawn mode: {interactive / headless}
+- Spawn mode: role-based (engineer/architect → interactive, reviewer/analyst → headless allowed)
 - Max concurrent agents: {N}
 
 ### Agent Roster
@@ -192,7 +197,15 @@ Confirm? (yes / adjust)
 Execute in this order:
 
 1. **Ensure** `meta/logs/tron/` directory exists (`mkdir -p` — safe if already present)
-2. **Ensure** `meta/logs/tron/bus/` directory exists (`mkdir -p`) and `meta/logs/tron/bus/.last_read` exists (`touch` — safe if already present)
+2. **Initialize** `meta/logs/tron/bus.db` (SQLite message bus):
+   ```bash
+   sqlite3 meta/logs/tron/bus.db <<'SQL'
+   PRAGMA journal_mode=WAL;
+   PRAGMA busy_timeout=3000;
+   CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, last_id INTEGER DEFAULT 0);
+   SQL
+   ```
 3. **Create** `meta/logs/tron/tron-state.md` from `tron/templates/tron-state.md` — fill in configuration from Steps 3-5
 4. **Create** `meta/blocks/handover-reviewer-code.md` from `tron/templates/handover-reviewer-code.md` (if reviewer exists in roster)
 5. **Copy** `tron/templates/skill-tg-comms.md` to `meta/skills/skill-tg-comms.md`
@@ -202,7 +215,7 @@ Execute in this order:
    TELEGRAM_BOT_TOKEN={token}
    TELEGRAM_TRON_CHAT_ID={chat_id}
    ```
-8. **Ensure** `meta/.gitignore` includes `.env` and `logs/tron/.tg_update_offset` (if file doesn't exist, create it; if it exists, append missing entries)
+8. **Ensure** `meta/.gitignore` includes `.env`, `logs/tron/.tg_update_offset`, and `logs/tron/bus.db*` (WAL creates `-wal` and `-shm` sidecar files). If file doesn't exist, create it; if it exists, append missing entries.
 9. **Update** each agent doc in the roster — add the following line to the Prerequisites or Session Start section **only if it is not already present** (check before adding to avoid duplication):
    ```
    - [ ] If `TRON_AGENT_ID` is set → read `meta/skills/skill-tg-comms.md` and follow its communication protocol throughout the session
@@ -224,7 +237,7 @@ After writing all files:
 
 - [ ] Write a seed log to `tron/meta/logs/log-{YYMMDD-HHMM}-seed-{project}.md` (see §Seed Log Format)
 - [ ] Commit and push both repos:
-  - `{meta_path}`: `git add -A && git commit -m "tron: seed v0.2 — TRON orchestrator planted" && git push origin main`
+  - `{meta_path}`: `git add -A && git commit -m "tron: seed v2.25 — TRON orchestrator planted" && git push origin main`
   - `tron/`: `git add -A && git commit -m "tron: seed log for {project}" && git push origin main`
 - [ ] Inform the user:
   > "TRON has been planted in `meta/agents/tron.md`. Local TRON is ready for its first run.
@@ -258,7 +271,7 @@ Write to `tron/meta/logs/log-{YYMMDD-HHMM}-seed-{project}.md`:
 
 **Project seeded:** {project_name}
 **Project root:** {project_root_path}
-**TRON-SEED version:** v0.2
+**TRON-SEED version:** v2.25
 
 ## Files Created
 
@@ -274,7 +287,7 @@ Write to `tron/meta/logs/log-{YYMMDD-HHMM}-seed-{project}.md`:
 
 - Transport: {tg / cli}
 - TG Channel: {ID / N/A}
-- Default spawn mode: {interactive / headless}
+- Spawn mode: role-based (engineer/architect → interactive, reviewer/analyst → headless allowed)
 - Max concurrent agents: {N}
 - Notifications: {all / list of disabled}
 
@@ -303,9 +316,9 @@ If the project already has a `tron.md` and the user requests a re-seed:
 
 1. Read the existing `meta/agents/tron.md` — preserve project-specific configuration
 2. Read the existing `meta/logs/tron/tron-state.md` — preserve session history and state
-3. Generate new `tron.md` from `tron/templates/tron-local.md` with preserved config + new v0.2 features
+3. Generate new `tron.md` from `tron/templates/tron-local.md` with preserved config + new v2.25 features
 4. Update `meta/skills/skill-tg-comms.md` from latest template
-5. Create any new files that v0.2 requires but v0.1 didn't have
+5. Create any new files that v2.25 requires but prior versions didn't have
 6. Do NOT overwrite session logs or handover files
 7. Log as a re-seed in `tron/meta/logs/`
 
@@ -322,4 +335,4 @@ If the project already has a `tron.md` and the user requests a re-seed:
 ---
 
 **Home:** `tron/tron-seed.md`
-**Last Updated:** 2026-03-13
+**Last Updated:** 2026-03-24

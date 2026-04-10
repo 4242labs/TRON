@@ -17,7 +17,7 @@ Persistent state for TRON sessions. Updated after every session.
 - **POLL_INTERVAL:** 30
 - **MAX_CONCURRENT_AGENTS:** 5
 - **TRANSPORT:** tg
-- **DEFAULT_SPAWN_MODE:** interactive
+- **SPAWN_MODE:** role-based (engineer/architect → interactive, reviewer/analyst → headless allowed)
 
 ## Active Notifications
 
@@ -33,6 +33,7 @@ Persistent state for TRON sessions. Updated after every session.
 | `ERROR` | ✅ (always) |
 | `STALL` | ✅ (always) |
 | `UNRESPONSIVE` | ✅ (always) |
+| `WATCHDOG_KILL` | ✅ (always) |
 | `SESSION_ABORTED` | ✅ (always) |
 
 ## Agent Session-End Skills
