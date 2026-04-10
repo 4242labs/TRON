@@ -1,143 +1,77 @@
 # TRON — Session Orchestrator
 
-TRON is a session orchestration system for AI agent workflows. It coordinates parallel agent sessions — an Engineer working foreground while a Reviewer audits in background — eliminating the need for manual context handoffs and ensuring code review never drifts.
+**Structured, repeatable multi-agent workflows for Claude Code.**
+
+TRON coordinates parallel AI agent sessions so you don't have to. While your Engineer builds, a Reviewer audits in the background. Context carries forward automatically. Code review never drifts. You stay in control.
+
+---
+
+## The Problem
+
+Running multiple AI agents on a real project is messy. Context gets lost between sessions. Code review is skipped or forgotten. Agents go off-script. You end up doing coordination work instead of actual work.
+
+TRON fixes this.
+
+---
+
+## What TRON Does
+
+- **Orchestrates parallel sessions** — Engineer foreground, Reviewer background, both running simultaneously
+- **Carries context forward** — a structured handover file replaces manual status updates between sessions
+- **Enforces code review** — every session end triggers a git-scoped review; findings feed directly into the next session
+- **Validates before closing** — TRON doesn't accept "done" at face value; it runs a structured verification loop before signing off
+- **Keeps you informed remotely** — Telegram notifications at key milestones; reply from your phone to unblock a stalled agent
+- **Never acts without confirmation** — every session starts with a plan you approve before anything runs
 
 ---
 
 ## How It Works
 
-### Architecture
-
-TRON is a **two-layer system**:
-
-1. **`tron-seed.md`** (this repo) — a one-shot agent that plants a project-local TRON instance. Runs once per project, never again.
-2. **`{project}/meta/agents/tron.md`** — the live, project-specific orchestrator that runs every session.
-
-### Session Flow
-
 ```
-User: "You are meta/agents/tron.md. Execute Session Start."
-         │
-         ▼
-    TRON reads handover-engineer.md + pipeline.md
-    Checks for open HIGH debt items
-    Finds last code review timestamp
-         │
-         ▼
-    Presents SESSION PLAN to user
-    Waits for explicit confirmation
-         │
-         ├──────────────────────────────────┐
-         ▼                                  ▼
-  [FOREGROUND]                        [BACKGROUND]
-  Spawn Engineer                      Spawn Reviewer
-  "Execute Session Start"             "Execute Session Start"
-         │                                  │
-         ▼                                  ▼
-  Engineer works,                    Reviewer audits all commits
-  completes tasks,                   since last review log,
-  returns ENGINEER RETURN            returns REVIEWER RETURN
-         │                                  │
-         └──────────────┬───────────────────┘
-                        ▼
-               TRON collects both returns
-               Updates handover-engineer.md
-               Appends reviewer findings if any
-               Writes TRON session log
-               Presents final summary to user
+You say: "Execute Session Start"
+              │
+              ▼
+     TRON reads project state
+     presents SESSION PLAN
+     waits for your go-ahead
+              │
+        ┌─────┴──────┐
+        ▼            ▼
+   Engineer      Reviewer
+   [foreground]  [background]
+   builds        audits commits
+        │            │
+        └─────┬──────┘
+              ▼
+     TRON collects returns
+     resolves findings
+     updates handover
+     closes session
 ```
 
-### Handover Files
-
-| File                                    | Written by                      | Read by                                                                       |
-| :-------------------------------------- | :------------------------------ | :---------------------------------------------------------------------------- |
-| `meta/blocks/handover-engineer.md`      | Engineer (session end)          | Engineer (deletes at start), TRON (read-only), Architect/Analysts (read-only) |
-| `meta/blocks/handover-reviewer-code.md` | TRON (before spawning reviewer) | Reviewer (read-only)                                                          |
-
-**The engineer handover is the system's memory.** It carries task state, system health, blockers, and next steps between sessions. It is never overwritten by anyone except the Engineer.
-
-### Agent Roles
-
-| Agent    | Mode       | Blocks TRON?          | Returns         |
-| :------- | :--------- | :-------------------- | :-------------- |
-| Engineer | Foreground | Yes — TRON waits      | ENGINEER RETURN |
-| Reviewer | Background | No — runs in parallel | REVIEWER RETURN |
-
-TRON collects both returns, resolves findings, and updates state before closing the session.
-
-### Reviewer Scope
-
-The Reviewer's scope is always **git-based** — commits since the timestamp of the last review log file in `meta/logs/code-review/`. TRON extracts this automatically. The Reviewer never reads working tree files — committed state only.
+One command to start. TRON handles the rest.
 
 ---
 
-## Files in This Directory
+## Key Features
 
-```
-tron/
-├── README.md               ← this file
-├── tron-seed.md            ← one-shot seeder agent
-├── templates/              ← project-local file templates (used by tron-seed)
-│   ├── tron-local.md       ← project-local orchestrator template
-│   ├── tron-state.md       ← TRON state template
-│   ├── skill-tg-comms.md   ← agent communication skill template
-│   └── handover-reviewer-code.md ← reviewer scope template
-├── scripts/
-│   └── tron-spawn.sh       ← agent spawn wrapper (macOS/iTerm + headless)
-├── meta/
-│   ├── blocks/             ← architecture & protocol docs
-│   │   ├── adr-v02.md      ← ADR: TG message bus & active supervision
-│   │   └── comms-protocol.md ← message format, heartbeat, validation specs
-│   └── logs/               ← cross-project seed logs
-│       └── log-YYMMDD-HHMM-seed-{project}.md
-└── tron-avatar.jpg
-```
+**Persistent context** — the engineer handover file is the system's memory. It carries task state, blockers, and next steps across every session automatically.
 
-Project-local TRON files (created by seeding):
+**Git-scoped reviews** — the Reviewer always works from committed state, scoped to commits since the last review. No guesswork, no missed files.
 
-```
-{project}/meta/
-├── agents/
-│   └── tron.md                     ← live orchestrator for this project
-├── blocks/
-│   ├── handover-engineer.md        ← engineer inter-session state
-│   └── handover-reviewer-code.md   ← reviewer scope (written by TRON each session)
-└── logs/
-    └── tron/
-        └── log-YYMMDD-HHMM-{desc}.md
-```
+**Active supervision** — TRON monitors heartbeats, detects stalls, and escalates to you if an agent goes dark. Sessions don't hang silently.
+
+**SQLite message bus** — agents communicate through a WAL-mode SQLite bus. Ordered, concurrent-safe, queryable. No file collisions.
+
+**Project-local instances** — each project gets its own `tron.md` tailored to its structure. One seeder, many projects, zero coupling.
+
+**No infrastructure** — runs entirely from your local machine. No servers, no cloud dependencies, no paid services beyond Claude and Telegram.
 
 ---
 
-## Requirements
+## Quick Start
 
-- **macOS** — interactive spawn uses iTerm2 via AppleScript (`tron-spawn.sh`). Headless spawn works on any Unix system.
-- **iTerm2** — required for interactive agent spawning
-- **Claude Code CLI** (`claude`) — must be installed and authenticated
-- **`sqlite3`** — for the message bus (`bus.db`). Pre-installed on macOS.
-- **`python3`** — for Telegram response parsing. Pre-installed on macOS.
-- **`curl`** — for Telegram API calls. Pre-installed on macOS.
-
----
-
-## How to Seed a New Project
-
-Seeding plants a project-local `tron.md` tailored to that project's structure. It runs once. After seeding, you never invoke `tron-seed.md` again for that project.
-
-### Prerequisites
-
-Before seeding, the target project must have:
-
-- `meta/agents/` — with at least `engineer.md` and `reviewer-code.md`
-- `meta/blocks/` — for handover files (may contain `session-handover.md` to rename)
-- `meta/logs/` — for log folders
-- `meta/pipeline.md` — TRON reads this at every session start
-
-**Optional — shared-knowledge:** a sibling directory (`shared-knowledge/`) with shared agent behavioral guidelines (`principles-base.md`, `skill-architect-modes.md`, `block-spec-template.md`). TRON works without it, but agents won't have shared behavioral rules. TRON-SEED will warn if absent but will not abort.
-
-### Step-by-Step
-
-**1. Invoke TRON-SEED:**
+**1. Seed your project** (one-time):
 
 ```
 You are tron/tron-seed.md.
@@ -145,106 +79,41 @@ The target project is {project-root}/.
 Execute the Seeding Procedure.
 ```
 
-**2. TRON-SEED will:**
-
-- Scan the project structure
-- Present a full plan (files to create, rename, update) — **nothing is written until you confirm**
-- Run a reference sweep for any stale `session-handover.md` references
-- Create `tron.md`, log folder, and both handover files
-- Update all agent docs that reference the engineer handover
-- Write a seed log to `tron/logs/`
-
-**3. After seeding, run First Run:**
+**2. Run First Run** (orientation only):
 
 ```
 You are {project}/meta/agents/tron.md. Execute First Run.
 ```
 
-TRON will read the agent docs, ask questions until it fully understands the project, then confirm readiness.
-
-**4. From then on, every session:**
+**3. Every session from then on:**
 
 ```
 You are {project}/meta/agents/tron.md. Execute Session Start.
 ```
 
-### What Gets Created
-
-| Action | Path                                                       | Note                                               |
-| :----- | :--------------------------------------------------------- | :------------------------------------------------- |
-| CREATE | `meta/agents/tron.md`                                      | Project-local orchestrator                         |
-| CREATE | `meta/logs/tron/`                                          | TRON session log folder                            |
-| CREATE | `meta/logs/tron/bus.db`                                    | SQLite message bus (WAL mode)                      |
-| CREATE | `meta/logs/tron/tron-state.md`                             | TRON persistent state                              |
-| CREATE | `meta/blocks/handover-reviewer-code.md`                    | Reviewer scope file                                |
-| CREATE | `meta/skills/skill-tg-comms.md`                            | Agent communication skill                          |
-| CREATE | `meta/.env`                                                | TG credentials (gitignored)                        |
-| RENAME | `meta/blocks/session-handover.md` → `handover-engineer.md` | If it exists                                       |
-| UPDATE | `meta/agents/engineer.md`                                  | Handover path + Engineer Return format             |
-| UPDATE | `meta/agents/reviewer-code.md`                             | Handover path + git scope + Reviewer Return format |
-| UPDATE | `meta/agents/architect.md`                                 | Handover path (read-only reference)                |
-| SWEEP  | All files referencing `session-handover.md`                | Zero remaining references guaranteed               |
+That's it.
 
 ---
 
-## Expandability
+## Requirements
 
-To add a new agent to a running TRON instance:
-
-1. Add it to the Agent Roster table in `tron.md`
-2. Create a handover file in `meta/blocks/` if needed
-3. Define its return message format in `tron.md` §Return Message Formats
-4. Add a spawn step to `tron.md` §Execution Phase 1
-5. Add a return-handling step to §Execution
-
-No rearchitecting required. Practical ceiling: 3–4 parallel agents before coordination overhead outweighs benefit.
+- macOS (interactive spawn) or any Unix (headless)
+- [iTerm2](https://iterm2.com) — for interactive agent windows
+- [Claude Code CLI](https://claude.ai/code) — installed and authenticated
+- `sqlite3`, `python3`, `curl` — pre-installed on macOS
 
 ---
 
-## Guardrails
+## Technical Details
 
-- **TRON-SEED runs once per project.** If `tron.md` already exists, TRON-SEED stops and asks before doing anything.
-- **Nothing is written without user confirmation.** TRON-SEED presents its full plan and waits for explicit approval.
-- **The reference sweep is non-negotiable.** Every stale `session-handover.md` reference must be updated — no deferrals.
-- **TRON does not orchestrate on First Run.** First Run is orientation only. Session Start is the first real orchestration.
-- **Engineer handover is never overwritten by TRON, Architect, or Analysts.** Only the Engineer writes it. Everyone else reads.
+Architecture, session flow, message bus, supervisor validation protocol, seeding reference, and Telegram setup → **[ARCHITECTURE.md](ARCHITECTURE.md)**
 
 ---
 
-## Known Limitations
+## License
 
-- TRON cannot literally run two agents in parallel within a single AI context — "background" means the user spawns the Reviewer in a separate session/tab while the Engineer runs in the main one. TRON coordinates the handoffs, not the actual parallelism.
-- First Run validation on a real project is a one-time opportunity. Once a project is seeded (by any means), that validation cannot be repeated.
-
----
-
-## Telegram Notifications
-
-TRON sends notifications to a dedicated Telegram channel at key workflow milestones, keeping you informed when away from the terminal.
-
-**Two tiers:**
-
-- 🔴 **Requires action** — always on, non-configurable: `BLOCKER`, `QUESTION`, `ERROR`, `STALL`, `UNRESPONSIVE`, `WATCHDOG_KILL`, `SESSION_ABORTED`
-- ℹ️ **Informational** — configurable per project: `SESSION_START`, `SPAWNED`, `SV-PASS`, `SESSION_COMPLETE`, `PIPELINE_EXHAUSTED`
-
-**Setup per project:**
-
-1. Create a dedicated Telegram **group** for the project's TRON instance (groups only — channels are not supported)
-2. Add the project's bot to that group
-3. Create `{meta_path}/.env` (local only, gitignored):
-   ```
-   TELEGRAM_BOT_TOKEN=...
-   TELEGRAM_TRON_CHAT_ID=...
-   ```
-4. Ensure `{meta_path}/.gitignore` includes `.env`
-
-TRON-SEED will ask for these credentials during Step 2 and create the `.env` file as part of seeding. On First Run, TRON will ask which ℹ️ informational notifications to enable and record the active set in the local `tron.md`.
-
-**No server required.** Notifications are sent via `curl` to the Telegram Bot API directly from local — no infrastructure dependency.
-
-**If `.env` is missing or credentials are unset:** notifications are skipped silently. A warning is logged in the session log. The workflow is never blocked by a failed notification.
+[Creative Commons Attribution-NonCommercial 4.0](LICENSE) — free to use, not for commercial purposes.
 
 ---
 
-**Canonical source:** `tron/tron-seed.md`
-**Last Updated:** 2026-04-10
+*Built for developers who want AI agents that work like a team, not a prompt.*
