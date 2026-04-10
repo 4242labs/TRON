@@ -28,7 +28,7 @@ TRON-SEED is a one-shot agent. Its only job is to:
 
 Before any work, read and internalize:
 
-- [ ] `shared-knowledge/principles-base.md` — shared behavioral rules
+- [ ] `shared-knowledge/principles-base.md` — shared behavioral rules (optional — skip if not present)
 - [ ] The target project's `meta/principles.md` — project-specific rules
 - [ ] The target project's `meta/context.md` — project context
 
@@ -49,10 +49,11 @@ Before any work, read and internalize:
 
 The following must exist before TRON can be seeded. If any are missing → abort and tell the user what's needed.
 
-- [ ] `shared-knowledge/` — must be accessible (sibling to project root or added to project)
-- [ ] `shared-knowledge/principles-base.md` — must exist
-- [ ] `shared-knowledge/skills/skill-architect-modes.md` — must exist (block sizing guardrails)
-- [ ] `shared-knowledge/templates/block-spec-template.md` — must exist (block spec format)
+**Optional — shared-knowledge:**
+- [ ] `shared-knowledge/` — a sibling repo with shared agent guidelines. If absent, TRON still works but agents won't have shared behavioral rules. Inform the user and continue.
+- If present: verify `shared-knowledge/principles-base.md`, `shared-knowledge/skills/skill-architect-modes.md`, `shared-knowledge/templates/block-spec-template.md` exist. If any are missing, warn but do not abort.
+
+**Required:**
 - [ ] `meta/agents/` — must contain at least one agent doc
 - [ ] `meta/logs/` — must exist with at least one role subdirectory
 - [ ] `meta/skills/` — must exist
@@ -209,7 +210,15 @@ Execute in this order:
 3. **Create** `meta/logs/tron/tron-state.md` from `tron/templates/tron-state.md` — fill in configuration from Steps 3-5
 4. **Create** `meta/blocks/handover-reviewer-code.md` from `tron/templates/handover-reviewer-code.md` (if reviewer exists in roster)
 5. **Copy** `tron/templates/skill-tg-comms.md` to `meta/skills/skill-tg-comms.md`
-6. **Create** `meta/agents/tron.md` from `tron/templates/tron-local.md` — fill in ALL `{placeholders}` with project-specific values discovered and confirmed in Steps 1-6
+6. **Create** `meta/agents/tron.md` from `tron/templates/tron-local.md` — fill in ALL `{placeholders}` with project-specific values discovered and confirmed in Steps 1-6. Key placeholders to fill explicitly:
+   - `{project_name}` — project name
+   - `{date}` — today's date
+   - `{meta_path}` — absolute path to project's `meta/` (everywhere it appears)
+   - `{reviewer_log_path}` — subdirectory name under `meta/logs/` where code review logs are written (e.g., `code-review`). Discovered in Step 2 from existing log directories. Default: `code-review`.
+   - `{paths_table}` — fill with a table of key project paths (project root, meta path, log paths, etc.) for quick reference
+   - `{notification_table}` — fill from notification choices confirmed in Step 5
+   - `{agent_roster_table}` — fill from roster confirmed in Step 4
+   - `{model_defaults_table}` — fill from model selections confirmed in Step 4
 7. **Create** `meta/.env` with TG credentials (if TG enabled):
    ```
    TELEGRAM_BOT_TOKEN={token}
