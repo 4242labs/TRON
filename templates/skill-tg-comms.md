@@ -9,7 +9,7 @@ How agents send messages, poll for commands, and report status. This skill is re
 
 ## 1. Overview
 
-All agents in a TRON-orchestrated session communicate through a **file-based message bus** at `{TRON_META_PATH}/logs/tron/bus/`. Agents write to the bus; TRON reads the bus and forwards messages to Telegram for user visibility. Messages are tagged with the agent's ID so TRON and the user can track who said what.
+All agents in a TRON-orchestrated session communicate through a **SQLite message bus** at `{TRON_META_PATH}/logs/tron/bus.db`. Agents write to the bus; TRON reads the bus and forwards messages to Telegram for user visibility. Messages are tagged with the agent's ID so TRON and the user can track who said what.
 
 **Your agent ID** is set in the environment variable `TRON_AGENT_ID` (e.g., `ENG-1`, `REV-1`, `ARCH-1`). This was assigned by TRON when you were spawned. Use it in all communications.
 
@@ -60,15 +60,14 @@ Run this shell command to send a message:
 
 ```bash
 tron_msg="[${TRON_AGENT_ID}] {your message here}"
-timestamp=$(date +%s%N)
-echo "${tron_msg}" > "${TRON_META_PATH}/logs/tron/bus/${timestamp}-${TRON_AGENT_ID}.msg"
+sqlite3 "${TRON_META_PATH}/logs/tron/bus.db" "INSERT INTO messages (ts, sender, body) VALUES ($(date +%s), '${TRON_AGENT_ID}', '$(echo "$tron_msg" | sed "s/'/''/g")');"
 echo "${tron_msg}"
 export TRON_LAST_MSG_TIME=$(date +%s)
 ```
 
-This writes to the file bus AND prints to terminal. TRON reads the bus and forwards to TG — agents never send to TG directly.
+This writes to the SQLite bus AND prints to terminal. TRON reads the bus and forwards to TG — agents never send to TG directly.
 
-**If the bus directory doesn't exist:** Print to terminal only. Never block work over a failed notification.
+**If `bus.db` doesn't exist or `sqlite3` fails:** Print to terminal only. Never block work over a failed notification.
 
 ### 2.4 Long Messages
 
@@ -76,7 +75,7 @@ Keep bus messages concise. If a message exceeds 4096 characters (TG forwarding l
 
 1. Split into chunks at natural boundaries (paragraph breaks, table rows)
 2. Append `(1/N)`, `(2/N)` to each chunk
-3. Write each chunk as a separate bus file
+3. INSERT each chunk as a separate bus message
 
 ---
 
@@ -87,22 +86,22 @@ Between major steps in your work, check for messages directed at you.
 ### 3.1 When to Poll
 
 - **Between every major step** (after completing a task, before starting the next)
-- **After sending a DONE message** (TRON will send validation questions)
+- **⛔ After sending a DONE message** — this is the most critical time to poll. TRON sends SV-01 immediately after DONE. If you stop polling here, the session stalls.
 - **While waiting** for a long operation to complete (if possible)
-- You do NOT need to poll continuously. Check between steps — that's sufficient.
+- **Keep polling until TRON releases you** (`@{AGENT_ID}: Approved. You are released.`)
+- You do NOT need to poll continuously. Check between steps — that's sufficient. But **never stop after DONE**.
 
 ### 3.2 How to Poll
 
 Run this shell command to check for new messages from TRON:
 
 ```bash
-touch -a "${TRON_META_PATH}/logs/tron/bus/.last_read_${TRON_AGENT_ID}" 2>/dev/null
-find "${TRON_META_PATH}/logs/tron/bus/" -name "*-TRON.msg" -newer "${TRON_META_PATH}/logs/tron/bus/.last_read_${TRON_AGENT_ID}" 2>/dev/null \
-  | sort | while read f; do cat "$f"; done
-touch "${TRON_META_PATH}/logs/tron/bus/.last_read_${TRON_AGENT_ID}"
+last_id=$(sqlite3 "${TRON_META_PATH}/logs/tron/bus.db" "SELECT COALESCE((SELECT last_id FROM cursors WHERE reader='${TRON_AGENT_ID}'), 0);" 2>/dev/null || echo "0")
+sqlite3 "${TRON_META_PATH}/logs/tron/bus.db" "SELECT body FROM messages WHERE id > ${last_id} AND sender = 'TRON' ORDER BY id;" 2>/dev/null
+sqlite3 "${TRON_META_PATH}/logs/tron/bus.db" "INSERT OR REPLACE INTO cursors (reader, last_id) VALUES ('${TRON_AGENT_ID}', (SELECT COALESCE(MAX(id),0) FROM messages));" 2>/dev/null
 ```
 
-This reads all TRON bus messages written since your last poll. The `.last_read_{AGENT_ID}` file tracks your read cursor.
+This reads all TRON bus messages written since your last poll. The `cursors` table tracks your read position.
 
 ### 3.3 What to Look For
 
@@ -166,6 +165,8 @@ TRON will send you validation questions at key moments. These are not optional �
 
 ### 5.1 Task Completion (SV-01)
 
+**⛔ CRITICAL: After sending DONE, KEEP POLLING THE BUS.** TRON will send SV-01 validation questions immediately after your DONE message. If you stop polling, you will miss SV-01, TRON will mark you as stalled, and the session will hang. **Do not stop polling until TRON explicitly releases you** (e.g., `@{AGENT_ID}: Approved. You are released.`).
+
 When TRON asks:
 ```
 [TRON] 🔍 @ENG-1: Has every single task from the block been successfully delivered, tested, and validated directly in the server(s)?
@@ -179,6 +180,14 @@ When TRON asks:
 When truly complete:
 ```
 [ENG-1] ✅ VERIFIED: All tasks complete. No pending items.
+```
+
+**Round 2 — Per-AC walkthrough:** TRON will then send a numbered list of acceptance criteria from the block spec. Respond with PASS or FAIL + brief evidence for each:
+```
+[ENG-1] ✅ VERIFIED: AC walkthrough:
+AC1: PASS — POST /api/register returns 201, bcrypt hash stored
+AC2: PASS — JWT cookie set, persists across refresh
+AC3: FAIL — Google OAuth configured but keys not provided (user action)
 ```
 
 ### 5.2 Session End (SV-02)
@@ -214,7 +223,7 @@ These are set by TRON when you are spawned. Do not modify them.
 | `TRON_AGENT_ROLE` | Your role | `engineer` |
 | `TRON_BLOCK` | Block you're working on | `block-04-02-auth-middleware` |
 | `TRON_META_PATH` | Path to project's `meta/` | `/path/to/project/meta` |
-| `TRON_POLL_OFFSET` | (Deprecated — bus uses file cursors) | N/A |
+| `TRON_POLL_OFFSET` | (Deprecated — bus uses SQLite cursors) | N/A |
 | `TRON_HEARTBEAT_INTERVAL` | Seconds between heartbeats | `300` |
 | `TRON_POLL_INTERVAL` | Seconds between bus polls | `30` |
 | `TRON_TRANSPORT` | Active transport | `tg` or `cli` |
@@ -222,18 +231,18 @@ These are set by TRON when you are spawned. Do not modify them.
 
 ---
 
-## 7. Bus File Convention
+## 7. Bus Database Convention
 
-All messages go through the file bus at `{TRON_META_PATH}/logs/tron/bus/`.
+All messages go through the SQLite bus at `{TRON_META_PATH}/logs/tron/bus.db`.
 
-**File naming:** `{timestamp}-{SENDER_ID}.msg` (e.g., `1710500000000000000-ENG-1.msg`, `1710500000100000000-TRON.msg`)
+**Schema:** `messages` table (id, ts, sender, body) + `cursors` table (reader, last_id). WAL mode enabled for concurrent access.
 
-**Read cursors:** `.last_read_{AGENT_ID}` files track each reader's position.
+**Read cursors:** The `cursors` table tracks each reader's last-read message ID. No file-based cursors needed.
 
-**Lifecycle:** Bus files accumulate during a session. TRON cleans up at session end.
+**Lifecycle:** TRON initializes the DB at session start (clears previous session data). The DB file persists across sessions but rows are cleared each time.
 
-**If TG is not configured (CLI-only mode):** The bus still works identically. The only difference is TRON won't forward to TG — user must read the terminal or bus files directly. This is degraded mode (no remote access).
+**If TG is not configured (CLI-only mode):** The bus still works identically. The only difference is TRON won't forward to TG — user must read the terminal or query `bus.db` directly. This is degraded mode (no remote access).
 
 ---
 
-**Last Updated:** 2026-03-15 (v2: bus-first architecture — agents write to bus, TRON forwards to TG)
+**Last Updated:** 2026-03-24 (v2.25: SQLite bus, tiered watchdog, session metrics)
