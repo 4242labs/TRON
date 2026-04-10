@@ -109,6 +109,17 @@ Project-local TRON files (created by seeding):
 
 ---
 
+## Requirements
+
+- **macOS** — interactive spawn uses iTerm2 via AppleScript (`tron-spawn.sh`). Headless spawn works on any Unix system.
+- **iTerm2** — required for interactive agent spawning
+- **Claude Code CLI** (`claude`) — must be installed and authenticated
+- **`sqlite3`** — for the message bus (`bus.db`). Pre-installed on macOS.
+- **`python3`** — for Telegram response parsing. Pre-installed on macOS.
+- **`curl`** — for Telegram API calls. Pre-installed on macOS.
+
+---
+
 ## How to Seed a New Project
 
 Seeding plants a project-local `tron.md` tailored to that project's structure. It runs once. After seeding, you never invoke `tron-seed.md` again for that project.
