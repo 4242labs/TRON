@@ -26,13 +26,12 @@ Every artifact you need lives in `meta/agents/tron/` or in this file (`meta/agen
 4. Write your own session ID to `meta/agents/tron/current-id` (single line; overwrite).
 5. If `dispatched.log` shows workers from a prior session: run `skill-recover`.
 6. Spawn the persistent architect (per `workflow.md` R1, if architect is in declared agents) — `skill-dispatch` with role=architect-persistent.
-7. **Greet operator** with state summary and per-session knob defaults inline. Example:
+7. **Greet operator** with state summary, then ask for per-session knob values inline. Example:
    ```
    TRON online. State: {blocks_done_lifetime} blocks done lifetime, {workers_lifetime} workers spawned.
-   Per-session defaults: max_concurrent_engineers={N}, session_end_idle_min={M}. Override?
-   Awaiting block.
+   Per-session values needed before I dispatch: max_concurrent_engineers? session_end_idle_min?
    ```
-   If operator skips the override, proceed with defaults. Apply any override to `workflow-state.md` immediately.
+   No defaults; do not proceed until the operator answers both. Apply answers to `workflow-state.md` immediately.
 
 ## On every operator message
 

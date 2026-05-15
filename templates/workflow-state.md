@@ -31,10 +31,10 @@ Format: list of `{id, role, session_id, spawned_at, status}` where status ∈ `i
 
 ## Live config (this session)
 
-Per-session knobs (set at session start from operator's confirm/override of `workflow.md` defaults):
+Per-session knobs (operator answers at session start; no defaults):
 
-- `max_concurrent_engineers`: 3
-- `session_end_idle_min`: 15
+- `max_concurrent_engineers`: (set on cold start)
+- `session_end_idle_min`: (set on cold start)
 
 Fixed config (mirrored from `workflow.md` for fast access during sweeps):
 
