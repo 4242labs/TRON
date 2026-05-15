@@ -38,14 +38,14 @@ Engineers, architects, and reviewers do not call `claude stop` on themselves. Th
 
 ---
 
-## Per-session knobs (TRON asks at session start; defaults below)
+## Per-session knobs (TRON asks at session start; no defaults)
 
-TRON greets the operator with these defaults inline at session start and lets the operator override before any work is accepted. Live values land in `workflow-state.md`.
+TRON asks the operator for these values at the start of every session. No defaults — TRON does not proceed until both are answered. Live values land in `workflow-state.md`.
 
-| Knob | Default | Notes |
-|:--|:--|:--|
-| `max_concurrent_engineers` | 3 | Hard cap; TRON refuses to spawn beyond this in the session |
-| `session_end_idle_min` | 15 | If no operator activity for this many minutes and no work in flight, TRON proposes session end |
+| Knob | Notes |
+|:--|:--|
+| `max_concurrent_engineers` | Hard cap; TRON refuses to spawn beyond this in the session |
+| `session_end_idle_min` | If no operator activity for this many minutes and no work in flight, TRON proposes session end |
 
 ## Fixed config (set once; never asked)
 
