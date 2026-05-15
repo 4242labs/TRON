@@ -62,7 +62,7 @@ Copy canon `workflow.example.md` to `{target_repo}/meta/agents/tron/workflow.md`
 - R5 — architect mid-session review: keep / modify? (only ask if architect declared)
 - R6 — fresh engineer per block: keep / modify?
 - R7 — workers never self-terminate: locked, do not modify (Premise 20)
-- Per-session knob defaults: `max_concurrent_engineers`, `session_end_idle_min` — confirm defaults
+- Per-session knobs: `max_concurrent_engineers`, `session_end_idle_min` — no defaults; TRON asks at every session start
 - Fixed config: `reviewer_threshold`, `tier1_silent_min`, `tier2_silent_min` — confirm defaults
 
 **Validate workflow against declared agents.** If `workflow.md` references a role not declared in Step 2: refuse to proceed; ask operator to either add the agent or trim the rule.
