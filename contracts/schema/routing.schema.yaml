@@ -1,0 +1,76 @@
+# routing.yaml — schema (B0)
+# CANON. The step-primitive library (edges + judgment tool per primitive) and
+# the message-tag -> action map. Ships with TRON, copied verbatim at seed.
+# The seeder NEVER writes this. B2 authors the instance from this shape.
+# Validated by blueprint-lint canon-level rules (contracts §9, L1–L5).
+
+# ── Primitive library ──────────────────────────────────────────────
+# Each primitive declares its FIXED outcome-edge set and which judgment
+# tool(s) it may call. The composition (workflow.yaml) binds the edges.
+primitives:
+  dispatch:
+    params: [role, concurrency?]
+    tools:  [classify_message, assess_stall]
+    edges:  [done, wall, stalled]      # FIXED — lint L1
+  review:
+    params: [role, cadence?]
+    tools:  [classify_message]
+    edges:  [clean, findings]
+  gate:
+    params: [kind]
+    tools:  []                         # deterministic; classify only if a kind needs it
+    edges:  [pass, fail]
+  escalate:
+    params: [reason]
+    tools:  [classify_message]
+    edges:  [resolved, abort]
+  findings-triage:
+    params: []
+    tools:  [triage, scope_fix]
+    edges:  [fixes, none]
+
+# ── Message-tag enum (closed) + action map ─────────────────────────
+# Every tag classify_message can return maps to exactly one action:
+#   edge:<name>   -> the active step's outcome edge
+#   side:<handler>-> a global handler; FSM does not advance, step re-entered
+#   tick          -> run one bounded tick
+#   hardwired:escalate -> canon, not composable
+# Total coverage required (lint L3). Enum is closed (lint L2).
+tags:
+  # worker-origin
+  worker.done:           edge:done
+  worker.wall:           edge:wall
+  worker.findings:       edge:findings
+  worker.question_peer:  side:observe
+  worker.question_tron:  side:answer_from_context
+  worker.blocked_dep:    side:mark_blocked
+  worker.progress:       side:none
+  # operator-origin
+  operator.decision:     edge:resolved
+  operator.abort:        edge:abort
+  operator.bug_report:   side:scope_fix_block
+  operator.status_query: side:reply_digest
+  operator.workflow_change: side:edit_self
+  operator.directive:    side:best_effort
+  # system (produced deterministically, not by classify)
+  sweep.tick:            tick
+  worker.stalled:        edge:stalled
+  worker.dead:           side:purge_recover
+  gate.pass:             edge:pass
+  gate.fail:             edge:fail
+  # reserved
+  unclassified:          hardwired:escalate   # reason=unclassified | invalid_output
+
+# ── Invalid-output policy (contracts §4) ───────────────────────────
+invalid_output:
+  max_retries: 2
+  on_exhaustion: unclassified   # -> hardwired escalate
+
+# ── Judgment-tool reference (contracts defined in §3; schemas drive validation) ──
+tools:
+  classify_message: {in: [text, sender, current_step, open_escalation?], out: [tag, slots, confidence]}
+  triage:           {in: [findings, block_ctx], out: [verdicts, fix_needed]}
+  scope_fix:        {in: [finding], out: [goal, acceptance_criteria, scope_bounds, owner_role, deps]}
+  assess_wall:      {in: [situation, block_ctx, project_operator_only], out: [wall, kind, rationale]}
+  assess_stall:     {in: [activity, transcript_tail], out: [stalled, rationale]}
+  # tiering: classify_message, scope_fix -> cheap; triage, assess_wall, assess_stall -> strong

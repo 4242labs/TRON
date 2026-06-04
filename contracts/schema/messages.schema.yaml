@@ -1,0 +1,56 @@
+# messages.yaml — schema (B0)
+# CANON runtime copy registry. Every line TRON emits during a SESSION
+# (operator / worker / terminal / TG), keyed by template id, with named slots.
+# Rendered by render.sh: render(id, slots) -> string. B2 authors the instances.
+# Seeder voice (tron-seed.md) is SEPARATE and never shares keys (contracts §6).
+#
+# RULES enforced by review/lint:
+# - Tone = landing-page persona (dark, dry, sardonic). No host-runtime names, ever.
+# - Every routing action that emits text references a template id that exists here.
+# - Placeholder copy keyed to the tag vocabulary is acceptable for B3 testing (R-4).
+
+# ── Slot catalog (the only interpolations templates may use) ───────
+slots:
+  worker_id: <str>      # e.g. ENG-06-19   (NEVER a host-runtime name)
+  role: <str>
+  block: <str>
+  branch: <str>
+  pr: <str>
+  detail: <str>         # free-text judgment payload (the one slot the LLM may fill with prose)
+  reason: <str>
+  count: <int>
+
+# ── Templates, grouped by channel/situation ────────────────────────
+# Each entry:
+#   text: the canned string with {slot} placeholders
+#   channel: operator | worker | terminal | tg
+#   slots: [ ... ]   # which slots it expects (subset of the catalog)
+templates:
+
+  # dispatch / spawn (worker channel; mirrors v1 tron-scripts spawn blocks)
+  spawn.engineer:   {channel: worker,   slots: [worker_id, block, branch], text: "<canned>"}
+  spawn.architect:  {channel: worker,   slots: [],                          text: "<canned>"}
+  spawn.reviewer:   {channel: worker,   slots: [worker_id, count],          text: "<canned>"}
+  release.worker:   {channel: worker,   slots: [worker_id],                 text: "<canned>"}
+  heartbeat.ping:   {channel: worker,   slots: [worker_id],                 text: "<canned>"}
+  sv01.query:       {channel: worker,   slots: [worker_id, block],          text: "<canned>"}
+
+  # between-task / terminal feedback (terminal channel; seeded from landing-page)
+  terminal.dispatched: {channel: terminal, slots: [worker_id, block], text: "<canned>"}
+  terminal.block_done: {channel: terminal, slots: [block],            text: "<canned>"}
+  terminal.review:     {channel: terminal, slots: [count],            text: "<canned>"}
+  terminal.between:    {channel: terminal, slots: [],                 text: "<canned>"}   # generic progress filler
+
+  # escalation (operator / tg channels)
+  escalate.wall:        {channel: operator, slots: [worker_id, block, detail], text: "<canned>"}
+  escalate.stall:       {channel: operator, slots: [worker_id, block],         text: "<canned>"}
+  escalate.unclassified:{channel: operator, slots: [detail],                   text: "<canned>"}
+  tg.escalate:          {channel: tg,       slots: [worker_id, detail],        text: "<canned>"}
+  tg.status_digest:     {channel: tg,       slots: [detail],                   text: "<canned>"}
+
+  # session lifecycle (operator channel)
+  session.start:        {channel: operator, slots: [],        text: "<canned>"}
+  session.end:          {channel: operator, slots: [count],   text: "<canned>"}
+
+# Coverage note: B2 must provide a template for every routing action that
+# emits text. blueprint-lint cross-checks routing.yaml emit-points <-> these ids.
