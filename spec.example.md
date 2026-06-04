@@ -1,6 +1,6 @@
 # spec — Example + contract
 
-A spec is a single local file that declares one unit of work. TRON reads specs from the project's **specs path** (recorded in `project.md`) and cuts blocks from them. TRON explains these requirements during seeding and checks each spec for compliance.
+A spec is a single local file that declares one unit of work. TRON reads specs from the project's **specs path** (recorded in `project.yaml`) and cuts blocks from them. TRON explains these requirements during seeding and checks each spec for compliance.
 
 A spec is a **declaration of intent** — what to build and how "done" is judged. It does **not** carry status. Status and sequencing live in the **pipeline ledger**, joined to the spec by its ID.
 

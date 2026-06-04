@@ -1,0 +1,62 @@
+# project.yaml — Example (fictional acme-widgets, for illustration only)
+# TRON's own per-project config record. Lives at <agents>/tron/project.yaml.
+# The seeder builds it by detecting what it can and asking for the rest.
+# Re-read every session start. Shape: contracts/schema/project.schema.yaml.
+
+pointers:
+  agents: meta/agents/        # where worker defs live; TRON installs here too
+  specs:  specs/              # where host spec files live (see spec.example.md)
+
+agents:
+  - role: architect
+    file: meta/agents/architect.md
+  - role: engineer
+    file: meta/agents/engineer.md
+  - role: reviewer
+    file: meta/agents/reviewer.md
+
+pipeline:
+  mode: internal              # host had none -> ledger at <agents>/tron/pipeline.md
+  # mode: host                # -> host keeps its own doc
+  # path: PIPELINE.md
+
+repo:
+  name: acme-widgets
+  root: ~/code/acme-widgets
+  main_branch: main
+  remote: acme/widgets
+  worktrees_dir: .worktrees/
+  logs_dir: meta/logs/
+
+conventions:
+  branch_naming: "{type}/{slug}-YYMMDD"     # type in feat|fix|chore
+  block_id_pattern: "block-MM-DD-{slug}"
+  worker_id_pattern: "{ROLE}-{block-stripped}"   # e.g. ENG-06-19
+  commit_convention: "present-tense, lowercase, scope prefix"
+  pr_title_rule: "under 70 chars; body has Summary + Test plan"
+
+notifications:
+  telegram: off               # off | on  (on => heartbeat on; keys in .env)
+  cron: auto                  # auto | on | off
+
+protected_branches:
+  - repo: acme-widgets
+    branch: main
+
+operator_only_tasks:
+  - DNS / domain configuration
+  - Third-party dashboard configuration (Stripe, Vercel, Auth0, …)
+  - Production billing / paid plan changes
+  - Anything requiring physical access
+
+local_validation_gaps:
+  - Mobile builds (device install)
+  - Live integration tests with paid third-party services
+  - End-to-end flows requiring a real account
+
+ci: {}                        # runner / duration / stall-threshold override
+deploy: {}                    # trigger / target / preview URL / what TRON watches past merge
+notes: ""                     # free-form (monorepo boundaries, migration rules…)
+
+# env keys are NOT here — they live in <agents>/tron/.env (gitignored):
+#   TELEGRAM_BOT_TOKEN (optional), TELEGRAM_CHAT_ID (optional), GITHUB_TOKEN (optional)
