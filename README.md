@@ -118,7 +118,7 @@ The architecture is grounded in 23 locked premises (see `marketing-source-tron.m
 
 ## Website
 
-The public site lives in `www/` and is served at [tron.build](https://tron.build).
+The public site lives in its own repo — `42piratas/tron-www` (private) — and is served at [tron.42labs.io](https://tron.42labs.io). It was extracted from this repo's former `www/` directory.
 
 ---
 
