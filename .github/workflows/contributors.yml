@@ -1,0 +1,36 @@
+name: contributors
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"      # weekly safety net
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: contributors
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refresh contributors block
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 .github/scripts/contributors.py
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "no contributor changes"; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs(readme): refresh contributors [skip ci]"
+          git push
