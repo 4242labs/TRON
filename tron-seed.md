@@ -4,7 +4,7 @@ Read by the runtime on the operator's machine to seed TRON into a target project
 
 > Run from a clone of canon kept **outside** the project. Never clone canon into the project tree.
 
-TRON is a deterministic FSM: a shell runner executes a routing table (`routing.yaml`) + the project's composition (`workflow.yaml`) and calls the model only for a few bounded judgment tools. The seeder's job is to lay that instance down and fill the **per-project** parts — it never authors the canon (`routing.yaml`, `messages.yaml`, skills, scripts).
+TRON is a deterministic FSM: the engine runs a **fixed event table** (the PULSE dispatch loop + SWITCHBOARD work-selector) over the canon grammar (`routing.yaml`), driven by the project's **knobs** (`workflow.yaml`), and calls the model only for two bounded judgment tools (`classify_message`, `assess_wall`). The seeder's job is to lay that instance down and fill the **per-project** parts — the knobs, pointers, and pipeline. It never authors the canon (`routing.yaml`, `messages.yaml`, `tron.md`, `skills/`, `protocols/`, `scripts/`).
 
 ---
 
@@ -46,18 +46,20 @@ Everything else TRON brings (canon, skills, scripts, state) or detects (branch, 
 ```
 <agents>/tron.md                 # canon judgment context (copied)
 <agents>/tron/
+  tron                           # canon, copied (chmod +x) — the operator entrypoint (seeder/start)
+  engine/                        # canon, copied — the deterministic engine (Python)
   project.yaml                   # seeder writes — pointers, agents, repo facts, notifications
-  workflow.yaml                  # seeder writes — the COMPOSITION (steps + knobs), from the canon default
+  workflow.yaml                  # seeder writes — the KNOBS (worker/architect counts, cadence, git, silence), from the canon default
   routing.yaml                   # canon, copied verbatim — NEVER edited by the seeder
   messages.yaml                  # canon, copied verbatim
-  skills/  scripts/              # canon, copied (scripts chmod +x)
+  skills/  protocols/  scripts/  # canon, copied (scripts chmod +x)
   workflow-state.yaml            # runtime FSM state (gitignored)
-  pipeline.md                    # internal ledger, if host has none (gitignored)
-  state.md current-id dispatched.log tg-inbox.jsonl .tg-offset .env logs/   # runtime (gitignored)
+  pipeline.md                    # internal pipeline, if host has none (gitignored)
+  current-id dispatched.log tg-inbox.jsonl .tg-offset .env logs/   # runtime (gitignored)
   seed-trace.md  .gitignore
 ```
 
-**Tracked** (committed, PR'd): `project.yaml`, `workflow.yaml`, `routing.yaml`, `messages.yaml`, `skills/`, `scripts/`, `tron.md`, `seed-trace.md`, `.gitignore`. **Gitignored** (runtime, edited in place): everything else.
+**Tracked** (committed, PR'd): `tron`, `engine/`, `project.yaml`, `workflow.yaml`, `routing.yaml`, `messages.yaml`, `skills/`, `protocols/`, `scripts/`, `tron.md`, `seed-trace.md`, `.gitignore`. **Gitignored** (runtime, edited in place): everything else.
 
 ---
 
@@ -76,12 +78,13 @@ Check silently; **report only problems.**
 ## Step 1 — Greet, then settle the workflow
 
 1. **Greet** in persona (one line). Then one line of intent: first agree how TRON runs here, then where the crew and specs live.
-2. **Explain the embedded default composition** — read it from the canon default `workflow.yaml` (no instance exists yet). It composes canon step primitives (`dispatch`/`review`/`gate`/`escalate`/`findings-triage`) into the default flow, with tunable **knobs**. Walk it **conflict-driven**, naming specific assumptions one at a time — each maps to a knob or a composition toggle, **not** prose:
-   - "Default keeps a persistent architect (`session.persistent_architect: true`) — keep?"
-   - "Default gates merges on a reviewer pass every `reviewer_threshold` blocks (default 3) — keep, change the number, or drop the periodic reviewer step?"
+2. **Explain the embedded default knobs** — read them from the canon default `workflow.yaml` (no instance exists yet). The *behaviour* is the fixed event table (PULSE + SWITCHBOARD) — that is canon and never changes per project; only the **knobs** do. Walk them **conflict-driven**, naming specific assumptions one at a time — each maps to a knob, **not** prose:
+   - "Default keeps one persistent architect, excluded from the worker pool (`architect_count: 1`) — keep, or add drainers?"
+   - "Default runs a `code` reviewer every 3 completed blocks (`cadence: {code: 3}`) — keep, change the number, add another lens (security/data), or drop the cadence?"
    - "Default commits via worktrees + PRs (`knobs.git: on`) — does this project work that way, or is git out?"
    - "Peer-consult pairs ship empty — which roles may consult which?"
-3. Capture the operator's answers as **knob values + step toggles** and the **required roles** the agreed composition references. (Applied to the instance `workflow.yaml` at Step 3, then refined live via `skill-edit-self`.) Never edit `routing.yaml` — only the composition + knobs change per project.
+   - (`worker_count` is **not** seeded — TRON asks it at every session start.)
+3. Capture the operator's answers as **knob values** and the **required roles** the cadence/peer pairs reference. (Applied to the instance `workflow.yaml` at Step 3, then refined live by asking TRON to edit `workflow.yaml`.) Never edit `routing.yaml` — only the knobs change per project.
 
 ## Step 2 — Locate
 
@@ -97,9 +100,12 @@ Create `<agents>/tron/` and install TRON. No host files touched.
 Copy canon (verbatim — never edit):
 
 - `tron.md` → `<agents>/tron.md`
+- `tron` → `<agents>/tron/tron` (`chmod +x` — the operator entrypoint)
+- all of `engine/` → `<agents>/tron/engine/` (the deterministic engine)
 - `routing.yaml`, `messages.yaml` → `<agents>/tron/`
-- the canon default `workflow.yaml` → `<agents>/tron/workflow.yaml` (the composition the operator just tuned)
+- the canon default `workflow.yaml` → `<agents>/tron/workflow.yaml` (the knobs the operator just tuned)
 - all of `skills/` → `<agents>/tron/skills/`
+- all of `protocols/` → `<agents>/tron/protocols/`
 - all of `scripts/` → `<agents>/tron/scripts/` (`chmod +x` each)
 
 Init runtime state (gitignored, edited in place, never committed):
@@ -122,23 +128,23 @@ workflow-state.yaml
 pipeline.md
 ```
 
-(`pipeline.md` line only if the ledger is internal — see Step 5.)
+(`pipeline.md` line only if the pipeline is internal — see Step 5.)
 
-With skills now in place, **apply the Step 1 knob/toggle changes to `workflow.yaml` via `skill-edit-self`** (this also exercises the skill on first use). If none were requested, the canon default stands.
+With canon in place, **apply the Step 1 knob changes to `workflow.yaml`** (worker/architect counts, cadence map, git, peer-consults). If none were requested, the canon default stands.
 
 ## Step 4 — Validate agents + specs
 
-- **Agents** (against the composition): enumerate `<role>.md` in `<agents>`. If `workflow.yaml` names a role with no file: stop. *"Composition keeps a reviewer step, but there's no `reviewer.md`. Add the agent or drop the step?"* Never create agent files. Record the role→file map for `project.yaml`.
+- **Agents** (against the knobs + pipeline): enumerate `<role>.md` in `<agents>`. If a role referenced by `workflow.yaml` (a cadence reviewer type, a peer-consult pair) or by a pipeline block `Owner` has no file: stop. *"Cadence runs a `code` reviewer, but there's no `reviewer.md`. Add the agent or drop the cadence?"* Never create agent files. Record the role→file map for `project.yaml`.
 - **Specs** (against the contract): explain it (`spec.example.md` — ID, goal, acceptance criteria, scope, dependencies, owner; no status). Read the specs, check compliance, ask the operator to fill gaps. Never rewrite host specs.
 
-## Step 5 — Pipeline (status ledger)
+## Step 5 — Pipeline (pipeline)
 
-See `pipeline.example.md`. First decide the branch: detect a likely status/pipeline doc, or ask — *"Do you already track block status in a doc, or should I keep the ledger myself?"*
+See `pipeline.example.md`. First decide the branch: detect a likely status/pipeline doc, or ask — *"Do you already track block status in a doc, or should I keep the pipeline myself?"*
 
-- **Host keeps a pipeline doc:** ask its path, validate it meets the accepted format (a single MD table with Order, ID, Owner, Status ∈ {todo,in-progress,blocked,review,done}; notes optional), fill gaps, use it as the live ledger → `pipeline.mode: host` + `pipeline.path`. Drop the `pipeline.md` line from `.gitignore`. (TRON keeps a normalized mirror and writes back only on status changes — never a per-tick rewrite.)
+- **Host keeps a pipeline doc:** ask its path, validate it meets the accepted format (a single MD table with Order, ID, Owner, Status ∈ {pending, cleared, in-progress, blocked, done, abandoned}; notes optional), fill gaps, use it as the live pipeline → `pipeline.mode: host` + `pipeline.path`. Drop the `pipeline.md` line from `.gitignore`. (TRON keeps a normalized mirror and writes back only on status changes — never a per-tick rewrite. `cleared`/`abandoned` are TRON-managed; using a host doc means TRON writes them there too.)
 - **Host has none:** interview the operator — per spec: order, owner, current status. Captures what's already done in a mid-project repo. Write `<agents>/tron/pipeline.md` from `templates/pipeline.md` → `pipeline.mode: internal`.
 
-In sessions, TRON's ledger is authoritative; spec dependencies are hard gates, pipeline order is preference.
+In sessions, TRON's pipeline is authoritative; spec dependencies are hard gates, pipeline order is preference.
 
 ## Step 6 — Write project.yaml
 
@@ -158,9 +164,9 @@ Effective heartbeat = `telegram == on` OR `cron == on`. If on: run `bash <agents
 - Both pointers resolve (`<specs>` readable; `<agents>` has ≥1 usable role).
 - `workflow.yaml` references only roles that exist.
 - Specs meet the contract (or gaps explicitly accepted).
-- Pipeline ledger present and valid.
+- Pipeline present and valid.
 - All instance files in place.
-- **Blueprint-lint passes** — run `skill-validate` (which runs the blueprint-lint over `routing.yaml` + this project's `workflow.yaml`): every step's exit edges land, no orphan steps, a terminal is reachable, every named role exists, every knob reference resolves. A malformed composition fails here, not at runtime.
+- **Blueprint-lint passes** — the seeder runs it (blueprint-lint over `routing.yaml` + the engine's event table + this project's `workflow.yaml`): the grammar is complete, the tag enum is closed and total, every trigger satisfies the grammar and resolves to a table row, every table handler binds to an engine method, the canon tools are present, and `worker_count`/cadence/session knobs are well-formed. A malformed instance fails here, not at runtime.
 
 On any unresolved failure: surface it, stop. (Live-loop dry-run belongs to the orchestration phase, not seeding.)
 
@@ -180,13 +186,13 @@ Sign off in persona, with a terse summary — **project-relative paths only** (n
 - Trace: <agents>/tron/seed-trace.md
 ```
 
-TRON now sleeps in `<agents>/tron/`. It wakes when you start it — not before. (Starting it is out of scope here; the operator wakes TRON manually.)
+TRON now sleeps in `<agents>/tron/`. It wakes when you start it — not before. Start it with `<agents>/tron/tron start` (the bootup Q&A asks the start point + `worker_count`, spawns the architect, and dispatches). Starting it is out of scope here; the operator wakes TRON manually.
 
 ---
 
 ## Re-seeding / updates
 
-Safely re-runnable: show current values before overwriting; diff file-by-file for anything the operator may have customized (`workflow.yaml`); never touch canon (`routing.yaml`, `messages.yaml`) except to update it wholesale; cron install is idempotent; append a dated section to `seed-trace.md`. For canon updates without a full re-seed, use TRON's `skill-update` from a running session.
+Safely re-runnable: show current values before overwriting; diff file-by-file for anything the operator may have customized (`workflow.yaml`); never touch canon (`routing.yaml`, `messages.yaml`, `tron.md`, `skills/`, `protocols/`) except to update it wholesale; cron install is idempotent; append a dated section to `seed-trace.md`. For a canon update, re-run the seeder from a fresh canon clone — it re-copies canon verbatim and leaves the per-project `workflow.yaml`/`project.yaml`/pipeline intact.
 
 ## What the seeder must NOT do
 
