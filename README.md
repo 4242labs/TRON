@@ -63,6 +63,26 @@ operator's problem?* Each is schema-in, schema-out — never free prose steering
 
 ---
 
+## What TRON needs from your project
+
+TRON reads your project's structure — it never scaffolds it. Before you seed, the project must
+provide three things, all git-tracked and written by your agents via PR:
+
+- **Agents.** Your own worker personas — an architect, engineers, reviewers, whatever roles the work
+  calls for — as `agents/<role>.md`. TRON dispatches them; it ships none and imposes none.
+- **Blocks.** Your work, specified and broken into right-sized units. One file per block
+  (`blocks/<id>.md`) carrying a fixed header — status, dependencies, reviewer class, and the merge and
+  deploy gates — plus its acceptance criteria. A block is the unit TRON dispatches, gates, and drives
+  to done.
+- **A pipeline.** A living document (`pipeline.md`) that orders the blocks into phases and tracks each
+  one's status. Its shape is fixed enough for TRON to read deterministically, loose enough to stay
+  human-authored.
+
+TRON only reads these; your agents own and write them. The 42labs `new-project-template` ships this
+structure ready-made — adopt it for a new project, or bring an existing one up to it before seeding.
+
+---
+
 ## Requirements
 
 - `python3` and `git`.
