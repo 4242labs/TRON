@@ -54,38 +54,9 @@ operator's problem?* Each is schema-in, schema-out — never free prose steering
 
 ## The flow
 
-```mermaid
-flowchart TD
-    start([▶ tron start]):::evt --> boot[Bootup<br/>spawn persistent architect]:::tron
-    boot --> pulse{{ PULSE · dispatch loop }}:::tron
-    pulse --> sw{SWITCHBOARD<br/>free slot? · cleared work?}:::gate
+![TRON supervisor workflow — BPMN](diagrams/flow-bpm.svg)
 
-    sw -->|next cleared block| eng[Engineer<br/>build + validate]:::work
-    sw -->|cadence due| rev[Reviewer<br/>findings log]:::work
-    sw -->|pending block| fwd[Architect<br/>forward-review → cleared]:::arch
-    sw -->|all settled| done([ ■ session end ]):::evt
-
-    eng --> g{done<br/>or wall?}:::gate
-    g -->|done| rel[Release engineer<br/>tick cadence]:::tron
-    g -->|wall| wall[Block → blocked<br/>slot freed]:::wall
-    wall --> op[/Operator<br/>resume · amend · abandon/]:::op
-    rev --> log[Architect<br/>log-review → adhoc]:::arch
-
-    rel -. pulse .-> pulse
-    fwd -. block cleared .-> pulse
-    log -. pulse .-> pulse
-    op  -. pulse .-> pulse
-
-    classDef evt  fill:#b5683a,stroke:#e8c9b0,color:#fff,stroke-width:2px
-    classDef tron fill:#1c2b3a,stroke:#4a90d9,color:#eaf2fb
-    classDef gate fill:#6b4e16,stroke:#e0a93b,color:#fff
-    classDef arch fill:#2e2350,stroke:#a87bd9,color:#f0e9fb
-    classDef work fill:#173a32,stroke:#3fb59a,color:#e6fbf4
-    classDef wall fill:#4a1717,stroke:#d96a6a,color:#fbe6e6
-    classDef op   fill:#3a2f12,stroke:#d9c24a,color:#fbf6e0
-```
-
-<sub>● events · ◆ gateways · the **architect** (purple) clears blocks forward and turns findings into new work · **workers** (teal) build and review · a **wall** parks the block and asks the **operator** (gold) · every completion returns control to **PULSE** (dotted).</sub>
+<sub>The Dispatcher (**PULSE**) fans work to the engineer, architect, and reviewer tracks. A **⚙** marks where a deterministic script runs — *that* one runs is the point; which, and how many, is project-dynamic. Workers build, review, and scope; a **wall** parks the block and asks the **operator**; every track returns to **PULSE** (`↻`). · [Interactive version](diagrams/flow-bpm.html) (light/dark toggle).</sub>
 
 ---
 
@@ -201,4 +172,4 @@ Found a bug or have an idea? [Open an issue](https://github.com/42piratas/tron/i
 TRON is dual-licensed:
 
 - **Open source** — [AGPL-3.0](LICENSE).
-- **Commercial** — contact **ahoy@42labs.io**.
+- **Commercial** — contact **ahoy[at]42labs.io**.
