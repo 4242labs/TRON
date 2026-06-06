@@ -14,6 +14,11 @@ World-mutating actions are state-guarded here so a retried tick can't double-fir
 """
 import util
 
+# Per-session merge knob defaults (realign §8) — the single source for both the
+# fresh-start reset (fsm._reset_session_runtime) and the runtime default below.
+# templates/workflow-state.yaml seeds the same values for a hand-read instance.
+DEFAULT_APPROVALS = {"merge_staging": "APPROVED", "promote_main": "ASK"}
+
 
 class State:
     def __init__(self, ctx):
@@ -89,7 +94,7 @@ class State:
     def approvals(self):
         """Per-session merge knob (realign §8). merge_staging/promote_main: APPROVED|ASK.
         Held in runtime, reset each session; TRON never writes it to git."""
-        return self.data.setdefault("approvals", {})
+        return self.data.setdefault("approvals", dict(DEFAULT_APPROVALS))
 
     # ── idempotency guards (contracts §5) ──
     def has_active_worker_for_block(self, block_id, role=None):
