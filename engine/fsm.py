@@ -35,7 +35,7 @@ import jobs
 import judge
 import reader
 import trunk
-from state import State
+from state import State, DEFAULT_APPROVALS
 from render import Renderer
 
 # ── the event TABLE ──
@@ -857,7 +857,7 @@ class Engine:
         self.st.data["blocked"] = []
         self.st.data["dropped"] = []
         self.st.data["cadence"] = {}
-        self.st.data["approvals"] = {"merge_staging": "APPROVED", "promote_main": "ASK"}
+        self.st.data["approvals"] = dict(DEFAULT_APPROVALS)
 
     def start(self, worker_count):
         self.st.data.setdefault("session", {})["started_at"] = util.now_iso()

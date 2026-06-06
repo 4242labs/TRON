@@ -78,6 +78,11 @@ def cmd_start(ctx):
         print("start: --max <N> required (worker_count: engineers + reviewers; no default)")
         return 2
     eng = Engine(ctx)
+    # start() resets disposable runtime — refuse on a live session so a stray internal
+    # invocation can't clobber it (the console guards the same way via reconnect).
+    if (eng.st.data.get("session") or {}).get("started_at"):
+        print("start: a session is already live — reconnect via the console, or stop it first")
+        return 3
     eng.start(int(max_c))
     # Install the cron heartbeat (idempotent) — start owns it, so the engine never
     # ticks before a session exists. Only when the config makes it effective:
