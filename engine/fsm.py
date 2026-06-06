@@ -121,10 +121,10 @@ class Engine:
         self._tq = []
         self._refresh_from_trunk()                       # canon is truth — rebuild the read cache
         self._sweep()                                    # engine liveness -> worker:stalled
-        consumed, msgs = self._read_inboxes()            # read, but DON'T truncate yet
+        claimed, msgs = self._claim_inboxes()            # rotate each inbox to a .proc sidecar, read it
         for msg in msgs:
-            # One malformed message must not abort the tick: that would leave it in the inbox
-            # (consume runs only after a clean save) and re-fire it every sweep — a poison pill.
+            # One malformed message must not abort the tick: that would leave it in the sidecar
+            # (released only after a clean save) and re-fire it every sweep — a poison pill.
             try:
                 tag, slots = self._classify(msg)
                 self._ingest(tag, slots, msg.get("sender", {}))
@@ -136,7 +136,7 @@ class Engine:
         last["at"] = util.now_iso()
         last["sweeps_this_session"] = last.get("sweeps_this_session", 0) + 1
         self.st.save()                                   # persist effects FIRST
-        self._consume_inboxes(consumed)                  # then drop consumed lines (at-least-once)
+        self._release_claimed(claimed)                   # then drop the claimed sidecars (at-least-once)
         return self.ended
 
     # ── trunk read (realign §5): canon is truth; TRON reads, agents write ──
@@ -808,14 +808,25 @@ class Engine:
         with open(path) as fh:
             return fh.readlines()
 
-    def _read_inboxes(self):
-        consumed, msgs = [], []
+    def _claim_inboxes(self):
+        """Rotate each inbox to a `.proc` sidecar (an atomic rename), then read the sidecar.
+        Workers append via `report.sh >>` (open-write-close per line, O_CREAT): an append that
+        lands after the rename creates/extends a fresh inbox and is read next tick — never lost
+        to a full-file rewrite (the old #6 race, whose window spanned the classify LLM call).
+        A `.proc` left by a crashed tick is read again (at-least-once; idempotency guards make
+        replay safe). Returns (claimed_sidecars, msgs)."""
+        claimed, msgs = [], []
         for path, kind in self._inbox_paths():
-            raw = self._raw_lines(path)
-            if not raw:
-                continue
-            consumed.append((path, len(raw)))
-            for line in raw:
+            proc = path + ".proc"
+            if not os.path.exists(proc):           # no crash residue -> claim the live inbox
+                if not os.path.exists(path):
+                    continue
+                try:
+                    os.rename(path, proc)          # atomic; new appends go to a fresh inbox
+                except OSError:
+                    continue
+            claimed.append(proc)
+            for line in self._raw_lines(proc):
                 line = line.strip()
                 if not line:
                     continue
@@ -823,12 +834,16 @@ class Engine:
                     msgs.append(self._normalize(json.loads(line), kind))
                 except json.JSONDecodeError:
                     continue
-        return consumed, msgs
+        return claimed, msgs
 
-    def _consume_inboxes(self, consumed):
-        for path, n in consumed:
-            rest = self._raw_lines(path)[n:]
-            util.atomic_write(path, "".join(rest))
+    def _release_claimed(self, claimed):
+        # Drop the sidecars only after state is saved (at-least-once): a crash before this
+        # leaves them for the next tick to reprocess.
+        for proc in claimed:
+            try:
+                os.remove(proc)
+            except OSError:
+                pass
 
     def _normalize(self, m, kind):
         if "text" in m and "sender" in m:

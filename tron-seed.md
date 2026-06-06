@@ -130,6 +130,7 @@ operator-inbox.jsonl
 home-events.jsonl
 logs/
 workflow-state.yaml
+*.proc
 engine/__pycache__/
 ```
 
