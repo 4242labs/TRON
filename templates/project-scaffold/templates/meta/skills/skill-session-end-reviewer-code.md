@@ -17,17 +17,16 @@ Read this file **now** — do not rely on memory from session start.
 
 **Answer each explicitly in the review report. Do not skip any row.** Canonical list: `principles.md` §Core Docs. Reviewers do not fix code — flag staleness in findings and escalate.
 
+Rows are the Core Docs that ship with the scaffold. Skip any row whose doc this project doesn't ship; add a row for any project doc the reviewed work touched.
+
 | Doc | Staleness found? | If yes, flagged in findings? |
 |:----|:-----------------|:-----------------------------|
 | `context.md` | YES / NO | ✅ / N/A |
 | `pipeline.md` | YES / NO | ✅ / N/A |
 | `principles.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/app/CLAUDE.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/app/RULES.md` | YES / NO | ✅ / N/A |
-| `app/README.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/docs/guidelines-design.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/docs/guidelines-brand.md` | YES / NO | ✅ / N/A |
+| `../<APP_REPO_NAME>/docs/guidelines-coding.md` | YES / NO | ✅ / N/A |
 | `../<APP_REPO_NAME>/docs/playbook-infra.md` | YES / NO | ✅ / N/A |
+| `../<APP_REPO_NAME>/app/CLAUDE.md` | YES / NO | ✅ / N/A |
 
 ## 2. Persist Review Report
 

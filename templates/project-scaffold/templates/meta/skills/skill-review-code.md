@@ -73,6 +73,8 @@ Execute each category in order. Do not skip categories.
 
 ### 3.1 — Security
 
+These are the reviewer's **surface-level** checks. The authoritative auth / RLS / secret / integration audit is owned by `skill-security-scan.md` — do not expand this table to mirror it; escalate anything past the surface to the Security Reviewer.
+
 | Check | Severity | Reference |
 |:------|:---------|:----------|
 | **Secrets:** No hardcoded API keys, OAuth secrets, Supabase service-role/JWT keys, or tokens — all via `process.env` | BLOCKER | `principles.md` §Security |

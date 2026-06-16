@@ -70,4 +70,4 @@ Curated subset of project rules SUPER-M must follow. References canonical source
 ## Configuration
 
 - **SUPER_META_STALE_DAYS:** 5
-- **shared_knowledge_path:** {path, or blank if not configured — SUPER-M then skips all shared-KB steps}
+- **shared_knowledge_path:** mirror of `principles.md §Configuration` (the single canonical home) — keep identical. Blank there means SUPER-M skips all shared-KB steps.

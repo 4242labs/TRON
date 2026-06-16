@@ -33,6 +33,11 @@ fi
 # Canonical search roots, in priority order. Each entry is "REPO_PATH::SKILL_SUBDIR".
 CANON_ROOTS=("$@")
 
+# Per-run temp file for frontmatter extraction (no fixed /tmp path — avoids
+# concurrent-run collision and keeps work inside the runner's temp dir).
+FM="$(mktemp)"
+trap 'rm -f "$FM"' EXIT
+
 echo "Meta path:  $META_PATH"
 for root in "${CANON_ROOTS[@]}"; do
   repo="${root%%::*}"; sub="${root#*::}"
@@ -47,18 +52,18 @@ find "$META_PATH/skills" -maxdepth 2 -name "*.md" -type f 2>/dev/null | sort | w
   rel_path="${file#"$META_PATH/"}"
 
   # Extract frontmatter block (between first two --- lines)
-  if ! awk 'NR==1 && /^---$/ {flag=1; next} flag && /^---$/ {exit} flag' "$file" > /tmp/frontmatter.yml 2>/dev/null; then
+  if ! awk 'NR==1 && /^---$/ {flag=1; next} flag && /^---$/ {exit} flag' "$file" > "$FM" 2>/dev/null; then
     continue
   fi
 
-  if [ ! -s /tmp/frontmatter.yml ]; then
+  if [ ! -s "$FM" ]; then
     # No frontmatter → not a tracked canon skill; ignore.
     continue
   fi
 
-  source_field=$(grep -E '^source:[[:space:]]*' /tmp/frontmatter.yml | sed -E 's/^source:[[:space:]]*//; s/[[:space:]]+$//' | head -1 || true)
-  canon_version_field=$(grep -E '^canon_version:[[:space:]]*' /tmp/frontmatter.yml | sed -E 's/^canon_version:[[:space:]]*//; s/[[:space:]]+$//' | head -1 || true)
-  name_field=$(grep -E '^name:[[:space:]]*' /tmp/frontmatter.yml | sed -E 's/^name:[[:space:]]*//; s/[[:space:]]+$//' | head -1 || true)
+  source_field=$(grep -E '^source:[[:space:]]*' "$FM" | sed -E 's/^source:[[:space:]]*//; s/[[:space:]]+$//' | head -1 || true)
+  canon_version_field=$(grep -E '^canon_version:[[:space:]]*' "$FM" | sed -E 's/^canon_version:[[:space:]]*//; s/[[:space:]]+$//' | head -1 || true)
+  name_field=$(grep -E '^name:[[:space:]]*' "$FM" | sed -E 's/^name:[[:space:]]*//; s/[[:space:]]+$//' | head -1 || true)
 
   # Skip non-canon skills
   if [ "$source_field" != "canon" ]; then
@@ -116,5 +121,3 @@ find "$META_PATH/skills" -maxdepth 2 -name "*.md" -type f 2>/dev/null | sort | w
     echo "DRIFT: $rel_path — $canonical changed since $canon_version_field ($changes commit(s)); bump canon_version to $latest"
   fi
 done
-
-rm -f /tmp/frontmatter.yml

@@ -68,18 +68,16 @@ Ambiguous responses ("looks good", "sounds fine", "ok") are **not** authorizatio
 
 **Answer each explicitly in the session log. Do not skip any row.** Canonical Core Docs list lives in `principles.md §Core Docs`.
 
+Rows are the Core Docs that ship with the scaffold. Skip any row whose doc this project doesn't ship; add a row for any project doc your work changed.
+
 | Doc | Affected? | Updated? |
 |:----|:----------|:---------|
 | `context.md` | YES / NO | ✅ / N/A |
 | `pipeline.md` | YES / NO | ✅ / N/A |
 | `principles.md` | YES / NO | ✅ / N/A |
 | `../<APP_REPO_NAME>/docs/guidelines-coding.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/app/CLAUDE.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/app/RULES.md` | YES / NO | ✅ / N/A |
-| `app/README.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/docs/guidelines-design.md` | YES / NO | ✅ / N/A |
-| `../<APP_REPO_NAME>/docs/guidelines-brand.md` | YES / NO | ✅ / N/A |
 | `../<APP_REPO_NAME>/docs/playbook-infra.md` | YES / NO | ✅ / N/A |
+| `../<APP_REPO_NAME>/app/CLAUDE.md` | YES / NO | ✅ / N/A |
 
 Also sweep the project structure tree (CLAUDE.md / AGENTS.md): any new files created this session (routes, lib modules, components, migrations) must appear there. Missing entries → add them now.
 
@@ -87,12 +85,11 @@ Also sweep the project structure tree (CLAUDE.md / AGENTS.md): any new files cre
 
 ## 4. Git Sync
 
-**Feature branch + PR in all cases. Never push directly to a protected trunk branch.**
+Follow `skills/skill-worktree-and-branching.md` for the full procedure (feature branch + worktree + PR + monitored merge; never commit/push on a protected branch; never arm auto-merge). Project deltas — PR base by repo:
 
-- **Meta repo:** branch → commit → `git push -u origin {branch}` → `gh pr create --base main`.
-- **App repo (two-gate):** feature branch → PR → `staging` (default). `hotfix/*` branches → PR → `main` only.
-- **App repo (single-branch, if the project doesn't run a staging gate):** feature branch → PR → `main`.
-- Monitor CI until green. Never arm auto-merge. Merge is performed by the engineer once authorized (by the user, or by the supervising process per its merge policy) — then monitor the merge through to a verified deploy.
+- **Meta repo:** `main`.
+- **App repo (two-gate):** `staging` (default); `hotfix/*` → `main` only.
+- **App repo (single-branch, no staging gate):** `main`.
 
 ---
 

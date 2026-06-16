@@ -76,10 +76,7 @@ Edit the in-scope block files and their `pipeline.md` rows directly:
 
 ## 5. Persist
 
-**Feature branch + PR. Never push directly to a protected trunk branch.**
-
-- [ ] Branch → commit → `git push -u origin {branch}` → `gh pr create --base main` (meta repo)
-- [ ] Monitor CI until green. Never arm auto-merge. Merge is performed by the agent once authorized (by the user, or by the supervising process per its merge policy) — then monitor the merge through to a verified deploy.
+Follow `skills/skill-worktree-and-branching.md` for the full procedure (feature branch + worktree + PR + monitored merge; never commit/push on a protected branch; never arm auto-merge). Project delta: this is meta-repo work — PR targets `main`.
 - [ ] Write a forward-review log to `logs/architecture/log-YYMMDD-HHMM-{DONE_BLOCK_ID}-forward.md` using the **session-log format** (`ref-session-log-format.md`): the learnings harvested (§2), the blocks assessed (§3), the adjustments applied or escalated (§4). If there was no forward impact, the log says so in one line.
 
 ---
