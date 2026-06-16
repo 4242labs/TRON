@@ -20,8 +20,7 @@ Before any work, read and internalize:
 ## Session Start
 
 - [ ] **Worktree hygiene.** Run the session-start scan from `skills/skill-worktree-and-branching.md` §Session-Start Hygiene. Create your feature worktree if needed. Never edit files in the main checkout.
-- [ ] **Notifications check:** list `{shared_knowledge_path}/notifications/` (exclude `warnings/` and `archive/`); archive items >3 days old; surface remaining. Per `principles-base.md §9`.
-- [ ] **Warnings check (no date filter):** list `{shared_knowledge_path}/notifications/warnings/` (exclude `archive/`); read every file regardless of age. **If any active warning names this project and overlaps the review scope, fold it into findings — do not produce a clean review while a warning sits unaddressed in the area you're auditing.**
+- [ ] **Shared-KB session start:** run `{shared_knowledge_path}/meta/agent.md §3.1 + §3.2` (notifications archive + warnings surface). **Reviewer delta:** any active warning that names this project and overlaps the review scope is folded into findings — never produce a clean review while a warning sits unaddressed in the area you're auditing.
 - [ ] **Shared KB check:** scan `{shared_knowledge_path}/knowledge-base/` for prior code-review lessons relevant to the current scope (e.g., `quality/`, `testing/`, language-specific dirs).
 - [ ] Find last review: list files in `logs/review-code/`. Read the most recent log to establish continuity (carry-forward findings).
 - [ ] Define scope:

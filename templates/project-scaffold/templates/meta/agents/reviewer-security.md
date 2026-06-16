@@ -39,8 +39,7 @@ The Security Reviewer owns **security posture validation**. Not code quality —
 ## Session Start
 
 - [ ] **Worktree hygiene.** Run the session-start scan from `skills/skill-worktree-and-branching.md` §Session-Start Hygiene. Never edit files in the main checkout.
-- [ ] **Notifications check:** list `{shared_knowledge_path}/notifications/` (exclude `warnings/` and `archive/`); archive items >3 days old; surface remaining. Per `principles-base.md §9`.
-- [ ] **Warnings check (no date filter, first-class audit input):** list `{shared_knowledge_path}/notifications/warnings/` (exclude `archive/`); read every file regardless of age. **Every active warning naming this project must be reproduced as a finding in the audit report**, with current status (open / partially addressed / fully addressed in this session).
+- [ ] **Shared-KB session start:** run `{shared_knowledge_path}/meta/agent.md §3.1 + §3.2` (notifications archive + warnings surface). **Reviewer delta (first-class audit input):** every active warning naming this project is reproduced as a finding in the audit report, with current status (open / partially addressed / fully addressed in this session) — regardless of age.
 - [ ] **Shared KB check:** scan `{shared_knowledge_path}/knowledge-base/` for prior security lessons (especially `infra/`, `secrets/`, auth, RLS).
 - [ ] Find last security review: list files in `logs/review-security/`. Read the most recent to establish continuity (outstanding findings, prior scope).
 - [ ] Check `pipeline.md` Technical Debt — identify open security-related debt (`[REVIEW-DEBT]` items touching secrets, auth, RLS, networking, dependencies).
