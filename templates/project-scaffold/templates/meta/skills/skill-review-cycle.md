@@ -70,13 +70,16 @@ Read `pipeline.md` for the in-scope phase section:
 
 Canonical list: `principles.md` §Core Docs.
 
+Rows are the Core Docs that ship with the scaffold. Skip any row whose doc this project doesn't ship; add a row for any project doc this cycle's work touched.
+
 | # | Doc | Location | Accurate? | If stale, what's wrong? |
 |:--|:----|:---------|:----------|:------------------------|
 | 1 | `context.md` — project structure, conventions | `context.md` | YES / NO | |
 | 2 | `pipeline.md` — scope, status, technical debt | `pipeline.md` | YES / NO | |
-| 3 | `CLAUDE.md` — app technical spec | `../<APP_REPO_NAME>/app/CLAUDE.md` | YES / NO | |
-| 4 | `README.md` — user-facing setup guide | `app/README.md` | YES / NO | |
-| 5 | `RULES.md` — content rules | `../<APP_REPO_NAME>/app/RULES.md` | YES / NO | |
+| 3 | `principles.md` — agent behavior rules | `principles.md` | YES / NO | |
+| 4 | `guidelines-coding.md` — code standards + secure coding | `../<APP_REPO_NAME>/docs/guidelines-coding.md` | YES / NO | |
+| 5 | `playbook-infra.md` — infra, secrets, services | `../<APP_REPO_NAME>/docs/playbook-infra.md` | YES / NO | |
+| 6 | `CLAUDE.md` — app technical spec | `../<APP_REPO_NAME>/app/CLAUDE.md` | YES / NO | |
 
 **If any doc is stale:**
 - Fix it now if the change is factual and unambiguous (e.g., new route, new component, new migration)
@@ -117,10 +120,7 @@ After §1–§6 validation passes:
 
 **Git sync:**
 
-**Feature branch + PR in all cases. Never push directly to a protected trunk branch.**
-
-- [ ] Branch → commit → `git push -u origin {branch}` → `gh pr create --base main` (meta repo). App-repo changes follow the project's app-repo branching convention — default `staging` if two-gate is live; `main` if single-branch; `hotfix/*` → `main` only.
-- [ ] Monitor CI until green. Never arm auto-merge. Merge is performed by the agent once authorized (by the user, or by the supervising process per its merge policy) — then monitor the merge through to a verified deploy.
+Follow `skills/skill-worktree-and-branching.md` for the full procedure (feature branch + worktree + PR + monitored merge; never commit/push on a protected branch; never arm auto-merge). Project deltas: meta-repo work PRs to `main`; app-repo changes follow the app branching convention — `staging` if two-gate is live, `main` if single-branch, `hotfix/*` → `main` only.
 
 **Review log:**
 

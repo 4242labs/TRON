@@ -62,18 +62,7 @@ Per-service setup for this project. Each section covers what the service does, e
 
 **What:** Structured Slack channels for financial events, affiliate events, deploys, digests, infra, errors, and support.
 
-**Channel map:**
-
-| Channel | Source | Webhook env var |
-|---------|--------|----------------|
-| `#financial-polar` | Polar subscription events | `SLACK_WEBHOOK_FINANCIAL` |
-| `#affiliates-fp` | FirstPromoter referral/commission events | `SLACK_WEBHOOK_AFFILIATES` |
-| `#deploys-staging` | Vercel staging deploys | `SLACK_WEBHOOK_DEPLOYS_STAGING` |
-| `#deploys-prod` | Vercel prod deploys | `SLACK_WEBHOOK_DEPLOYS_PROD` |
-| `#digest-brevo` | Daily email stats cron | `SLACK_WEBHOOK_DIGEST` |
-| `#infra-railway` | Railway deploy/crash events (via Pipedream) | `SLACK_WEBHOOK_INFRA` |
-| `#errors-sentry` | Sentry alerts | Native Sentry integration — no webhook var |
-| `#support-plain` | Plain ticket events | Native Plain integration — no webhook var |
+**Channel map:** single home is `docs/playbook-infra.md §4 Slack` — the channel ↔ webhook-env-var mapping lives there, not here.
 
 **Steps:**
 
