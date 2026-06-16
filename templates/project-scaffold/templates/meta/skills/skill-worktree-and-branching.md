@@ -23,7 +23,7 @@ You do **not** need to open the shared file to execute this skill. It exists so 
 
 ## Setup (once per clone)
 
-Required before adding any worktree. Each repo ships `scripts/setup-repo.sh` (a tracked bootstrap script) that (a) configures portable-worktree settings (`worktree.useRelativePaths=true`, which implicitly enables `extensions.relativeWorktrees`) and (b) activates the committed base-branch guard in `.githooks/` — a `pre-commit` + `pre-push` pair that **hard-refuses any commit or push made directly on `main` / `staging`**. The guard is version-controlled and owned by no agent; it cannot be skipped by an agent forgetting the rule. Requires Git ≥ 2.48.
+Required before adding any worktree. Each repo carries `scripts/setup-repo.sh` (the canon bootstrap, seeded from `{shared_knowledge_path}/templates/setup-repo.sh`) that (a) configures portable-worktree settings (`worktree.useRelativePaths=true`, which implicitly enables `extensions.relativeWorktrees`) and (b) activates the canon `.githooks/` guard (`pre-commit` + `pre-push`, seeded from `{shared_knowledge_path}/templates/hooks/`). The guard **hard-refuses any commit or push that lands directly on the integration branch** (a commit reachable from no other ref — per `{shared_knowledge_path}/principles-base.md §14`); a proper feature-branch merge passes. It is version-controlled and owned by no agent, so it cannot be skipped by forgetting the rule. Requires Git ≥ 2.48.
 
 - **`<APP_REPO_NAME>`** — auto-runs via `npm install` (wired through the `prepare` lifecycle script in `app/package.json`). No manual step needed after a fresh clone.
 - **`<META_REPO_NAME>`** — no Node package manager, so run once after cloning:
