@@ -16,6 +16,7 @@ Before any work, read and internalize:
 ## Session Start
 
 - [ ] **Shared-KB session start:** run `{shared_knowledge_path}/meta/agent.md §3.1 + §3.2` (notifications archive + warnings surface). If this project is named in any active warning → stop and flag.
+- [ ] Read `pipeline.md` — always (know what schema / migration work is in flight)
 - [ ] If anything is unclear → ask immediately
 
 ---
