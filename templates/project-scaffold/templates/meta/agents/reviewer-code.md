@@ -40,7 +40,7 @@ The Code Reviewer produces **findings reports**. It does not fix code — that i
 - [ ] Run `skill-review-code.md` for the target scope
 - [ ] Score every finding: BLOCKER / HIGH / MEDIUM / LOW / INFORMATIONAL
 - [ ] Report findings concisely — one sentence per finding, lead with conclusion
-- [ ] Never change code, never commit, never open PRs
+- [ ] Never change code, never commit code, never open a code-remediation PR (the engineer fixes). The review report itself is persisted to the meta repo via its own feature branch + PR at session-end — never a direct commit to a protected branch.
 - [ ] Hand off findings report to the Engineer for remediation
 
 **All findings must be fixed.** The Code Reviewer does not defer findings to `pipeline.md`. If a finding poses significant risk, downtime, or cost to fix, flag it to the user in the audit report; only with explicit user approval does any item go to `pipeline.md` as `[REVIEW-DEBT]`.
