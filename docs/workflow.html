@@ -128,9 +128,9 @@ function headBar({num, name, back}){
 // y/h are computed by layoutCore() from the track grid (sized to content, symmetric padding).
 const LANES = [
   {id:'L_ENG', name:'ENGINEER',  rows:[0,0], y:0, h:0},
-  {id:'L_TRON',name:'TRON',      rows:[1,2], y:0, h:0},
-  {id:'L_ARCH',name:'ARCHITECT', rows:[3,3], y:0, h:0},
-  {id:'L_REV', name:'REVIEWERS', rows:[4,4], y:0, h:0},
+  {id:'L_TRON',name:'TRON',      rows:[1,3], y:0, h:0},
+  {id:'L_ARCH',name:'ARCHITECT', rows:[4,4], y:0, h:0},
+  {id:'L_REV', name:'REVIEWERS', rows:[5,5], y:0, h:0},
 ];
 const SHOW_EDGE_LABELS = false;         // edge labels are implicit (docs only) — kept OFF the canvas for a clean diagram
 const POOL = {x:160,y:80,w:0,h:0};      // w/h/y computed by layoutCore()
@@ -141,56 +141,58 @@ let LANE_X = 190, LANE_W = 1310;        // computed by layoutCore()
 const NODES = [
   // ── ENGINEER lane · row 0 — PROJECT DOCS · ENGINEER cat · INBOX (right of cat) ──
   {id:'PD3',   kind:'datastore',name:'Project Docs',lane:'L_ENG',  col:2, row:0, w:50, h:56, lblOnly:true, lblAbove:true},   // engineer's Project Docs (same column as PULSE) — read by ENGINEER + PULSE
-  {id:'ND-11', kind:'task',  name:'ENGINEER',       lane:'L_ENG',  col:4, row:0, w:104,h:89, llm:true, llmId:'LLM-11', sub:'ENGINEER'},   // cat kept; clickable → opens the ENGINEER sub (FLOW['ND-11'])
+  {id:'ND-05', kind:'task',  name:'ENGINEER',       lane:'L_ENG',  col:4, row:0, w:104,h:89, llm:true, llmId:'LLM-05', sub:'ENGINEER'},   // cat kept; clickable → opens the ENGINEER sub (FLOW['ND-05'])
   {id:'EIN',   kind:'mcatch', name:'ENGINEER INBOX',lane:'L_ENG',  col:5, row:0, w:36, h:36, lblOnly:true},   // engineer's message-catch inbox — right of the cat
 
-  // ── TRON lane · rows 1–2 ──
-  // row 1 — fleet intake + pulse triggers + session anchor + operator intake
-  {id:'MSG',   kind:'mcatch',  name:'FLEET INTAKE', lane:'L_TRON', col:0, row:1, w:36, h:36, lblOnly:true},   // TRON's intake catch — agents drop messages here; writes FLEET HOPPER
-  {id:'HOPPER',kind:'datastore',name:'FLEET HOPPER',lane:'L_TRON', col:1, row:1, w:50, h:56, lblOnly:true},   // TRON's durable store, right above ND-01; PULSE drains it on its cadence (pull)
+  // ── TRON lane · rows 1–3 ──
+  // row 1 — session anchor + operator intake + PARLEY (above the spine)
   {id:'End',   kind:'end',   name:'ANCHOR',         lane:'L_TRON', col:3, row:1, w:36, h:36, lblOnly:true, lblAbove:true},   // session-end terminal (above SWITCHBOARD)
-  {id:'OPI',   kind:'mcatch',name:'OPERATOR INTAKE',lane:'L_TRON', col:5, row:1, w:36, h:36, lblOnly:true},   // operator intake — own channel → PARLEY handler (ND-18, below)
-  // pulse triggers — parked in row 1 above PULSE, dock onto its top at ¼ / ¾ (special: don't size tracks)
-  {id:'TM1',   kind:'timer', name:'METRONOME',      lane:'L_TRON', col:2, row:1, w:36, h:36, lblAbove:true, special:true},   // → PULSE top-¾ (cadence floor)
-  // row 2 — spine: Start → BOOTUP → PULSE → SWITCHBOARD → dispatch (ND-15)
+  {id:'OPI',   kind:'mcatch',name:'OPERATOR INTAKE',lane:'L_TRON', col:5, row:1, w:36, h:36, lblOnly:true},   // operator intake — own channel → PARLEY handler (ND-09)
+  {id:'ND-09', kind:'sub',   name:'PARLEY',         lane:'L_TRON', col:6, row:1, w:96, h:68, sub:'PARLEY'},   // operator-message handler — right of OPERATOR INTAKE; own channel, off PULSE
+  // row 2 — spine: Start → BOOTUP → PULSE → SWITCHBOARD → dispatch (ND-04)
   {id:'Start', kind:'start', name:'TRON:START',     lane:'L_TRON', col:0, row:2, w:36, h:36, lblOnly:true},
   {id:'ND-01', kind:'sub',   name:'BOOTUP',         lane:'L_TRON', col:1, row:2, w:96, h:68, sub:'BOOTUP'},
   {id:'ND-02', kind:'sub',   name:'PULSE',          lane:'L_TRON', col:2, row:2, w:96, h:68, sub:'PULSE'},
   {id:'ND-03', kind:'xor',   name:'SWITCHBOARD',    lane:'L_TRON', col:3, row:2, w:48, h:48, lblPos:'b'},   // work selector hub → dispatch or session end
-  {id:'ND-15', kind:'xor',   name:'',               lane:'L_TRON', col:4, row:2, w:48, h:48, lblPos:'b'},   // dispatch router → worker (up · ND-11) · reviewer (down · ND-14) · architect (right · ND-12)
-  {id:'ND-18', kind:'sub',   name:'PARLEY',         lane:'L_TRON', col:6, row:1, w:96, h:68, sub:'PARLEY'},   // operator-message handler — right of OPERATOR INTAKE; own channel, off PULSE
+  {id:'ND-04', kind:'inc',   name:'',               lane:'L_TRON', col:4, row:2, w:48, h:48, lblPos:'b'},   // dispatch router — INCLUSIVE: fires 1..N arms per tick by condition → worker (up · ND-05) and/or reviewer (down · ND-07) and/or architect (right · ND-06)
+  // row 3 — the WAKE trigger (sub-process) + the fleet intake/hopper that feed it, below PULSE
+  {id:'MSG',   kind:'mcatch',  name:'FLEET INTAKE', lane:'L_TRON', col:0, row:3, w:36, h:36, lblOnly:true},   // TRON's intake catch — agents drop messages here; writes FLEET HOPPER
+  {id:'HOPPER',kind:'datastore',name:'FLEET HOPPER',lane:'L_TRON', col:1, row:3, w:50, h:56, lblOnly:true},   // TRON's durable store; feeds WAKE (message arm) AND is drained by PULSE (02-12)
+  {id:'ND-08', kind:'sub',   name:'WAKE',           lane:'L_TRON', col:3, row:3, w:96, h:68, sub:'WAKE'},   // the tick trigger (below SWITCHBOARD); connects to PULSE on its left side. Clickable → the debounce (cooldown + message|ceiling). Replaces the old METRONOME node — the timer is now the CEILING inside
 
-  // ── ARCHITECT lane · row 3 — ONE row: ARCHITECT cat + PROJECT DOCS only (inbox/hopper/pulse live inside the sub) ──
-  {id:'ND-12', kind:'task',  name:'ARCHITECT',      lane:'L_ARCH', col:6, row:3, w:120,h:100, llm:true, llmId:'LLM-12', sub:'ARCHITECT'},   // cat kept; clickable → opens the ARCHITECT sub (FLOW['ND-12'])
-  {id:'PD2',   kind:'datastore',name:'Project Docs',lane:'L_ARCH', col:5, row:3, w:50, h:56, lblOnly:true, lblAbove:true},   // same row as ARCHITECT; single Project Docs — read by ARCHITECT + reviewer
+  // ── ARCHITECT lane · row 4 — ONE row: ARCHITECT cat + PROJECT DOCS only (inbox/hopper/pulse live inside the sub) ──
+  {id:'ND-06', kind:'task',  name:'ARCHITECT',      lane:'L_ARCH', col:6, row:4, w:120,h:100, llm:true, llmId:'LLM-06', sub:'ARCHITECT'},   // cat kept; clickable → opens the ARCHITECT sub (FLOW['ND-06'])
+  {id:'PD2',   kind:'datastore',name:'Project Docs',lane:'L_ARCH', col:5, row:4, w:50, h:56, lblOnly:true, lblAbove:true},   // same row as ARCHITECT; single Project Docs — read by ARCHITECT + reviewer
 
-  // ── REVIEWERS lane · row 4 — reviewer cat (its inbox + flag/question loop live inside the REVIEW sub) ──
-  {id:'ND-14', kind:'task',  name:'<type> Review',  lane:'L_REV',  col:4, row:4, w:120,h:100, llm:true, llmId:'LLM-14', sub:'REVIEW'},   // cat kept; clickable → opens the REVIEW sub (FLOW['ND-14'])
+  // ── REVIEWERS lane · row 5 — reviewer cat (its inbox + flag/question loop live inside the REVIEW sub) ──
+  {id:'ND-07', kind:'task',  name:'<type> Review',  lane:'L_REV',  col:4, row:5, w:120,h:100, llm:true, llmId:'LLM-07', sub:'REVIEW'},   // cat kept; clickable → opens the REVIEW sub (FLOW['ND-07'])
 ];
 
 const FLOWS = [
   ['Start','ND-01'], ['ND-01','ND-02'], ['ND-02','ND-03'],
-  ['TM1','ND-02','',{toTop:0.75}],                                     // metronome timer → PULSE top-¾ (cadence floor)
-  ['OPI','ND-18','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}}],          // operator intake → PARLEY (right, straight)
-  ['ND-03','ND-15'], ['ND-03','End'],                                 // SWITCHBOARD → dispatch router · session end (label implicit)
-  ['ND-15','ND-11','',{from:{s:'t',d:0.5}, to:{s:'b',d:0.5}}],         // dispatch → worker Build (up the col-4 spine)
-  ['ND-15','ND-14','',{from:{s:'b',d:0.5}, to:{s:'t',d:0.5}}],         // dispatch → reviewer Review (down the col-4 spine)
-  ['ND-15','ND-12','',{from:{s:'r',d:0.5}, to:{s:'t',d:0.5}}],         // dispatch → ARCHITECT (right, then down)
-  ['EIN','ND-11','',{from:{s:'l',d:0.5}, to:{s:'r',d:0.5}}],   // ENGINEER INBOX (right of cat) → ENGINEER (enters the cat's right side)
+  ['ND-08','ND-02','',{from:{s:'l',d:0.75}, to:{s:'b',d:0.75}}],         // WAKE fires the tick → PULSE — leaves WAKE's left side, into PULSE bottom-¾
+  ['ND-02','ND-08','',{from:{s:'b',d:0.5}, to:{s:'l',d:0.25}}],          // tick complete → back to WAKE — PULSE bottom-½ into WAKE's left side; the recurrence loop
+  ['OPI','ND-09','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}}],          // operator intake → PARLEY (right, straight)
+  ['ND-03','ND-04'], ['ND-03','End'],                                 // SWITCHBOARD → dispatch router · session end (label implicit)
+  ['ND-04','ND-05','',{from:{s:'t',d:0.5}, to:{s:'b',d:0.5}}],         // dispatch → worker Build (up the col-4 spine)
+  ['ND-04','ND-07','',{from:{s:'b',d:0.5}, to:{s:'t',d:0.5}}],         // dispatch → reviewer Review (down the col-4 spine)
+  ['ND-04','ND-06','',{from:{s:'r',d:0.5}, to:{s:'t',d:0.5}}],         // dispatch → ARCHITECT (right, then down)
+  ['EIN','ND-05','',{from:{s:'l',d:0.5}, to:{s:'r',d:0.5}}],   // ENGINEER INBOX (right of cat) → ENGINEER (enters the cat's right side)
 ];
 
 // COMMS — non-enforcing connections (BPMN associations): communication / data read that does NOT advance a token.
 // [source, target, {from,to}] — same fractional-dock anchors as FLOWS.
 const COMMS = [
   ['MSG','HOPPER','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}}],      // INBOX FLEET writes the hopper (directed: messages flow in) — straight, same row
-  ['HOPPER','ND-02','',{from:{s:'r',d:0.5}, to:{s:'t',d:0.25}, undirected:true}],  // PULSE drains FLEET HOPPER — undirected; right then down into ND-02 top-¼
-  ['PD3','ND-11','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}, undirected:true}],   // Project Docs → ENGINEER (read; same row, straight right)
+  ['HOPPER','ND-08','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}}],                    // FLEET HOPPER → WAKE (message arm: a queued message wakes the next tick) — straight, same row
+  ['HOPPER','ND-02','',{from:{s:'r',d:0.25}, to:{s:'b',d:0.25}, undirected:true}],  // PULSE drains FLEET HOPPER (02-12) — undirected; up the col gap into PULSE bottom-¼
+  ['PD3','ND-05','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}, undirected:true}],   // Project Docs → ENGINEER (read; same row, straight right)
   ['PD3','ND-02','',{from:{s:'b',d:0.5}, to:{s:'t',d:0.5}, undirected:true}],   // Project Docs → PULSE (read; same column, straight down into top-centre)
-  ['PD2','ND-12','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}, undirected:true}],   // Project Docs → ARCHITECT (read; same row, straight right into the cat)
-  ['PD2','ND-14','',{from:{s:'b',d:0.5}, to:{s:'r',d:0.5}, undirected:true}],   // Project Docs → reviewer (read; from store bottom → cat right side)
+  ['PD2','ND-06','',{from:{s:'r',d:0.5}, to:{s:'l',d:0.5}, undirected:true}],   // Project Docs → ARCHITECT (read; same row, straight right into the cat)
+  ['PD2','ND-07','',{from:{s:'b',d:0.5}, to:{s:'r',d:0.5}, undirected:true}],   // Project Docs → reviewer (read; from store bottom → cat right side)
 ];
 
-const TAG = {start:'startEvent', end:'endEvent', task:'task', sub:'subProcess', xor:'exclusiveGateway', throw:'intermediateThrowEvent', catch:'intermediateCatchEvent', timer:'intermediateCatchEvent', mcatch:'intermediateCatchEvent', mthrow:'intermediateThrowEvent', datastore:'dataStoreReference'};
+const TAG = {start:'startEvent', end:'endEvent', task:'task', sub:'subProcess', xor:'exclusiveGateway', inc:'inclusiveGateway', throw:'intermediateThrowEvent', catch:'intermediateCatchEvent', timer:'intermediateCatchEvent', mcatch:'intermediateCatchEvent', mthrow:'intermediateThrowEvent', datastore:'dataStoreReference'};
 
 /* ════════════ CORE XML ════════════ */
 const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
@@ -203,7 +205,7 @@ const center = n => ({x:n.x+n.w/2, y:n.y+n.h/2});
 function layoutCore(){
   const G=TOK.colGap, GR=TOK.rowGap, PAD=TOK.pad, BAND=TOK.laneBand;   // one symmetric padding; lane owner strip
   const maxCol=Math.max(...NODES.map(n=>n.col)), maxRow=Math.max(...NODES.map(n=>n.row));
-  const placed=NODES.filter(n=>!n.special);               // TM1/CA1 don't drive track sizes (they dock onto PULSE)
+  const placed=NODES.filter(n=>!n.special);               // `special` nodes (none currently) would dock onto a host instead of sizing tracks
   const trackW=[], trackH=[];
   for(let c=0;c<=maxCol;c++){ const ws=placed.filter(n=>n.col===c).map(n=>n.w); trackW[c]=Math.max(TOK.colMin, ws.length?Math.max(...ws):TOK.colMin); }
   for(let r=0;r<=maxRow;r++){ const hs=NODES.filter(n=>n.row===r).map(n=>n.h); trackH[r]=Math.max(TOK.rowMin, hs.length?Math.max(...hs):TOK.rowMin); }
@@ -216,9 +218,6 @@ function layoutCore(){
   rowC[0]=POOL.y+PAD+trackH[0]/2;
   for(let r=1;r<=maxRow;r++){ const gap = laneOfRow[r]===laneOfRow[r-1] ? GR : 2*PAD; rowC[r]=rowC[r-1]+trackH[r-1]/2+gap+trackH[r]/2; }
   placed.forEach(n=>{ n.x=Math.round(colC[n.col]-n.w/2); n.y=Math.round(rowC[n.row]-n.h/2); });
-  // metronome timer docks above PULSE at ¾, parked in row 1
-  const P=byId['ND-02'];
-  byId['TM1'].x=Math.round(P.x+P.w*0.75-18); byId['TM1'].y=Math.round(rowC[1]-18);
   // lane bands tile the pool; every boundary sits PAD below the upper lane's last content row (== PAD above
   // the lower lane's first row, since the inter-lane gap is 2·PAD) → uniform internal padding everywhere.
   const rowBot=r=>rowC[r]+trackH[r]/2;
@@ -295,7 +294,7 @@ function coreXML(){
     let lbl='';
     if(n.kind==='start'||n.kind==='end'||n.kind==='throw'||n.kind==='catch'||n.kind==='timer'||n.kind==='mcatch'||n.kind==='mthrow'||n.kind==='datastore')
       lbl=`<bpmndi:BPMNLabel><dc:Bounds x="${cx-38}" y="${n.lblAbove?n.y-34:n.y+n.h+3}" width="76" height="28"/></bpmndi:BPMNLabel>`;   // id+name on two lines, clear of the circle
-    else if(n.kind==='xor' && n.lblPos){   // explicit gateway-label side, kept off the diamond's lines
+    else if((n.kind==='xor'||n.kind==='inc') && n.lblPos){   // explicit gateway-label side, kept off the diamond's lines
       const W=96, p={ l:[n.x-W-6, cy-14], r:[n.x+n.w+6, cy-14], t:[cx-W/2, n.y-30], b:[cx-W/2, n.y+n.h+4],
                       bl:[n.x-W+4, n.y+n.h+4], br:[n.x+n.w-4, n.y+n.h+4] }[n.lblPos];
       lbl=`<bpmndi:BPMNLabel><dc:Bounds x="${Math.round(p[0])}" y="${Math.round(p[1])}" width="${W}" height="28"/></bpmndi:BPMNLabel>`; }
@@ -347,27 +346,27 @@ const FLOW = {
   'ND-01': { num:'ND-01', name:'BOOTUP', start:'', end:'PULSE', grid:true, endPos:[0,5],
     steps:[
     // common spine — row0 L→R, snakes down to the fork
-    {n:'Spawn TRON-AIDE', pos:[0,0]},                                              // T0  01-01
-    {n:'Refresh trunk',   pos:[1,0]},                                              // T1  01-02
-    {n:'Refresh PRs',     pos:[2,0]},                                              // T2  01-03
-    {n:'Trunk fresh?', kind:'gateway', pos:[3,0], lblPos:'top'},                   // T3  01-04 — validate the fetch advanced BEFORE building (B11; never bootup off stale trunk)
-    {n:'Build snapshot',  pos:[4,0], data:{name:'SNAPSHOT', dir:'out', at:'right'}}, // T4  01-05
-    {n:'Read MANIFEST',   pos:[4,2], data:{name:'MANIFEST', dir:'in',  at:'right'}}, // T5  01-06 — probe
-    {n:'Resume?', kind:'gateway', pos:[2,2]},                                      // T6  01-07 — fork on presence
+    {n:'Spawn TRON-AIDE', id:'01', pos:[0,0]},
+    {n:'Refresh trunk',   id:'02', pos:[1,0]},
+    {n:'Refresh PRs',     id:'03', pos:[2,0]},
+    {n:'Trunk fresh?', id:'04', kind:'gateway', pos:[3,0], lblPos:'top'},                   // validate the fetch advanced BEFORE building (never bootup off stale trunk)
+    {n:'Build snapshot',  id:'05', pos:[4,0], data:{name:'SNAPSHOT', dir:'out', at:'right'}},
+    {n:'Read MANIFEST',   id:'06', pos:[4,2], data:{name:'MANIFEST', dir:'in',  at:'right'}}, // probe
+    {n:'Resume?', id:'07', kind:'gateway', pos:[2,2]},                             // fork on presence
     // fresh branch — straight down col2
-    {n:'Set scope',  kind:'sub', opens:'ND-01-08', pos:[2,3]},                     // T7  01-08
-    {n:'Set counts', kind:'sub', opens:'ND-01-09', pos:[2,4]},                     // T8  01-09
-    {n:'Write MANIFEST', pos:[2,5], data:{name:'MANIFEST', dir:'out', at:'right'}},   // T9  01-10 — born
+    {n:'Set scope',  id:'08', kind:'sub', opens:'ND-01-08', pos:[2,3]},
+    {n:'Set counts', id:'09', kind:'sub', opens:'ND-01-09', pos:[2,4]},
+    {n:'Write MANIFEST', id:'10', pos:[2,5], data:{name:'MANIFEST', dir:'out', at:'right'}},  // born
     // resume branch — down col1, LEFT of the fresh column (load+pipeline+fleet are one node)
-    {n:'Reconcile',   pos:[1,2], data:{name:'MANIFEST', dir:'out', at:'left'}}, // T10 01-11 — aligned with Resume?; resume enters its right, MANIFEST docks left-¾
-    {n:'Consistent?', kind:'gateway', pos:[1,3]},                                  // T11 01-12
+    {n:'Reconcile',   id:'11', pos:[1,2], data:{name:'MANIFEST', dir:'out', at:'left'}}, // aligned with Resume?; resume enters its right, MANIFEST docks left-¾
+    {n:'Consistent?', id:'12', kind:'gateway', pos:[1,3]},
     // merge → tail (col2)
-    {n:'Cap pool', pos:[1,5]},                                                     // T12 01-13 → PULSE
-    {n:'Resolve', kind:'sub', opens:'ND-01-14', pos:[0,3]},   // T13 01-14 — escalation; may message live workers (sent direct / to their hopper)
+    {n:'Cap pool', id:'13', pos:[1,5]},                                            // → PULSE
+    {n:'Resolve', id:'14', kind:'sub', opens:'ND-01-14', pos:[0,3]},   // escalation; may message live workers (sent direct / to their hopper)
     // link catches — where 01-14's throws land (repair re-reconciles, restart re-scopes)
-    {n:'repair',  kind:'catch', pos:[1,1]},                                        // T14 01-15 ← 14-06 throw; re-enters Reconcile
-    {n:'restart', kind:'catch', pos:[3,3]},                                        // T15 01-16 ← 14-07 throw; re-enters Set scope
-    {n:'Halt — trunk unreachable', kind:'terminate', pos:[3,1], lblPos:'bottom'},  // T16 01-17 — persist: dead trunk → cannot bootup; no MANIFEST yet, so emit terminal.halt_bootup SYNCHRONOUSLY (the interactive operator is told why) then terminate
+    {n:'repair',  id:'15', kind:'catch', pos:[1,1]},                               // ← 01-14-06 throw; re-enters Reconcile
+    {n:'restart', id:'16', kind:'catch', pos:[3,3]},                               // ← 01-14-07 throw; re-enters Set scope
+    {n:'Halt — trunk unreachable', id:'17', kind:'terminate', pos:[3,1], lblPos:'bottom'},  // persist: dead trunk → cannot bootup; emit terminal.halt_bootup SYNCHRONOUSLY then terminate
   ],
     edges:[
       {f:'S',t:'T0'},{f:'T0',t:'T1'},{f:'T1',t:'T2'},{f:'T2',t:'T3'},
@@ -391,28 +390,28 @@ const FLOW = {
     // re-invoked each tick by the BASE loop (timer cadence OR pulse event); start here is just the entry
     // 02-01 fork: first entry from BOOTUP arrives with a fresh snapshot (trunk+PRs+build ran in ND-01 before the fork),
     // so the refresh trio is skipped once; every recurring tick rebuilds from trunk (no drift across crash / off-session).
-    {n:'First tick?', kind:'gateway', pos:[0,1], lblPos:'top'},                          // T0  02-01 — entry on row 1 (start event follows its row)
-    {n:'Refresh trunk',     pos:[1,0]},                                                  // T1  02-02  ┐ refresh trio
-    {n:'Refresh PRs',       pos:[2,0]},                                                  // T2  02-03  ┘  (recurring only)
-    {n:'Snapshot fresh?', kind:'gateway', pos:[3,0], lblPos:'top'},                      // T3  02-04  validate the fetch advanced BEFORE rebuilding (never build off stale trunk)
-    {n:'Rebuild snapshot',  pos:[4,0], data:{name:'SNAPSHOT', dir:'out', at:'right'}},   // T4  02-05
-    {n:'Detect done',       pos:[4,1]},                                                  // T5  02-06  ← merge: rebuild path (T4) + skip-rebuild gate (T20)
+    {n:'First tick?', id:'01', kind:'gateway', pos:[0,1], lblPos:'top'},                 // entry on row 1 (start event follows its row)
+    {n:'Refresh trunk',     id:'02', pos:[1,0]},                                         // ┐ refresh trio
+    {n:'Refresh PRs',       id:'03', pos:[2,0]},                                         // ┘  (recurring only)
+    {n:'Snapshot fresh?', id:'04', kind:'gateway', pos:[3,0], lblPos:'top'},             // validate the fetch advanced BEFORE rebuilding (never build off stale trunk)
+    {n:'Rebuild snapshot',  id:'05', pos:[4,0], data:{name:'SNAPSHOT', dir:'out', at:'right'}},
+    {n:'Detect done',       id:'06', pos:[4,1]},                                         // ← merge: rebuild path + skip-rebuild gate (21)
     // worker lifecycle — detect (Assess) then dispose (Settle); ambiguous cases escalate
-    {n:'Assess workers',    pos:[4,2]},                                                  // T6  02-07  liveness + TTL + PR → done/dead/hung/orphan
-    {n:'Settle workers',    pos:[3,2]},                                                  // T7  02-08  release safe (resume-session / fresh); flag ambiguous; APPLY any resolved escalation whose operator reply has landed
-    {n:'Escalate?', kind:'gateway', pos:[1,2]},                                          // T8  02-09
-    {n:'Resolve', kind:'sub', opens:'ND-02-10', pos:[0,3]},                              // T9  02-10  raise-and-defer escalation (brief operator → send → mark pending → await)
-    {n:'Tick cadence',      pos:[0,2]},                                                  // T10 02-11  merge: clean + resolved
-    {n:'Claim inboxes',     pos:[-1,2]},                                                 // T11 02-12
-    {n:'Messages?', kind:'gateway', pos:[-1,4]},                                         // T12 02-13  empty inbox → skip ONLY classify+route (sends still happen) — on its own inserted row
-    {n:'Classify messages', pos:[-1,5], actor:'aide', llmId:'LLM-02-14'},                // T13 02-14 — the one LLM touch per tick; directly below 02-13 (straight drop)
-    {n:'Route messages',    pos:[1,5]},                                                  // T14 02-15  tag → recipient (worker / architect / operator)
-    {n:'Drive gates',       pos:[2,5]},                                                  // T15 02-16  merge: routed + skipped; may produce sends (unblock/review/reject)
-    {n:'Drain triggers',    pos:[3,5]},                                                  // T16 02-17  operator commands; may produce sends
-    {n:'<AGENT-ID> INBOX', kind:'mthrow', pos:[4,5]},                                    // T17 02-18  deliver: single message-throw — every message is addressed to a specific agent by ID (one throw may carry several, to several agents) → that agent's inbox
-    {n:'Save state',        pos:[4,3], data:{name:'MANIFEST', dir:'out', at:'right'}},   // T18 02-19
-    {n:'Drop sidecars',     pos:[3,3]},                                                  // T19 02-20  (effects persisted before sidecars dropped)
-    {n:'', kind:'gateway', pos:[3,1], lblPos:'bottom'},                                  // T20 02-21  skip-rebuild merge (exclusive): first-tick (T0) XOR death-cap persist (T3) — mutually exclusive, only one ever arrives → straight into Detect done
+    {n:'Assess workers',    id:'07', pos:[4,2]},                                         // liveness + TTL + PR → done/dead/hung/orphan
+    {n:'Settle workers',    id:'08', pos:[3,2]},                                         // release safe (resume-session / fresh); flag ambiguous; APPLY any resolved escalation whose reply landed
+    {n:'Escalate?', id:'09', kind:'gateway', pos:[1,2]},
+    {n:'Resolve', id:'10', kind:'sub', opens:'ND-02-10', pos:[0,3]},                     // raise-and-defer escalation (brief operator → send → mark pending → await)
+    {n:'Tick cadence',      id:'11', pos:[0,2]},                                         // merge: clean + resolved
+    {n:'Claim inboxes',     id:'12', pos:[-1,2]},
+    {n:'Messages?', id:'13', kind:'gateway', pos:[-1,4]},                                // empty inbox → skip ONLY classify+route (sends still happen)
+    {n:'Classify messages', id:'14', pos:[-1,5], actor:'aide', llmId:'LLM-02-14'},       // the one LLM touch per tick; directly below 02-13 (straight drop)
+    {n:'Route messages',    id:'15', pos:[1,5]},                                         // tag → recipient (worker / architect / operator)
+    {n:'Drive gates',       id:'16', pos:[2,5]},                                         // merge: routed + skipped; may produce sends (unblock/review/reject)
+    {n:'Match decision',    id:'17', pos:[3,5]},                                         // thread operator.decision back in: match the reply to its parked case by correlation id → Settle applies
+    {n:'<AGENT-ID> INBOX', id:'18', kind:'mthrow', pos:[4,5]},                           // deliver: single message-throw — every message is ID-addressed → that agent's inbox
+    {n:'Save state',        id:'19', pos:[4,3], data:{name:'MANIFEST', dir:'out', at:'right'}},
+    {n:'Drop sidecars',     id:'20', pos:[3,3]},                                         // (effects persisted before sidecars dropped)
+    {n:'', id:'21', kind:'gateway', pos:[3,1], lblPos:'bottom'},                         // skip-rebuild merge (exclusive): first-tick XOR death-cap persist → straight into Detect done
   ],
     edges:[
       {f:'S',t:'T0'},
@@ -440,23 +439,23 @@ const FLOW = {
       {f:'T18',t:'T19'},                                       // save → drop (persist before drop)
       {f:'T19',t:'E'},
     ]},
-  // REVIEW — the reviewer cat's drill-down (opened from the core ND-14). Reviewer is dispatched per
+  // REVIEW — the reviewer cat's drill-down (opened from the core ND-07). Reviewer is dispatched per
   // milestone, reads scope + Project Docs, reviews, forms a verdict, delivers the review to the architect.
-  // ENGINEER — a worker's build drill-down (core ND-11). Dispatched per block; builds, may consult the
+  // ENGINEER — a worker's build drill-down (core ND-05). Dispatched per block; builds, may consult the
   // architect (peer: worker.question_peer), reports its outcome to TRON. Same agent pattern as architect/reviewer.
-  'ND-11': { num:'ND-11', name:'ENGINEER', owner:'✦  ENGINEER', grid:true, noEnd:true,
+  'ND-05': { num:'ND-05', name:'ENGINEER', owner:'✦  ENGINEER', grid:true, noEnd:true,
     start:'', startData:{name:'PMT-ENG-BRIEF', dir:'in', at:'below'},   // dispatch object on spawn (you-are agents/engineer.md + ID); prompt file in tron/pmt
     startPos:[-1,0],
     steps:[
-      {n:'ENGINEER INBOX', kind:'mcatch', pos:[-1,-1], lblPos:'top'},   // T0 11-01 — message catch (left); writes the hopper
-      {n:'ENGINEER HOPPER', kind:'store', pos:[-0.2,-1]},               // T1 — durable mailbox; above the build's ¼ point
-      {n:'<build>', kind:'task', pos:[0,0], data:{name:'<PMT-ENG-*>', dir:'in', at:'above', dock:0.75}},   // T2 11-03 — builds the block; reads hopper (¼) + per-task prompt (¾)
-      {n:'', kind:'gateway', pos:[1,0], lblPos:'top'},                  // T3 11-04 — report outcome, or consult the architect
-      {n:'FLEET INTAKE', kind:'mend', pos:[2,0]},                       // T4 11-05 — report outcome to TRON (done / wall → FLEET HOPPER; PULSE pulls it)
-      {n:'ASK ARCHITECT', kind:'send', pos:[1,1]},                      // T5 11-06 — SEND: peer consult to the architect (worker.question_peer)
-      {n:'ARCHITECT REPLY', kind:'receive', pos:[0,1], data:{name:'LOGS', store:true, dir:'out', at:'below', dock:0.75}},   // T6 11-07 — RECEIVE the reply → resume; consult logged to LOGS (side:observe)
-      {n:'no reply', kind:'boundary', interrupting:false, attachTo:'T6', pos:[0,1], lblPos:'bottom'},   // T7 11-08 — NON-interrupting timer: architect silent → escalate, build keeps waiting
-      {n:'FLEET INTAKE', kind:'mend', pos:[-0.2,2]},                    // T8 11-09 — message-end: no architect answer → contact TRON (FLEET HOPPER → operator)
+      {n:'ENGINEER INBOX', id:'01', kind:'mcatch', pos:[-1,-1], lblPos:'top'},   // message catch (left); writes the hopper
+      {n:'ENGINEER HOPPER', kind:'store', pos:[-0.2,-1]},               // durable mailbox (store — no step id); above the build's ¼ point
+      {n:'<build>', id:'02', kind:'task', pos:[0,0], data:{name:'<PMT-ENG-*>', dir:'in', at:'above', dock:0.75}},   // builds the block; reads hopper (¼) + per-task prompt (¾)
+      {n:'', id:'03', kind:'gateway', pos:[1,0], lblPos:'top'},         // report outcome, or consult the architect
+      {n:'FLEET INTAKE', id:'04', kind:'mend', pos:[2,0]},              // report outcome to TRON (done / wall → FLEET HOPPER; PULSE pulls it)
+      {n:'ASK ARCHITECT', id:'05', kind:'send', pos:[1,1]},             // SEND: peer consult to the architect (worker.question_peer)
+      {n:'ARCHITECT REPLY', id:'06', kind:'receive', pos:[0,1], data:{name:'LOGS', store:true, dir:'out', at:'below', dock:0.75}},   // RECEIVE the reply → resume; consult logged to LOGS (side:observe)
+      {n:'no reply', id:'07', kind:'boundary', interrupting:false, attachTo:'T6', pos:[0,1], lblPos:'bottom'},   // NON-interrupting timer: architect silent → escalate, build keeps waiting
+      {n:'FLEET INTAKE', id:'08', kind:'mend', pos:[-0.2,2]},           // message-end: no architect answer → contact TRON (FLEET HOPPER → operator)
     ],
     edges:[
       {f:'S',t:'T2'},
@@ -469,19 +468,19 @@ const FLOW = {
       {f:'T6',t:'T2', from:{s:'t'}, to:{s:'b'}},                        // reply → resume the build
       {f:'T7',t:'T8', from:{s:'b'}, to:{s:'t'}},                        // architect silent → contact TRON (build keeps waiting)
     ]},
-  // ARCHITECT — the persistent, forward-only consultant's drill-down (core ND-12). One architect, alive
+  // ARCHITECT — the persistent, forward-only consultant's drill-down (core ND-06). One architect, alive
   // throughout (tron.md R1). Loops: receive work → do it (reads Project Docs) → report to TRON.
-  'ND-12': { num:'ND-12', name:'ARCHITECT', owner:'✦  ARCHITECT', grid:true, noEnd:true,
+  'ND-06': { num:'ND-06', name:'ARCHITECT', owner:'✦  ARCHITECT', grid:true, noEnd:true,
     start:'', startData:{name:'PMT-ARCH-BRIEF', dir:'in', at:'below'},   // dispatch object on spawn (you-are agents/architect.md + ID); prompt file in tron/pmt
     startPos:[-1,0],
     steps:[
-      {n:'ARCHITECT INBOX', kind:'mcatch', pos:[-1,-1], lblPos:'top'},  // T0 12-01 — message catch (left); writes the hopper
-      {n:'ARCHITECT HOPPER', kind:'store', pos:[-0.2,-1]},              // T1 — durable mailbox; sits above the work's ¼ point (prompt takes ¾)
-      {n:'<work>', kind:'task', pos:[0,0], data:{name:'<PMT-ARCH-*>', dir:'in', at:'above', dock:0.75}},   // T2 12-03 — the work; reads its hopper (top-¼) + a per-task prompt from tron/pmt (top-¾)
-      {n:'', kind:'gateway', pos:[1,0], lblPos:'top'},                  // T3 12-04 — report, or ask TRON
-      {n:'FLEET INTAKE', kind:'mthrow', pos:[2,0]},                     // T4 12-05 — report to TRON: ONE message → FLEET HOPPER; PULSE pulls it (agents never wake PULSE)
-      {n:'ASK TRON', kind:'send', pos:[1,1]},                           // T5 12-06 — SEND: sync question to TRON
-      {n:'TRON REPLY', kind:'receive', pos:[0,1]},                      // T6 12-07 — RECEIVE the reply → resume the work
+      {n:'ARCHITECT INBOX', id:'01', kind:'mcatch', pos:[-1,-1], lblPos:'top'},  // message catch (left); writes the hopper
+      {n:'ARCHITECT HOPPER', kind:'store', pos:[-0.2,-1]},              // durable mailbox (store — no step id); sits above the work's ¼ point (prompt takes ¾)
+      {n:'<work>', id:'02', kind:'task', pos:[0,0], data:{name:'<PMT-ARCH-*>', dir:'in', at:'above', dock:0.75}},   // the work; reads its hopper (top-¼) + a per-task prompt from tron/pmt (top-¾)
+      {n:'', id:'03', kind:'gateway', pos:[1,0], lblPos:'top'},         // report, or ask TRON
+      {n:'FLEET INTAKE', id:'04', kind:'mthrow', pos:[2,0]},            // report to TRON: ONE message → FLEET HOPPER; PULSE pulls it (agents never wake PULSE)
+      {n:'ASK TRON', id:'05', kind:'send', pos:[1,1]},                  // SEND: sync question to TRON
+      {n:'TRON REPLY', id:'06', kind:'receive', pos:[0,1]},             // RECEIVE the reply → resume the work
     ],
     edges:[
       {f:'S',t:'T2'},
@@ -493,19 +492,19 @@ const FLOW = {
       {f:'T5',t:'T6', from:{s:'l'}, to:{s:'r'}},                        // ask → reply (sync)
       {f:'T6',t:'T2', from:{s:'t'}, to:{s:'b'}},                        // reply → resume the work
     ]},
-  'ND-14': { num:'ND-14', name:'REVIEW', owner:'✦  REVIEWER', grid:true,
-    start:'', startData:{name:'BRIEF', id:'PMT-01', dir:'in', at:'below'},   // BRIEF = TRON's dispatch object on spawn (you-are agents/<role>.md + ID + task); id PMT-01 = its prompt file
+  'ND-07': { num:'ND-07', name:'REVIEW', owner:'✦  REVIEWER', grid:true,
+    start:'', startData:{name:'PMT-REV-BRIEF', dir:'in', at:'below'},   // dispatch object on spawn (you-are agents/<role>.md + ID + task); prompt file in tron/pmt — matches PMT-ENG/ARCH-BRIEF
     end:'ARCHITECT INBOX', endKind:'message',                           // end-event IS the send: message-end → delivers the review to the architect
     startPos:[-1,0], endPos:[2,0],
     steps:[
-      {n:'REVIEWER INBOX', kind:'mcatch', pos:[-1,-1], lblPos:'top'},   // T0 14-01 — message catch (left); writes the hopper
-      {n:'REVIEWER HOPPER', kind:'store', pos:[0,-1]},                  // T1 — durable mailbox; reviewer drains it (between inbox and the cat)
-      {n:'<type> Review', kind:'task', pos:[0,0]},                      // T2 14-02 — the reviewer does the review
-      {n:'Confer?', kind:'gateway', pos:[1,0], lblPos:'top'},           // T3 14-03 — mid-review: confer with the architect (flag / question / clarify), or done
-      {n:'Ask architect', kind:'send', pos:[1,1]},                      // T4 14-04 — SEND: direct sync consult to the persisted architect (under TRON observation)
-      {n:'Architect reply', kind:'receive', pos:[0,1], data:{name:'LOGS', store:true, dir:'out', at:'below', dock:0.75}},  // T5 14-05 — RECEIVE (blocks for the reply); logged to LOGS (dock ¾), no MANIFEST touch
-      {n:'no reply', kind:'boundary', interrupting:false, attachTo:'T5', pos:[0,1], lblPos:'bottom'},   // T6 14-06 — NON-interrupting timer: bounds the wait WITHOUT cancelling the review
-      {n:'FLEET INTAKE', kind:'mend', pos:[-0.2,2]},                    // T7 14-07 — message-end: escalate to TRON (FLEET HOPPER → operator); under the ¼ boundary, straight down
+      {n:'REVIEWER INBOX', id:'01', kind:'mcatch', pos:[-1,-1], lblPos:'top'},   // message catch (left); writes the hopper
+      {n:'REVIEWER HOPPER', kind:'store', pos:[0,-1]},                  // durable mailbox (store — no step id); reviewer drains it
+      {n:'<type> Review', id:'02', kind:'task', pos:[0,0]},             // the reviewer does the review
+      {n:'Confer?', id:'03', kind:'gateway', pos:[1,0], lblPos:'top'},  // mid-review: confer with the architect (flag / question / clarify), or done
+      {n:'Ask architect', id:'04', kind:'send', pos:[1,1]},             // SEND: direct sync consult to the persisted architect (under TRON observation)
+      {n:'Architect reply', id:'05', kind:'receive', pos:[0,1], data:{name:'LOGS', store:true, dir:'out', at:'below', dock:0.75}},  // RECEIVE (blocks for the reply); logged to LOGS (dock ¾), no MANIFEST touch
+      {n:'no reply', id:'06', kind:'boundary', interrupting:false, attachTo:'T5', pos:[0,1], lblPos:'bottom'},   // NON-interrupting timer: bounds the wait WITHOUT cancelling the review
+      {n:'FLEET INTAKE', id:'07', kind:'mend', pos:[-0.2,2]},           // message-end: escalate to TRON (FLEET HOPPER → operator); under the ¼ boundary, straight down
     ],
     edges:[
       {f:'S',t:'T2'},
@@ -520,12 +519,12 @@ const FLOW = {
     ]},
   'ND-01-08': { num:'ND-01-08', name:'SET SCOPE', start:'', end:'Scope locked', grid:true, endPos:[3,0],
     steps:[
-      {n:'Assign TRON-AIDE', pos:[0,0]},                      // T0 det
-      {n:'Ask scope', actor:'aide', pos:[0,1], llmId:'LLM-01-08-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}},  // T1 aide — reads project core files to ground the scope dialogue
-      {n:'Answer scope', actor:'op', pos:[1,2]},              // T2 op
-      {n:'Resolved?', kind:'gateway', actor:'aide', pos:[1,1]}, // T3 aide — above Answer
-      {n:'Validate scope', pos:[1,0]},                        // T4 det — above the gateway
-      {n:'Lock scope', pos:[2,0]},                            // T5 det
+      {n:'Assign TRON-AIDE', id:'01', pos:[0,0]},             // det
+      {n:'Ask scope', id:'02', actor:'aide', pos:[0,1], llmId:'LLM-01-08-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}},  // aide — reads project core files to ground the scope dialogue
+      {n:'Answer scope', id:'03', actor:'op', pos:[1,2]},     // op
+      {n:'Resolved?', id:'04', kind:'gateway', actor:'aide', pos:[1,1]}, // aide — above Answer
+      {n:'Validate scope', id:'05', pos:[1,0]},               // det — above the gateway
+      {n:'Lock scope', id:'06', pos:[2,0]},                   // det
     ],
     edges:[
       {f:'S',t:'T0'},{f:'T0',t:'T1'},{f:'T1',t:'T2', from:{s:'b'}, to:{s:'l'}},{f:'T2',t:'T3'},   // Ask bottom → Answer left
@@ -537,12 +536,12 @@ const FLOW = {
     ]},
   'ND-01-09': { num:'ND-01-09', name:'SET COUNTS', start:'', end:'Counts locked', grid:true, endPos:[3,0],
     steps:[
-      {n:'Assign TRON-AIDE', pos:[0,0]},                      // T0 det
-      {n:'Ask counts', actor:'aide', pos:[0,1], llmId:'LLM-01-09-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}}, // T1 aide — reads project core files
-      {n:'Answer counts', actor:'op', pos:[1,2]},            // T2 op
-      {n:'Confirmed?', kind:'gateway', actor:'aide', pos:[1,1]}, // T3 aide — above Answer
-      {n:'Validate counts', pos:[1,0]},                      // T4 det — above the gateway
-      {n:'Lock counts', pos:[2,0]},                          // T5 det
+      {n:'Assign TRON-AIDE', id:'01', pos:[0,0]},            // det
+      {n:'Ask counts', id:'02', actor:'aide', pos:[0,1], llmId:'LLM-01-09-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}}, // aide — reads project core files
+      {n:'Answer counts', id:'03', actor:'op', pos:[1,2]},   // op
+      {n:'Confirmed?', id:'04', kind:'gateway', actor:'aide', pos:[1,1]}, // aide — above Answer
+      {n:'Validate counts', id:'05', pos:[1,0]},             // det — above the gateway
+      {n:'Lock counts', id:'06', pos:[2,0]},                 // det
     ],
     edges:[
       {f:'S',t:'T0'},{f:'T0',t:'T1'},{f:'T1',t:'T2', from:{s:'b'}, to:{s:'l'}},{f:'T2',t:'T3'},   // Ask bottom → Answer left
@@ -556,15 +555,15 @@ const FLOW = {
   // repair → re-reconcile (01-11) · restart → fresh scope (01-08) · halt → terminate.
   'ND-01-14': { num:'ND-01-14', name:'RESOLVE', start:'', noEnd:true, grid:true, endPos:[0,0],
     steps:[
-      {n:'Assign TRON-AIDE', pos:[0,0]},                       // T0 14-01 det
-      {n:'Brief + offer options', actor:'aide', pos:[0,1], llmId:'LLM-01-14-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}},    // T1 14-02 — reads project core files to brief
-      {n:'Decide', actor:'op', pos:[0,2]},                     // T2 14-03 (under Brief)
-      {n:'Choice?', kind:'gateway', actor:'aide', pos:[1,1], lblPos:'top'},  // T3 14-04 — clarify vs proceed (label up, clear of the hub)
-      {n:'', kind:'gateway', actor:'aide', pos:[2,1]}, // T4 14-05 — split repair/restart/halt (4-way hub); id-label to the right (col 3 buffer keeps it clear)
-      {n:'repair',  kind:'throw', pos:[2,0], lblPos:'top'},     // T5 14-06 → catch 01-15 (re-reconcile); DET, straight ↑
-      {n:'restart', kind:'throw', actor:'aide', pos:[4,1]},    // T6 14-07 → catch 01-16 (re-scope); straight →
-      {n:'Archive MANIFEST', actor:'op', pos:[2,2], data:{name:'MANIFEST', dir:'in', at:'below'}}, // T7 14-08 — archive the live MANIFEST before terminate
-      {n:'Halt', kind:'terminate', actor:'op', pos:[4,2]},     // T8 14-09 halt (straight → after archive)
+      {n:'Assign TRON-AIDE', id:'01', pos:[0,0]},              // det
+      {n:'Brief + offer options', id:'02', actor:'aide', pos:[0,1], llmId:'LLM-01-14-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}},    // reads project core files to brief
+      {n:'Decide', id:'03', actor:'op', pos:[0,2]},            // (under Brief)
+      {n:'Choice?', id:'04', kind:'gateway', actor:'aide', pos:[1,1], lblPos:'top'},  // clarify vs proceed (label up, clear of the hub)
+      {n:'', id:'05', kind:'gateway', actor:'aide', pos:[2,1]}, // split repair/restart/halt (4-way hub); id-label to the right
+      {n:'repair',  id:'06', kind:'throw', pos:[2,0], lblPos:'top'},     // → catch 01-15 (re-reconcile); DET, straight ↑
+      {n:'restart', id:'07', kind:'throw', actor:'aide', pos:[4,1]},    // → catch 01-16 (re-scope); straight →
+      {n:'Archive MANIFEST', id:'08', actor:'op', pos:[2,2], data:{name:'MANIFEST', dir:'in', at:'below'}}, // archive the live MANIFEST before terminate
+      {n:'Halt', id:'09', kind:'terminate', actor:'op', pos:[4,2]},     // halt (straight → after archive)
     ],
     edges:[
       {f:'S',t:'T0'},{f:'T0',t:'T1'},{f:'T1',t:'T2'},
@@ -581,30 +580,30 @@ const FLOW = {
   // (02-08) applies the chosen action then. No inline decision — keeps the tick bounded (Temporal-signal style).
   'ND-02-10': { num:'ND-02-10', name:'RESOLVE', start:'', end:'Awaiting operator', grid:true, endPos:[2,0],
     steps:[
-      {n:'Assign TRON-AIDE', pos:[0,0]},                                                       // T0 10-01 det
-      {n:'Brief + offer options', actor:'aide', pos:[0,1], llmId:'LLM-02-10-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}},                       // T1 10-02 — AIDE reads project core files to compose the operator brief
-      {n:'OPERATOR INBOX', kind:'mthrow', actor:'aide', pos:[1,1], data:{name:'Operator Inbox', dir:'out', store:true, lane:'op'}},   // T2 10-03 — throw writes the operator's inbox store (OPERATOR lane, directed); TRON → operator; pairs with ARCHITECT INBOX
-      {n:'Mark pending', pos:[1,0]},                                                           // T3 10-04 det — stamp escalation-pending (durable; guards re-escalation)
+      {n:'Assign TRON-AIDE', id:'01', pos:[0,0]},                                              // det
+      {n:'Brief + offer options', id:'02', actor:'aide', pos:[0,1], llmId:'LLM-02-10-02', data:{name:'Project Docs', dir:'in', at:'left', store:true}},                       // AIDE reads project core files to compose the operator brief
+      {n:'OPERATOR INBOX', id:'03', kind:'mthrow', actor:'aide', pos:[1,1], data:{name:'Operator Inbox', dir:'out', store:true, lane:'op'}},   // throw writes the operator's inbox store; TRON → operator; pairs with ARCHITECT INBOX
+      {n:'Mark pending', id:'04', pos:[1,0]},                                                  // stamp escalation-pending (durable; guards re-escalation)
     ]},
 
-  // ── ND-18 PARLEY — operator-message handler (own channel, off PULSE; fed by OPERATOR INTAKE) ──
+  // ── ND-09 PARLEY — operator-message handler (own channel, off PULSE; fed by OPERATOR INTAKE) ──
   // Triggered when an operator message lands. Two outcomes branch off Intent?:
   //   ACT  — command (halt/pause/resume/rescope) → run-state · decision (reply to a parked case) → PULSE Settle. No reply.
   //   ANSWER — query (status/inspect) or ask (free-form) → AIDE composes from artifacts → reply to operator;
   //            an ask AIDE can't answer from artifacts is sent to the architect (lands in ARCHITECT HOPPER), answered later.
   // Operator-initiated, so the conversation is synchronous (human present) — nothing here is parked across PULSE ticks.
   // GRID layout (grid:true) to match the core + ND-01/ND-02: DET = row 0, AIDE auto-drops to row 1; every arm a straight run.
-  'ND-18': { num:'ND-18', name:'PARLEY', start:'', noEnd:true, grid:true, endPos:[5,1],
+  'ND-09': { num:'ND-09', name:'PARLEY', start:'', noEnd:true, grid:true, endPos:[5,1],
     steps:[
-      {n:'Intent?', kind:'gateway', pos:[0,0], lblPos:'top'},                                       // T0 det
-      {n:'Apply command / decision', pos:[1,0]},                                                     // T1 det — ACT: command→run-state · decision→Settle
-      {n:'Acted', kind:'end', pos:[2,0]},                                                            // T2 det end
-      {n:'Compose answer', actor:'aide', pos:[0,1], llmId:'LLM-18-04', data:{name:'Project Docs', dir:'in', at:'left', store:true}},                                    // T3 aide — reads project core files to compose the answer
-      {n:'Answerable?', kind:'gateway', actor:'aide', pos:[3,1], lblPos:'top'},                      // T4 aide
-      {n:'OPERATOR INBOX', kind:'mthrow', actor:'aide', pos:[4,1], data:{name:'Operator Inbox', dir:'out', store:true, lane:'op'}},   // T5 aide — throw writes the operator's inbox store (OPERATOR lane, directed); TRON → operator; pairs with ARCHITECT INBOX
-      {n:'Replied', kind:'end', actor:'aide', pos:[5,1]},                                            // T6 aide end
-      {n:'ARCHITECT INBOX', kind:'mthrow', pos:[3,0], lblPos:'top'},                                 // T7 det — message-throw to the architect (matches the ARCHITECT INBOX catch); lands in ARCHITECT HOPPER
-      {n:'Deferred', kind:'end', pos:[4,0]},                                                         // T8 det end — adjacent to Send to architect
+      {n:'Intent?', id:'01', kind:'gateway', pos:[0,0], lblPos:'top'},                              // det
+      {n:'Apply command / decision', id:'02', pos:[1,0]},                                           // det — ACT: command→run-state · decision→Settle
+      {n:'Acted', id:'03', kind:'end', pos:[2,0]},                                                  // det end
+      {n:'Compose answer', id:'04', actor:'aide', pos:[0,1], llmId:'LLM-09-04', data:{name:'Project Docs', dir:'in', at:'left', store:true}},                          // aide — reads project core files to compose the answer
+      {n:'Answerable?', id:'05', kind:'gateway', actor:'aide', pos:[3,1], lblPos:'top'},            // aide
+      {n:'OPERATOR INBOX', id:'06', kind:'mthrow', actor:'aide', pos:[4,1], data:{name:'Operator Inbox', dir:'out', store:true, lane:'op'}},   // throw writes the operator's inbox store; TRON → operator
+      {n:'Replied', id:'07', kind:'end', actor:'aide', pos:[5,1]},                                  // aide end
+      {n:'ARCHITECT INBOX', id:'08', kind:'mthrow', pos:[3,0], lblPos:'top'},                       // message-throw to the architect (matches the ARCHITECT INBOX catch); lands in ARCHITECT HOPPER
+      {n:'Deferred', id:'09', kind:'end', pos:[4,0]},                                               // det end — adjacent to ARCHITECT INBOX
     ],
     edges:[
       {f:'S',t:'T0'},
@@ -617,7 +616,42 @@ const FLOW = {
       {f:'T5',t:'T6'},
       {f:'T7',t:'T8'},
     ]},
+
+  // ── PULSE WAKE — how a tick is triggered: debounced message-wake + timer ceiling ──
+  // Bounded on BOTH ends: a mandatory COOLDOWN (min gap) after each tick, then the tick waits for the
+  // FIRST of { a message arriving, the max-latency ceiling }. So a message wakes PULSE early — but never
+  // more than once per COOLDOWN (a burst coalesces into one tick), and the ceiling guarantees liveness even
+  // with zero traffic. Not a back-door: messages only pull latency DOWN to the floor, never unbounded.
+  'ND-08': { num:'ND-08', name:'WAKE', start:'tick complete', end:'PULSE', grid:true, startPos:[-1,0], endPos:[3,0],
+    steps:[
+      {n:'COOLDOWN', id:'01', kind:'tcatch', pos:[0,0]},                  // mandatory min-gap floor: messages during this window just pile in the hopper, no wake
+      {n:'First to fire?', id:'02', kind:'event', pos:[1,0], lblPos:'top'}, // event-based gateway: whichever of the two events comes first wins
+      {n:'MESSAGE', id:'03', kind:'mcatch', pos:[2,-1]},                  // a message landed in the FLEET HOPPER → wake early
+      {n:'CEILING', id:'04', kind:'tcatch', pos:[2,1]},                   // no message before the max-latency ceiling → wake anyway (liveness)
+    ],
+    edges:[
+      {f:'S',t:'T0'},
+      {f:'T0',t:'T1'},
+      {f:'T1',t:'T2', from:{s:'t'}, to:{s:'l'}},                          // gateway → message arm (up)
+      {f:'T1',t:'T3', from:{s:'b'}, to:{s:'l'}},                          // gateway → ceiling arm (down)
+      {f:'T2',t:'E', from:{s:'r'}, to:{s:'t'}},                           // message → re-enter PULSE
+      {f:'T3',t:'E', from:{s:'r'}, to:{s:'b'}},                           // ceiling → re-enter PULSE
+    ]},
 };
+// ── ID LINT — step ids are authored, not positional. Every flow node carries an explicit `id`; data
+// stores carry none. Assert per-sub that the flow-node ids are unique and contiguous 01..N, so a drifted
+// or duplicate id surfaces immediately in the console instead of silently mis-numbering the canvas.
+function lintFlowIds(){
+  for(const key in FLOW){ const def=FLOW[key];
+    const ids = def.steps.filter(s=>s.kind!=='store').map(s=>s.id);   // every flow node holds a sequence id (incl. LLM nodes, which still render their LLM<X> label)
+    const missing = ids.some(x=>x==null);
+    const nums = ids.map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+    const dup = new Set(nums).size !== nums.length;
+    const gap = nums.some((n,i)=>n!==i+1);
+    if(missing||dup||gap) console.error(`[id-lint] ${key}: ids not unique+contiguous 01..N`, {missing,dup,gap,ids});
+  }
+}
+lintFlowIds();
 /* ── LAYOUT TOKENS — single source of spacing for every diagram ── */
 const TOK = {
   nodeW:170, nodeH:68, gw:44, ev:36, dataW:36, dataH:50, storeW:50, storeH:56,   // element sizes (storeW/H = data-store cylinder, matches core stores)
@@ -655,7 +689,7 @@ function subXML(def){
     // with a fixed grid gap. Every column/row line is evenly pitched and element centres snap to them; a
     // gateway/event just sits centred in its full-size cell (no per-column tightening).
     const PAD=TOK.pad, BAND=TOK.laneBand;
-    const dimOf = s => { const gw=s.kind==='gateway'||s.kind==='inclusive', ev=s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow'||s.kind==='mcatch'||s.kind==='boundary'||s.kind==='mend'||s.kind==='end'||s.kind==='terminate', st=s.kind==='store'; return {w:st?TOK.storeW:gw?TOK.gw:ev?TOK.ev:STW, h:st?TOK.storeH:gw?TOK.gw:ev?TOK.ev:STH}; };
+    const dimOf = s => { const gw=s.kind==='gateway'||s.kind==='inclusive'||s.kind==='event', ev=s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow'||s.kind==='mcatch'||s.kind==='tcatch'||s.kind==='boundary'||s.kind==='mend'||s.kind==='end'||s.kind==='terminate', st=s.kind==='store'; return {w:st?TOK.storeW:gw?TOK.gw:ev?TOK.ev:STW, h:st?TOK.storeH:gw?TOK.gw:ev?TOK.ev:STH}; };
     const isAide = s => actorOf(s)==='aide', isOp = s => actorOf(s)==='op';
     const hasAide = def.steps.some(isAide), hasOp = def.steps.some(isOp) || def.steps.some(s=>s.data&&s.data.lane==='op');   // an op-bound data store opens the OPERATOR lane even with no op step
     const detRows = def.steps.filter(s=>!isAide(s)&&!isOp(s)).map(s=>s.pos[1]);
@@ -724,7 +758,7 @@ function subXML(def){
     poolH=lanesUsed.length*LANE_H;
     const colOf=(s,i)=> s.col!==undefined ? s.col : i;
     geom['S']={x:SX0-STW/2, y:cyL.det-TOK.ev/2, w:TOK.ev,h:TOK.ev, row:0, col:-0.5, ord:-1};
-    def.steps.forEach((s,i)=>{ const gw=s.kind==='gateway'||s.kind==='inclusive', ev=s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow'||s.kind==='mcatch'||s.kind==='boundary'||s.kind==='mend'||s.kind==='end'||s.kind==='terminate', w=gw?TOK.gw:ev?TOK.ev:STW, h=gw?TOK.gw:ev?TOK.ev:STH, c=colOf(s,i), base=SX0+c*SPITCHX; geom['T'+i]={x:(gw||ev)?base+STW/2-w/2:base, y:cyL[actorOf(s)]-h/2, w,h, row:rowOf[actorOf(s)], col:c, ord:i}; });
+    def.steps.forEach((s,i)=>{ const gw=s.kind==='gateway'||s.kind==='inclusive'||s.kind==='event', ev=s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow'||s.kind==='mcatch'||s.kind==='tcatch'||s.kind==='boundary'||s.kind==='mend'||s.kind==='end'||s.kind==='terminate', w=gw?TOK.gw:ev?TOK.ev:STW, h=gw?TOK.gw:ev?TOK.ev:STH, c=colOf(s,i), base=SX0+c*SPITCHX; geom['T'+i]={x:(gw||ev)?base+STW/2-w/2:base, y:cyL[actorOf(s)]-h/2, w,h, row:rowOf[actorOf(s)], col:c, ord:i}; });
     const maxC=Math.max(...def.steps.map((s,i)=>colOf(s,i)));
     if(!def.noEnd){ geom['E']={x:SX0+(maxC+1)*SPITCHX, y:cyL.det-TOK.ev/2, w:TOK.ev,h:TOK.ev, row:0, col:maxC+1, ord:1e6}; }
     poolW = (def.noEnd ? SX0+maxC*SPITCHX+STW/2 : geom['E'].x+TOK.ev) +TOK.poolMargin-poolX;  // noEnd: stop at the last node, don't reserve an end column
@@ -799,6 +833,7 @@ function subXML(def){
   def.steps.forEach((s,i)=>{
     const a=actorOf(s); let tag, inner=''; const isLink = s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow';
     if(s.kind==='gateway') tag='exclusiveGateway';
+    else if(s.kind==='event') tag='eventBasedGateway';   // waits on the first of its catch events (timer / message)
     else if(s.kind==='inclusive') tag='inclusiveGateway';
     else if(s.kind==='sub') tag='subProcess';
     else if(s.kind==='send') tag='sendTask';
@@ -807,13 +842,14 @@ function subXML(def){
     else if(s.kind==='mthrow'){ tag='intermediateThrowEvent'; inner=`<bpmn:messageEventDefinition id="T${i}_med"/>`; }
     else if(s.kind==='catch'){ tag='intermediateCatchEvent'; inner=`<bpmn:linkEventDefinition id="T${i}_led" name="${esc(s.n)}"/>`; }
     else if(s.kind==='mcatch'){ tag='intermediateCatchEvent'; inner=`<bpmn:messageEventDefinition id="T${i}_med"/>`; }
+    else if(s.kind==='tcatch'){ tag='intermediateCatchEvent'; inner=`<bpmn:timerEventDefinition id="T${i}_ted"/>`; }   // intermediate timer-catch (cooldown floor / cadence ceiling)
     else if(s.kind==='boundary'){ tag='boundaryEvent'; inner=`<bpmn:timerEventDefinition id="T${i}_ted"/>`; }   // timer on its host task (interrupting unless interrupting:false)
     else if(s.kind==='mend'){ tag='endEvent'; inner=`<bpmn:messageEventDefinition id="T${i}_med"/>`; }   // message-end: send + terminate in one
     else if(s.kind==='end'||s.kind==='terminate'){ tag='endEvent'; if(s.kind==='terminate') inner='<bpmn:terminateEventDefinition id="T'+i+'_ted"/>'; }
     else if(s.kind==='store') tag='dataStoreReference';
     else tag=ACTORS.find(x=>x.key===a).tag;
     if(s.kind!=='store') refs[a].push('T'+i);   // data stores are not flow nodes (not in a lane)
-    const stepId = s.llmId || `${def.num}-${String(i+1).padStart(2,'0')}`;   // LLM nodes carry an LLM<X> id instead of the ND-NN-NN step id
+    const stepId = s.kind==='store' ? '' : (s.llmId || `${def.num}-${s.id}`);   // explicit per-step id (stores carry none — not flow nodes); LLM nodes carry an LLM<X> id
     const attrs = s.kind==='boundary' ? ` attachedToRef="${s.attachTo}" cancelActivity="${s.interrupting===false?'false':'true'}"` : '';   // boundary docks to its host; non-interrupting keeps it running
     const elName = s.kind==='store' ? s.n : (stepId+'\n'+s.n);   // a store shows just its name (no ND-NN id)
     els.push(`<bpmn:${tag} id="T${i}"${attrs} name="${esc(elName)}">${s.kind==='store'?'':io('T'+i)}${inner}</bpmn:${tag}>`);  // nodes show ID + name; stores show name only, no flow refs
@@ -832,8 +868,8 @@ function subXML(def){
   { const g=G('S'); di.push(`<bpmndi:BPMNShape id="S_di" bpmnElement="S"><dc:Bounds x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}"/><bpmndi:BPMNLabel><dc:Bounds x="${g.cx-36}" y="${g.bottom+4}" width="72" height="14"/></bpmndi:BPMNLabel></bpmndi:BPMNShape>`); }
   if(def.start2){ const g=G('S2'); di.push(`<bpmndi:BPMNShape id="S2_di" bpmnElement="S2"><dc:Bounds x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}"/><bpmndi:BPMNLabel><dc:Bounds x="${g.cx-36}" y="${g.bottom+4}" width="72" height="14"/></bpmndi:BPMNLabel></bpmndi:BPMNShape>`); }
   def.steps.forEach((s,i)=>{ const g=G('T'+i), exp=s.kind==='sub'?' isExpanded="false"':'', marker=s.kind==='gateway'?' isMarkerVisible="true"':'';
-    const ev=s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow'||s.kind==='mcatch'||s.kind==='boundary'||s.kind==='mend'||s.kind==='end'||s.kind==='terminate';
-    const lbl = (s.kind==='gateway'||s.kind==='inclusive')
+    const ev=s.kind==='throw'||s.kind==='catch'||s.kind==='mthrow'||s.kind==='mcatch'||s.kind==='tcatch'||s.kind==='boundary'||s.kind==='mend'||s.kind==='end'||s.kind==='terminate';
+    const lbl = (s.kind==='gateway'||s.kind==='inclusive'||s.kind==='event')
         ? (grid ? (s.lblPos==='top' ? `<bpmndi:BPMNLabel><dc:Bounds x="${g.cx-45}" y="${g.top-30}" width="90" height="26"/></bpmndi:BPMNLabel>`
                 : s.lblPos==='bottom' ? `<bpmndi:BPMNLabel><dc:Bounds x="${g.cx-45}" y="${g.bottom+5}" width="90" height="14"/></bpmndi:BPMNLabel>`
                                      : `<bpmndi:BPMNLabel><dc:Bounds x="${g.right+6}" y="${g.cy-15}" width="90" height="28"/></bpmndi:BPMNLabel>`)
