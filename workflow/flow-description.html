@@ -190,9 +190,9 @@
       <li><b class="k">What it does:</b> the dispatch router. It fires <b class="k">one or more</b> arms per tick
         by condition — a single tick can fill a worker slot <em>and</em> fire a due review <em>and</em> hand the
         architect cleared-ahead work. Each fired arm spawns/assigns its agent with its <b class="k">BRIEF</b>.</li>
-      <li><b class="k">worker → ND-05 ENGINEER</b> — a free slot + a ready block.</li>
-      <li><b class="k">reviewer → ND-07 REVIEW</b> — a review is due.</li>
-      <li><b class="k">architect → ND-06 ARCHITECT</b> — a block cleared-ahead / architect work pending.</li>
+      <li><b class="k">worker → LLM-05 ENGINEER</b> — a free slot + a ready block.</li>
+      <li><b class="k">reviewer → LLM-07 REVIEW</b> — a review is due.</li>
+      <li><b class="k">architect → LLM-06 ARCHITECT</b> — a block cleared-ahead / architect work pending.</li>
     </ul>
     </div>
   </details>
@@ -212,41 +212,43 @@
 
   <h2>Agent sub-processes</h2>
 
+  <div class="rule"><b class="k">One shape, all three.</b> Each agent sub is the same loop —
+    <b class="k">INBOX → HOPPER → work → FLEET INTAKE → wait at INBOX → resume</b>. Outbound (the outcome
+    <em>or</em> an in-flight problem) leaves via FLEET INTAKE; the reply, or the next work, lands back at the
+    INBOX. No agent ends its own process — the sub has no end of its own.</div>
+
   <details class="node">
-    <summary><span class="nnum">ND-05</span> ENGINEER<span class="lane-tag">per block · ENGINEER</span></summary>
+    <summary><span class="nnum">LLM-05</span> ENGINEER<span class="lane-tag">per block · ENGINEER</span></summary>
     <div class="body">
     <ul>
-      <li><b class="k">What it does:</b> a worker's build. Spawned <b class="k">per block</b>, terminates when the
-        block resolves. It builds from its hopper + the per-task prompt, then reports <code>done</code> /
-        <code>wall</code> to TRON.</li>
-      <li><b class="k">Architect consult.</b> It may ask the architect mid-build (logged); if the architect is
-        silent past a bound, it tells TRON but <b class="k">keeps waiting</b> — the timer escalates without
-        cancelling the build.</li>
+      <li><b class="k">What it does:</b> a worker's build, spawned <b class="k">per block</b>. It builds from its
+        hopper + the per-task prompt, sends its outcome — or an in-flight problem — via <b class="k">FLEET
+        INTAKE</b>, then waits at its inbox for the reply or next work.</li>
+      <li><b class="k">No self-end.</b> The sub has no end of its own; PULSE disposes the worker (Settle).</li>
     </ul>
     </div>
   </details>
 
   <details class="node">
-    <summary><span class="nnum">ND-06</span> ARCHITECT<span class="lane-tag">persistent · ARCHITECT</span></summary>
+    <summary><span class="nnum">LLM-06</span> ARCHITECT<span class="lane-tag">persistent · ARCHITECT</span></summary>
     <div class="body">
     <ul>
       <li><b class="k">What it does:</b> the single, <b class="k">persistent</b> consultant — one architect, alive
-        the whole run, with its own concurrency knob (pool-excluded). It loops: receive work → do it → report →
-        wait for the next. It reads its hopper, the per-task prompt, and <b class="k">Project Docs</b>.</li>
-      <li><b class="k">Never terminates</b> — reporting to TRON is a hand-off, then it loops back for the next
-        work. It can ask TRON synchronously (no escalation timer here — the counterpart is TRON itself).</li>
+        the whole run (its own count, pool-excluded). Same loop: it takes work from its hopper + the per-task
+        prompt, emits its result or a question via <b class="k">FLEET INTAKE</b>, waits at its inbox, resumes.</li>
+      <li><b class="k">Persistent.</b> Not per-task — it stays for the whole run, and never ends itself.</li>
     </ul>
     </div>
   </details>
 
   <details class="node">
-    <summary><span class="nnum">ND-07</span> REVIEW<span class="lane-tag">per milestone · REVIEWER</span></summary>
+    <summary><span class="nnum">LLM-07</span> REVIEW<span class="lane-tag">per milestone · REVIEWER</span></summary>
     <div class="body">
     <ul>
-      <li><b class="k">What it does:</b> a reviewer, dispatched <b class="k">per milestone</b>. It reads scope +
-        Project Docs, reviews, forms a verdict, and <b class="k">delivers it to the architect</b>.</li>
-      <li><b class="k">Architect confer.</b> It may confer mid-review (flag / question / clarify), logged; if the
-        architect is silent past a bound, it escalates to TRON without cancelling the review.</li>
+      <li><b class="k">What it does:</b> a reviewer, dispatched <b class="k">per milestone</b>. It reviews from its
+        hopper + the per-task prompt, then emits its verdict via <b class="k">FLEET INTAKE</b> — TRON routes it
+        to the architect. Same loop; it waits at its inbox for a reply or next work.</li>
+      <li><b class="k">No self-end.</b> Like the others, the sub has no end of its own.</li>
     </ul>
     </div>
   </details>
