@@ -407,7 +407,7 @@ const FLOW = {
     {n:'Classify messages', pos:[-1,5], actor:'aide', llmId:'LLM-02-14'},                // T13 02-14 — the one LLM touch per tick; directly below 02-13 (straight drop)
     {n:'Route messages',    pos:[1,5]},                                                  // T14 02-15  tag → recipient (worker / architect / operator)
     {n:'Drive gates',       pos:[2,5]},                                                  // T15 02-16  merge: routed + skipped; may produce sends (unblock/review/reject)
-    {n:'Drain triggers',    pos:[3,5]},                                                  // T16 02-17  operator commands; may produce sends
+    {n:'Match decision',    pos:[3,5]},                                                  // T16 02-17  thread operator.decision back in: match the reply to its parked case by correlation id → Settle applies (commands now live in PARLEY)
     {n:'<AGENT-ID> INBOX', kind:'mthrow', pos:[4,5]},                                    // T17 02-18  deliver: single message-throw — every message is addressed to a specific agent by ID (one throw may carry several, to several agents) → that agent's inbox
     {n:'Save state',        pos:[4,3], data:{name:'MANIFEST', dir:'out', at:'right'}},   // T18 02-19
     {n:'Drop sidecars',     pos:[3,3]},                                                  // T19 02-20  (effects persisted before sidecars dropped)
