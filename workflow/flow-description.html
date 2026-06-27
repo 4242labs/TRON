@@ -64,9 +64,9 @@
       <li><b class="k">Stale trunk halts it.</b> Bootup won't proceed on trunk it couldn't refresh; it halts
         with an operator line sent <em>synchronously</em> (no MANIFEST exists yet to carry it), never a silent death.</li>
       <li><b class="k">Fresh vs resume.</b> Fresh sets scope + counts and writes the <b class="k">MANIFEST</b>
-        (TRON's durable run-memory). Resume reconciles the existing MANIFEST against reality — scope vs current
-        pipeline, plus pinging each claimed agent. A clean end archives the MANIFEST, so a leftover one means an
-        interrupted run. An unreconcilable conflict → <code>ND-01-14 RESOLVE</code>.</li>
+        (TRON's durable run-memory). Resume reconciles the existing MANIFEST against reality (scope vs current
+        pipeline). A clean end archives the MANIFEST, so a leftover one means an interrupted run. An
+        unreconcilable conflict → <code>ND-01-14 RESOLVE</code>.</li>
     </ul>
     <div class="subhead">Sub-processes</div>
 
@@ -99,8 +99,7 @@
       <div class="body"><ul>
         <li><b class="k">What it does:</b> reached only when a resumed run's MANIFEST can't be reconciled.
           <span class="llm">AIDE</span> briefs the operator and offers three choices; it resolves entirely here.</li>
-        <li><b class="k">repair</b> — the operator fixed the MANIFEST out-of-band → re-reconcile, so the fix is
-          re-validated, never trusted blind.</li>
+        <li><b class="k">repair</b> — the operator fixed the MANIFEST out-of-band → re-reconcile.</li>
         <li><b class="k">restart</b> — discard and start clean.</li>
         <li><b class="k">halt</b> — archive the MANIFEST first (else the next start hits the same conflict), then terminate.</li>
       </ul></div>
@@ -121,39 +120,14 @@
       <li><b class="k">Cheap vs full tick.</b> A message-driven tick skips the network refresh (trunk hasn't
         changed; the message carries the news). The costly <code>git fetch</code> + PR refresh runs only on the
         ceiling cadence — so a chatty fleet never multiplies fetches.</li>
-      <li><b class="k">Worker disposal.</b> Each in-flight worker is classified (done / dead / hung / orphan-PR /
-        in-progress), then settled: safe cases free the slot and <b class="k">resume the worker's session if
-        recoverable, else restart fresh</b> (the session handle lives in the MANIFEST). Ambiguous cases escalate
-        (<code>ND-02-10</code>).</li>
+      <li><b class="k">Worker disposal.</b> Each in-flight worker is assessed, then settled — safe cases free the
+        slot; ambiguous cases escalate (<code>ND-02-10</code>).</li>
       <li><b class="k">Reviews are PULL</b> — each tick checks whether one is due and fires it; never pushed on its own timer.</li>
       <li><b class="k">PULSE never merges.</b> Gates only advance state; the engineer merges once a review passes.</li>
       <li><b class="k">Safe re-assignment.</b> A block counts as in-flight if it has a worker <em>or</em> an open
         PR <em>or</em> an active gate — so re-dispatching is always safe, even across the build-before-PR window
         and crash-orphaned PRs.</li>
     </ul>
-    <div class="subhead">Inbound messages (claimed from the FLEET HOPPER, then classified)</div>
-    <ul>
-      <li class="grp"><b class="k">From workers</b></li>
-      <li><b class="k">worker.done</b> — claims its block is built + validated (a claim, verified on trunk, never
-        trusted blind); frees a slot.</li>
-      <li><b class="k">worker.wall</b> — stuck on something no worker can clear → escalate to the operator.</li>
-      <li><b class="k">worker.review_done</b> — a reviewer's findings → drives the review gate.</li>
-      <li><b class="k">worker.progress</b> — heartbeat; no action.</li>
-      <li><b class="k">worker.question_peer</b> — peer consult; logged, no advance.</li>
-      <li><b class="k">worker.await_confirm</b> — pauses mid-block awaiting go-ahead ("phase 1 done, ready for 2
-        on your word"). Cleared by one of: the <b class="k">operator</b> (if a checkpoint was pre-registered in
-        the MANIFEST), the <b class="k">architect</b> (a scope/blueprint call), or an <b class="k">auto-ack</b>
-        (nothing substantive to confirm).</li>
-      <li class="grp"><b class="k">From architect</b></li>
-      <li><b class="k">architect.cleared</b> — a forward block authored on trunk → dispatchable work ahead.</li>
-      <li><b class="k">architect.logged</b> — log-review done (an empty result does nothing).</li>
-      <li class="grp"><b class="k">Fallback</b></li>
-      <li><b class="k">unclassified</b> — matches no tag; logged raw (body + why) so the tag grammar can improve over time.</li>
-    </ul>
-    <div class="rule"><b class="k">Not handled here:</b> <code>worker.stalled</code> / <code>worker.dead</code>
-      are produced by PULSE's own liveness sweep (silence past threshold), not sent by an agent. And operator
-      messages never use this hopper — they have their own channel (<code>ND-09 PARLEY</code>).</div>
-
     <div class="subhead">Sub-processes</div>
 
     <details class="node">
@@ -161,10 +135,9 @@
       <div class="body"><ul>
         <li><b class="k">What it does:</b> handles an ambiguous worker case that needs the operator. It does
           <b class="k">not</b> decide inline — a blocking conversation would break the bounded tick. It briefs the
-          operator, sends the ask stamped with a <b class="k">correlation id</b>, marks the case pending, and the
-          tick continues. The reply arrives on a later tick and is applied by <code>02-08 Settle</code>.</li>
-        <li><b class="k">Outcomes are case-dependent</b> (resume-session · retry-fresh · skip-block · reassign ·
-          halt), carried in the reply — not a fixed set of branches.</li>
+          operator, marks the case pending, and the tick continues. The reply arrives on a later tick and is
+          applied by <code>02-08 Settle</code>.</li>
+        <li><b class="k">Outcomes are case-dependent</b>, carried in the reply — not a fixed set of branches.</li>
       </ul></div>
     </details>
     </div>
@@ -188,8 +161,7 @@
       <li><b class="k">halt</b> — terminate the run (archive-on-end); no resume. <em>syn: stop · kill · end · quit · abort.</em></li>
       <li><b class="k">rescope</b> — change the in-scope range mid-run. <em>syn: scope · refocus · narrow / widen.</em></li>
       <li class="grp"><b class="k">Decision — act, threads into PULSE</b></li>
-      <li><b class="k">operator.decision</b> — a reply to a parked escalation; handed to <code>02-08 Settle</code>,
-        matched by correlation id. The parked case is durable, so a lost reply is simply re-issued.</li>
+      <li><b class="k">operator.decision</b> — a reply to a parked escalation; handed to <code>02-08 Settle</code>.</li>
       <li class="grp"><b class="k">Queries &amp; ask — produce a reply</b></li>
       <li><b class="k">status</b> / <b class="k">inspect</b> — read the snapshot / MANIFEST; no state change.
         <em>(where are we · show specifics of block X.)</em></li>
