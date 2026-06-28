@@ -151,23 +151,57 @@ def run(ctx):
 
 
 # ── lifecycle: spawn / stop (what `tron start` / `tron stop` call) ──
-def spawn(ctx):
-    """Start the daemon as a detached background process — survives the console closing.
-    Idempotent: a live daemon is left alone. Returns the pid (existing or new)."""
-    if is_running(ctx):
-        return _read_pid(ctx)
-    with contextlib.suppress(FileNotFoundError):     # clear a stale pid from a crashed daemon
-        os.remove(ctx.wake_pid)
+def _launch(ctx):
+    """Popen the detached daemon process (survives the console closing). Isolated so the
+    spawn arbitration can be tested without launching real daemons."""
     engine_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine.py")
     log = open(os.path.join(ctx.dir, "wake.out"), "a")
     import subprocess
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         [sys.executable, engine_py, "wake"],
         stdout=log, stderr=log, stdin=subprocess.DEVNULL,
         start_new_session=True,                      # detach from the console's session
         env={**os.environ, "TRON_DIR": ctx.dir},
     )
-    return proc.pid
+
+
+def spawn(ctx):
+    """Start the WAKE daemon, guaranteeing **exactly one**. The pidfile is claimed
+    ATOMICALLY — `O_CREAT|O_EXCL` — so there is no check-then-act window: exactly one
+    caller wins the create and launches; a concurrent caller sees the claim and leaves a
+    live daemon alone, or reclaims a dead/stale pidfile once. Returns the daemon pid (ours
+    or a peer's), or None if a peer's claim is mid-flight (its daemon writes the real pid).
+
+    The winner fills the pidfile with its own (alive) pid the instant it wins — before the
+    slow launch — so a racing caller never reads it empty and never mistakes the in-flight
+    claim for stale. The daemon then overwrites it with its real pid in run()."""
+    for attempt in (0, 1):
+        try:
+            fd = os.open(ctx.wake_pid, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            pid = _read_pid(ctx)
+            if pid is None:
+                return None                          # a claim is in flight — leave it
+            if _alive(pid):
+                return pid                           # a live daemon — leave it
+            if attempt == 0:                         # parseable but dead → stale: reclaim once
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(ctx.wake_pid)
+                continue
+            return pid                               # still dead after a retry — give up quietly
+        # won the claim — fill it at once (never read empty), then launch
+        try:
+            os.write(fd, str(os.getpid()).encode())  # placeholder: this launcher is alive
+        finally:
+            os.close(fd)
+        try:
+            proc = _launch(ctx)
+        except Exception:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(ctx.wake_pid)              # don't strand the claim if the launch fails
+            raise
+        util.atomic_write(ctx.wake_pid, str(proc.pid))
+        return proc.pid
 
 
 def stop(ctx):

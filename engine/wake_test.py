@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -102,8 +103,51 @@ def test_lifecycle():
     check("stale/dead pid → not running", wake.is_running(ctx) is False)
 
 
+def test_concurrent_spawn():
+    print("AC-3 — concurrent spawn launches exactly one daemon (no TOCTOU)")
+    ctx = _ctx()
+    launched = []                                    # one entry per real _launch call
+    procs = []
+    guard = threading.Lock()
+
+    def fake_launch(c):
+        # a real, alive stand-in for the daemon so the pidfile ends up holding a live pid
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        with guard:
+            launched.append(p.pid)
+            procs.append(p)
+        return p
+
+    orig = wake._launch
+    wake._launch = fake_launch
+    barrier = threading.Barrier(12)                  # fire all callers at once to force the race
+    results = []
+
+    def caller():
+        barrier.wait()
+        results.append(wake.spawn(ctx))
+
+    try:
+        threads = [threading.Thread(target=caller) for _ in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        check("exactly one daemon was launched", len(launched) == 1)
+        check("pidfile holds the launched daemon's pid", wake._read_pid(ctx) == launched[0])
+        check("the daemon reads as running", wake.is_running(ctx) is True)
+        # every caller either got the live daemon pid or saw the in-flight claim (None) —
+        # none launched a second daemon
+        check("no caller returned a rival pid", set(results) <= {launched[0], os.getpid(), None})
+    finally:
+        wake._launch = orig
+        for p in procs:
+            p.kill()
+
+
 def main():
-    for t in (test_bounds, test_due, test_single_flight, test_session_live, test_lifecycle):
+    for t in (test_bounds, test_due, test_single_flight, test_session_live,
+              test_lifecycle, test_concurrent_spawn):
         t()
     print()
     if _fails:
