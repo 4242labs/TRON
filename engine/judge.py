@@ -7,7 +7,7 @@ The canon set is ONE bounded, typed question:
 tron.md is the prompt context; the tool instruction names the decision; the model
 must return JSON in the tool's exact shape. The runner schema-validates every
 return; invalid output is retried (budget 2) then collapses to `unclassified`
--> the `*` SCRIPTS catch-all, which hands the input to the architect to sort.
+-> the `*` SENTRY catch-all, which hands the input to the architect to sort.
 The LLM never sees the flow path and never returns free prose to the flow.
 
 NOT judgment tools, by design: "is this the operator's problem?" (assess_wall —

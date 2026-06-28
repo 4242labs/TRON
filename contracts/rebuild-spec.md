@@ -10,9 +10,9 @@ This is the **written behavior model**: the situations the engine answers (T1), 
 boundary (T2), the sentry↔PMT map (T3), DONE as a prompted exchange (T4), and SENTRY's internal design
 (T5). **Spec only** — no engine code; implementation is 01-02…01-06.
 
-> Replaces, as the live reference, the stale `blueprint-contracts.md` (2026-06-05, on ADR §5's *replace*
-> list — it still describes SCRIPTS, cron, and `block:next:done` against the pre-rebuild model). That file
-> is rewritten in 01-03; until then this spec is the behavior authority.
+> Bridges to code alongside `blueprint-contracts.md` (2026-06-05, on ADR §5's *replace* list — it described
+> the pre-rebuild reactive layer, cron, and `block:next:done`). That file was reconciled to the rebuilt
+> engine in 01-03; on any conflict this spec + the built engine win.
 
 ---
 
@@ -203,8 +203,8 @@ Flag candidate (ND-02)
 - **PULSE never merges** — gates only advance state; the engineer merges once a review passes (the
   two-gate merge model is 01-05's; this gate is the *DONE* challenge, not the merge act).
 - **No operator-approve-before-merge** (D5 / TD-02): a completed review fans out (release reviewer +
-  architect log-review); the operator gate is the wall/escalation path only. `escalate.merge` /
-  `operator.decision = approve(merge)` are **removed**, not modeled here.
+  architect log-review); the operator gate is the wall/escalation path only. The retired merge-escalation
+  message and the `approve(merge)` decision are **removed**, not modeled here.
 
 01-03 builds the engine gate from this section.
 
@@ -213,7 +213,7 @@ Flag candidate (ND-02)
 ## T5 — SENTRY internal design
 
 SENTRY is the **reactive element** of the standing trio (PULSE · SWITCHBOARD · SENTRY) — the `*` catch-all,
-**redrafted from scratch**, replacing SCRIPTS. It is the path every inbound message takes once classified,
+**redrafted from scratch**, replacing the prior reactive layer. It is the path every inbound message takes once classified,
 and the safety net for anything that doesn't fit. (ADR §8's one deferred piece; resolves ADR §12 item 2.)
 
 ### Classify grammar (the closed tag enum)
@@ -236,7 +236,7 @@ plus `*` (the SENTRY catch-all), `|` (alternatives), terminals `end` / `-`. Matc
 | worker | `worker.question_peer` | side: observe (R2 peer-consult; no advance) |
 | worker | `worker.question_tron` | side: answer-from-context |
 | worker | `worker.progress` | side: none (heartbeat) |
-| architect | `architect.reconciled` | trigger `block:<block>:reconciled` (**renamed** from `cleared`/`clear`, M-05) |
+| architect | `architect.reconciled` | trigger `block:<block>:reconciled` (**renamed** off the prior clear-event, M-05) |
 | architect | `architect.logged` | trigger → adhoc blocks authored |
 | operator | `operator.decision` | trigger → Settle (02-08) |
 | operator | `operator.status_query` | side: reply digest |
@@ -246,11 +246,11 @@ plus `*` (the SENTRY catch-all), `|` (alternatives), terminals `end` / `-`. Matc
 | reserved | `unclassified` | trigger `*` → SENTRY catch-all → **architect triage** |
 
 **Changes from the current (drifted) tag map, per ADR §5:**
-- `architect.cleared` → **`architect.reconciled`**; `block:<block>:clear` → `block:<block>:reconciled`
-  (M-05 — "reconciled" = re-checked an upcoming block against the just-finished one's drift; `cleared`
-  collided with the retired done-status).
+- The architect completion tag → **`architect.reconciled`**; its trigger → `block:<block>:reconciled`
+  (M-05 — "reconciled" = re-checked an upcoming block against the just-finished one's drift; the prior
+  clear-event name collided with the retired done-status).
 - **Add `worker.await_confirm`** (D7 / R-AWAIT) — terminal always, +TG if opted in.
-- **Remove** the operator merge-approve path (`escalate.merge`, `operator.decision = approve(merge)`) (D5).
+- **Remove** the operator merge-approve path (its retired escalation message + `operator.decision = approve(merge)`) (D5).
 - **`operator.knob_change`** (operator side-action) — named off the "workflow" misnomer the rebuild is
   killing (M-01 / ADR §12.1); it edits a per-project knob, not "the workflow".
 - Every message is **ID-addressed** to a specific agent (D4) — delivery targets `<AGENT-ID>`'s inbox, never
