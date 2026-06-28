@@ -368,7 +368,7 @@ class Engine:
             return False
         if self.st.has_active_worker_for_block(bid):
             return False
-        if self._branch(bid) in (self.st.open_prs or {}):
+        if self._block_branch(bid) in (self.st.open_prs or {}):
             return False
         if self._reconcile_pending(bid):                 # gated until the architect reconciles it (M-05)
             return False
@@ -485,7 +485,7 @@ class Engine:
             return
         if (block in self.st.blocked or block in self._dropped()
                 or block in self.st.gate
-                or self._branch(block) in (self.st.open_prs or {})
+                or self._block_branch(block) in (self.st.open_prs or {})
                 or self.st.has_active_worker_for_block(block)):
             return
         wid = self._worker_id("engineer", block)
@@ -531,7 +531,9 @@ class Engine:
         lines = [f"Method: read {agent_file} (your persona) and follow it.",
                  f'Report to TRON: bash {report} <your-id> "<message>"']
         if block and not str(block).startswith("review:"):
-            lines.append(f"Block {block} on branch {self._branch(block)} is yours alone.")
+            lines.append(f"Block {block} is yours alone. Create + name your own branch+worktree off "
+                         f"trunk (per the project's convention) and report the name to me — I track "
+                         f"your PR/CI by the name you choose, I never assume one.")
             lines.append("Drive it to DONE per its Block Completion Gate. Report DONE only "
                          "with a clean Completion Report — TRON gates on the evidence on trunk, "
                          "not your word: merge, re-validate, deploy-clean, then flip ✅ + archive.")
@@ -694,6 +696,25 @@ class Engine:
         block = (case or {}).get("block") or m.get("block")
         if case is not None:
             case["decision"] = decision                  # Settle writes the reply onto the pending record
+        if case is not None and case.get("kind") in ("merge_staging", "promote_main"):
+            # A two-gate merge-gate go-ahead (T1) — not a block park. Grant the gate and re-drive
+            # (resume), or drop the block (abandon). The engineer never left; nothing to un-park.
+            kind = case["kind"]
+            g = self.st.gate.get(block)
+            if g is not None and decision in ("resume", "approve"):
+                g["approved_" + kind] = True
+                g.pop("case_" + kind, None)
+                self._close_case(m.get("case"), case)
+                self._drive_gate(block, g, reason=f"{kind} approved")
+            elif decision == "abandon":
+                self.st.gate.pop(block, None)
+                if block not in self._dropped():
+                    self._dropped().append(block)
+                self._close_case(m.get("case"), case)
+            else:
+                self._close_case(m.get("case"), case)    # unknown reply — drop the case, leave the hold
+            self.log("flow", f"merge-gate {kind}[{block}] -> {decision}")
+            self._emit("pulse"); return
         if not block:
             self._close_case(m.get("case"), case)
             self._emit("pulse"); return
@@ -783,18 +804,44 @@ class Engine:
         if block in self._dropped():
             self.st.gate.pop(block, None)
             return
-        branch = self._branch(block)
+        branch = self._block_branch(block)               # the worker-named branch (T2), never a guess
         pr = (self.st.open_prs or {}).get(branch)
         sess = self._session_for_block(block)
         deploy = (row or {}).get("deploy")               # honour the block's Deploy: (T2)
         deploy_tail = (f"run the declared deploy ({deploy}) and verify it, then " if deploy else "")
+        staging = self.paths.get("staging") or "none"    # two-gate iff a staging branch is declared
+        two_gate = staging != "none"
+        main = self.paths.get("main_branch", "main")
         renudge = False
+        instr = None
 
         if not pr:
-            if g.get("pr"):
-                # No-silent-stuck (T7/S1-05): the PR is gone but the block isn't ✅ — merged-but-
-                # not-landed (deploy failed / ✅ not flipped). Keep a driver, never go quiet; after
-                # a cap of unheeded re-nudges, escalate rather than nudge into the void.
+            if not g.get("pr"):
+                stage, instr = "validate-local", (
+                    f"Validate the block's acceptance suite locally and show the evidence "
+                    f"(not just a claim). Then create + name your own branch+worktree off trunk, push, "
+                    f"open the PR" + (f" into {staging}" if two_gate else "")
+                    + " and tell me the branch name — CI must be green.")
+            elif two_gate:
+                # First gate cleared: the feature PR merged to staging. Open the SECOND gate (T1) —
+                # promote staging -> main, ASK-gated by default. Not "stuck": a distinct gate follows.
+                g["staged"] = True
+                stage = "promote-main"
+                if self._gate_approved(block, g, "promote_main", sess):
+                    n = g.get("promote_nudges", 0)
+                    if n >= int(self.knobs.get("gate_post_merge_cap", 3)):
+                        self.st.gate.pop(block, None)
+                        self._emit("wall:raised:" + block,
+                                   {"block": block, "worker_id": self._worker_id("engineer", block),
+                                    "detail": "merged to staging but not promoted to main (✅ pending)"})
+                        return
+                    g["promote_nudges"] = n + 1
+                    renudge = True
+                    instr = (f"{block} is on {staging}. Open the promotion PR {staging} -> {main}, "
+                             f"get CI green, merge, {deploy_tail}flip ✅ and archive — all via PR.")
+            else:
+                # Single-gate no-silent-stuck (T7/S1-05): PR gone, block not ✅ — merged-but-not-landed.
+                # Keep a driver, never go quiet; after a cap of unheeded re-nudges, escalate.
                 n = g.get("post_merge_nudges", 0)
                 if n >= int(self.knobs.get("gate_post_merge_cap", 3)):
                     self.st.gate.pop(block, None)
@@ -807,14 +854,16 @@ class Engine:
                 stage = "post-merge"
                 instr = (f"PR #{g.get('pr')} merged but {block} isn't ✅ on trunk yet — "
                          f"{deploy_tail}flip ✅ and archive the block, all via PR.")
-            else:
-                stage, instr = "validate-local", (
-                    f"Validate the block's acceptance suite locally and show the evidence "
-                    f"(not just a claim). Then push and open the PR for {branch} — CI must be green.")
         elif pr.get("checks") == "failing":
             stage, instr = "ci", f"CI is RED on PR #{pr.get('number')}. Fix it, push, keep me posted."
         elif pr.get("checks") == "pending":
             stage, instr = "ci-wait", None               # wait for CI; no nudge
+        elif two_gate:
+            # First gate: feature -> staging, APPROVED by default (TRON instructs the merge unprompted).
+            stage = "merge-staging"
+            if self._gate_approved(block, g, "merge_staging", sess):
+                instr = (f"CI green on PR #{pr.get('number')}. Merge {branch} -> {staging} and "
+                         f"re-validate on staging. I'll gate the promotion to {main} next.")
         else:
             stage = "merge"
             instr = (f"CI green on PR #{pr.get('number')}. Merge, re-validate on trunk, "
@@ -832,6 +881,27 @@ class Engine:
         w = next((w for w in self.st.workers
                   if w.get("role") == "engineer" and w.get("block") == block), None)
         return w.get("session_id") if w else None
+
+    def _gate_approved(self, block, g, gate_name, sess):
+        """Two-gate approval (T1). APPROVED -> TRON instructs the merge now (returns True). ASK ->
+        park ONE operator case and hold (returns False); the engineer waits until the operator
+        resumes it (_h_apply_decision). This is the per-project two-gate knob (staging APPROVED ->
+        promote ASK by default), NOT a sign-off on every merge — that blanket model is removed
+        (D5/TD-02); only an ASK gate stops here, via the standard escalate/decision path."""
+        if g.get("approved_" + gate_name):
+            return True
+        if self.st.approvals.get(gate_name, "APPROVED") == "APPROVED":
+            return True
+        if not g.get("case_" + gate_name):               # escalate once; then hold quietly each tick
+            human = ("promote to " + self.paths.get("main_branch", "main")
+                     if gate_name == "promote_main"
+                     else "merge to " + (self.paths.get("staging") or "staging"))
+            case = self._open_case(block, gate_name, self._worker_id("engineer", block),
+                                   f"{human} ({block})")
+            g["case_" + gate_name] = case
+            self.emit("escalate.gate", {"worker_id": self._worker_id("engineer", block),
+                                        "block": block, "detail": human, "case": case})
+        return False
 
     # ── the architect (persistent, queued, forward-only) ──
     def _architect(self):
@@ -923,9 +993,23 @@ class Engine:
             self.emit("tg.status_digest", {"detail": self._digest()})
         elif handler == "answer_from_context":
             self.log("side", f"question_tron: {slots.get('detail', '')}")
+        elif handler == "record_branch":
+            self._record_branch(slots)
         elif handler in ("edit_self", "best_effort"):
             self.log("side", f"{handler}: {slots}")
         # observe / none: deliberately nothing.
+
+    def _record_branch(self, slots):
+        """The worker reported the branch it NAMED for its block (T2). Record it so the DONE gate
+        resolves the block's PR/CI by the real name — TRON never guesses `feat/<block>`."""
+        block, branch = slots.get("block"), slots.get("branch")
+        if not block or not branch:
+            return
+        self.st.branches[block] = branch
+        for w in self.st.workers:                      # stamp it on the owner record too
+            if w.get("block") == block and w.get("role") == "engineer":
+                w["branch"] = branch
+        self.log("flow", f"branch[{block}] = {branch} (worker-named)")
 
     def _tg_on(self):
         return str((self.project.get("notifications") or {}).get("telegram") or "").lower() == "on"
@@ -1049,6 +1133,7 @@ class Engine:
         self.st.data["pending_cases"] = {}
         self.st.data["reconciled"] = []
         self.st.data["checkpoints"] = []
+        self.st.data["branches"] = {}            # worker-named branches don't carry across sessions (T2)
         self.st.data["approvals"] = dict(DEFAULT_APPROVALS)
         self.st.run_control = None
 
@@ -1247,4 +1332,12 @@ class Engine:
         return f"{pfx}-{ref}" if ref else f"{pfx}-PERSIST"
 
     def _branch(self, block):
+        # The convention SUGGESTION only — the agent owns the real name (T2). Never used to
+        # resolve a PR; that goes through _block_branch (the worker-reported name).
         return f"feat/{block}" if block else self.paths.get("main_branch", "main")
+
+    def _block_branch(self, block):
+        """The branch TRON resolves the block's PR/CI by: the name the worker REPORTED (it owns
+        the name — T2), falling back to the convention only before the worker has reported (no PR
+        can exist on trunk yet). TRON never guesses a name it then gates on."""
+        return self.st.branches.get(block) or self._branch(block)
