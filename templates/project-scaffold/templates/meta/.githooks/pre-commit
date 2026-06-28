@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Canon trunk-root guard (pre-commit) — read-only-trunk is the truth model.
+# Refuses any commit made DIRECTLY on a protected/integration branch; every change must
+# land through a feature branch + worktree + PR. Version-controlled, owned by no agent, so
+# the rule can't be skipped by forgetting it. The lens-meta pattern; ships to every project.
+# Override the branch set with TRON_PROTECTED_BRANCHES="main staging release/*".
+set -euo pipefail
+
+PROTECTED="${TRON_PROTECTED_BRANCHES:-main staging}"
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo DETACHED)"
+
+for pat in $PROTECTED; do
+  # shellcheck disable=SC2254
+  case "$branch" in
+    $pat)
+      echo "✗ trunk-root guard: refusing a direct commit on '$branch' (protected)." >&2
+      echo "  Trunk is read-only. Branch off it (feature branch + worktree) and open a PR." >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0

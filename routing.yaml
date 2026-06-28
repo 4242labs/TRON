@@ -39,6 +39,7 @@ tags:
   worker.wall:              { trigger: "wall:raised:<block>" }
   worker.review_done:       { trigger: "review:<type>:done" }
   worker.await_confirm:     { trigger: "worker:await:<block>" }   # pause mid-block for go-ahead; ALWAYS reaches the operator (D7/R-AWAIT)
+  worker.branch:            { side: record_branch }   # the worker reports the branch it NAMED (it owns the name; TRON never guesses — 01-05 T2)
   worker.progress:          { side: none }
   worker.question_peer:     { side: observe }            # peer consult; logged, no advance
   worker.question_tron:     { side: answer_from_context }

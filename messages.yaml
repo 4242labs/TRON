@@ -110,6 +110,10 @@ templates:
     channel: operator
     slots: [worker_id, block, detail, case]
     text: "[TRON]  Checkpoint [{case}]. {worker_id} is holding on {block} for your go-ahead: {detail}. It won't move until you say so — reply with the case id."
+  escalate.gate:
+    channel: operator
+    slots: [worker_id, block, detail, case]
+    text: "[TRON]  Merge gate [{case}]. {block} is ready to {detail} — that one's yours to call. It won't move until you say so: reply `resume` with the case id (or `abandon` to drop it)."
   escalate.unclassified:
     channel: operator
     slots: [detail]

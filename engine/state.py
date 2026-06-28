@@ -14,9 +14,12 @@ World-mutating actions are state-guarded here so a retried tick can't double-fir
 """
 import util
 
-# Per-session merge knob defaults (realign §8) — the single source for both the
-# fresh-start reset (fsm._reset_session_runtime) and the runtime default below.
-# templates/manifest.yaml seeds the same values for a hand-read instance.
+# Per-session merge-gate defaults — the two-gate model (01-05 T1, realign §8). The single
+# source for both the fresh-start reset (fsm._reset_session_runtime) and the runtime default
+# below. templates/manifest.yaml seeds the same values for a hand-read instance.
+#   merge_staging: feature -> staging (default APPROVED — TRON instructs the merge unprompted)
+#   promote_main:  staging -> main    (default ASK     — needs operator go-ahead first)
+# A single-gate repo (project.repo.staging: none) ignores both and uses one merge_main step.
 DEFAULT_APPROVALS = {"merge_staging": "APPROVED", "promote_main": "ASK"}
 
 
@@ -122,6 +125,13 @@ class State:
         """Block ids the architect has reconciled forward (re-checked against a just-finished
         block's drift) — readiness gate for dispatch once a predecessor has landed (M-05)."""
         return self.data.setdefault("reconciled", [])
+
+    @property
+    def branches(self):
+        """block id -> the branch the worker NAMED for it (the agent owns the name; TRON never
+        guesses it — 01-05 T2). Recorded from the worker's self-report (worker.branch); the DONE
+        gate resolves the block's PR/CI on trunk via this name, never a computed `feat/<block>`."""
+        return self.data.setdefault("branches", {})
 
     def next_case_id(self, block):
         """A monotonic correlation id for an escalation (stable across a retried tick by the

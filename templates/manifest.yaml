@@ -41,8 +41,13 @@ architect_queue: []
 reconciled: []
 
 # ── DONE-gate progress per block: {block_id: {stage, pr, post_merge_nudges}} (runtime only) ──
-# stage in: validate-local | ci | ci-wait | merge | post-merge
+# stage in: validate-local | ci | ci-wait | merge | merge-staging | promote-main | post-merge
+# two-gate also carries: staged, promote_nudges, approved_<gate>, case_<gate> (01-05 T1)
 gate: {}
+
+# ── block id -> the branch the worker NAMED for it (it owns the name; TRON never guesses — T2) ──
+# Reset each session; the DONE gate resolves a block's PR/CI by this name, not a guessed feat/<block>.
+branches: {}
 
 # ── In-flight PRs keyed by head branch (trunk.open_prs cache) ──
 open_prs: {}
@@ -51,7 +56,7 @@ open_prs: {}
 blocked: []
 
 # ── Parked operator cases keyed by correlation id (02-10 stamps it; reply settles by it) ──
-# {CASE-NNN: {block, kind: wall|await, worker_id, detail, raised_at, decision}}
+# {CASE-NNN: {block, kind: wall|await|merge_staging|promote_main, worker_id, detail, raised_at, decision}}
 pending_cases: {}
 
 # ── Operator-pre-registered await checkpoints (rung a of the await ladder, R-AWAIT) ──
@@ -60,7 +65,10 @@ checkpoints: []
 # ── Operator run-control flag PULSE checks each tick (R-HALT): absent | pause | drain | halt ──
 # run_control: pause   # set/reset by PARLEY commands (pause/drain/resume/halt); not a classify tag
 
-# ── Per-session merge knob (realign §8): APPROVED | ASK. Reset each session. ──
+# ── Two-gate merge knob (01-05 T1): APPROVED | ASK. Reset each session. A single-gate repo
+#    (project.repo.staging: none) ignores both and uses one merge step to main. ──
+#    merge_staging: feature -> staging (APPROVED -> TRON instructs the merge unprompted)
+#    promote_main:  staging -> main    (ASK -> needs an operator `resume` first)
 approvals:
   merge_staging: APPROVED
   promote_main: ASK
