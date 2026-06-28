@@ -229,9 +229,20 @@ Atomic state + idempotent ticks ⇒ a crashed wake is safely retried.
 
 **The DONE gate (the prompted challenge, T4 of `rebuild-spec.md`).** A `worker.done` only *flags a candidate*;
 the gate then judges on **evidence** at each stage — never the worker's `✅`, never bare trunk presence:
-validate-local → authorize-push (PR open) → CI green on trunk → deploy-if-declared (only when the block header
-declares `Deploy:`) → `✅`. A failed stage re-prompts with the specific gap (`gate.step`), never advancing.
-**PULSE never merges** — the engineer lands it all via PR; there is **no operator-approve-before-merge**.
+validate-local → authorize-push (PR open) → CI green on trunk → **merge** → deploy-if-declared (only when the
+block header declares `Deploy:`) → `✅`. A failed stage re-prompts with the specific gap (`gate.step`), never
+advancing. **PULSE never merges** — the engineer lands it all via PR; there is **no operator-approve-before-merge**.
+
+**Two-gate merge (01-05 T1).** The merge stage is the per-project knob, not a sign-off on every merge. A
+**single-gate** repo (`project.repo.staging: none`) has one `merge` step → main. A **two-gate** repo splits it:
+**merge-staging** (knob `merge_staging`, default **APPROVED** — TRON instructs the merge unprompted) → the worker
+merges to staging → **promote-main** (knob `promote_main`, default **ASK** — TRON parks one operator case via the
+standard escalate/`operator:decision` path and holds until the operator `resume`s it). The blanket
+operator-approve-before-merge model stays removed (D5/TD-02); only an `ASK` gate stops here. **Branch ownership
+(T2):** the agent **names its own branch + worktree**; TRON records the name the worker reports (`worker.branch`)
+and resolves its PR/CI on trunk by **that** name — never a guessed `feat/<block>`. **Read-only trunk (T3):** the
+seeded scaffold ships a `.githooks/` guard (`pre-commit`/`pre-push`) refusing direct-to-trunk commits, plus a
+`protect-branches.sh` one-shot for remote branch protection (PR + green required).
 
 ---
 
