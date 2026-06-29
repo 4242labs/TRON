@@ -27,6 +27,7 @@ from fsm import TABLE, Engine
 
 # The closed tag enum the engine knows how to route (mirrors routing.yaml tags).
 CANON_TAGS = {
+    "worker.online",
     "worker.done", "worker.wall", "worker.review_done", "worker.await_confirm",
     "worker.branch", "worker.progress", "worker.question_peer", "worker.question_tron",
     "architect.reconciled", "architect.logged",
@@ -207,7 +208,7 @@ def _composition(comp, project):
     # TRON hardcodes no roster (it ships zero agents — realign #11). It only checks the roles
     # its OWN config references against what the project supplies: each cadence lens must have a
     # reviewer persona the engine can resolve (`reviewer-<lens>` OR a generic `reviewer`, mirroring
-    # fsm._handover), and every peer-consult role must exist. It does NOT require architect/engineer/
+    # fsm._spawn), and every peer-consult role must exist. It does NOT require architect/engineer/
     # reviewer by name — those are the project's personas, validated by the seeder at seed time.
     agents = project.get("agents")
     if not agents:

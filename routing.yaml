@@ -16,7 +16,7 @@ grammar:
     - "subject:object:event"   # qualified completion    e.g. block:next:done, review:<type>:done
     - "subject:event:object"   # qualified event         e.g. wall:raised:<block>, worker:await:<block>
   subjects: [tron, build, block, review, cadence, session, worker, operator, wall]
-  events:   [start, build, done, reconciled, stalled, next, end, adhoc, raised, decision, await]
+  events:   [start, build, done, reconciled, stalled, next, end, adhoc, raised, decision, await, online]
   params:
     "<type>":  "reviewer type: code | security | data | …  (never the reserved literal 'next')"
     "<block>": "a pipeline block ID, e.g. NN-NN-NN"
@@ -35,6 +35,7 @@ grammar:
 # Closed enum + total coverage (blueprint-lint).
 tags:
   # worker-origin
+  worker.online:            { trigger: "worker:online" }   # a spawned worker checked in -> emit its pending assignment (01-07 two-step)
   worker.done:              { trigger: "block:next:done" }
   worker.wall:              { trigger: "wall:raised:<block>" }
   worker.review_done:       { trigger: "review:<type>:done" }

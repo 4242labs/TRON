@@ -51,9 +51,9 @@ check("2 every registry id resolves to a file", not unresolved, f"unresolved: {u
 
 # 3) prompts.load() resolves by id + fills slots
 try:
-    body = Prompts(ctx).load("PMT-ENG-BRIEF",
-                             {"worker_id": "ENG-01-02", "block": "01-02", "branch": "feat/x"})
-    filled = all(s in body for s in ("ENG-01-02", "01-02", "feat/x"))
+    body = Prompts(ctx).load("PMT-ENG-ASSIGN",
+                             {"worker_id": "ENG-01-02", "block": "01-02"})
+    filled = all(s in body for s in ("ENG-01-02", "01-02"))
 except Exception as e:           # noqa: BLE001
     filled = False
     body = f"<raised {e}>"

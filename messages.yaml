@@ -20,6 +20,8 @@ slots:
   block: <str>
   branch: <str>
   pr: <str>
+  persona: <str>        # absolute path to the project's agent file for a spawned worker (SPAWN)
+  report: <str>         # absolute path to the report channel script (SPAWN check-in command)
   detail: <str>         # free-text judgment payload (the one slot the LLM may fill with prose)
   reason: <str>
   count: <int>
@@ -30,14 +32,29 @@ templates:
 
   # worker channel — each carries a PMT id (prompts/registry.yaml); the body is imported
   # at tick. NO inline copy and no host-runtime strings here (the prompt layer owns both).
+  # SPAWN is identity-only (01-07): every role comes online + reads its persona via PMT-SPAWN;
+  # the work arrives next, on the worker's `online` report (assign.*).
   spawn.engineer:
     channel: worker
-    slots: [worker_id, block, branch]
-    pmt: PMT-ENG-BRIEF
+    slots: [worker_id, role, persona, report]
+    pmt: PMT-SPAWN
   spawn.architect:
     channel: worker
-    slots: []
-    pmt: PMT-ARCH-BRIEF
+    slots: [worker_id, role, persona, report]
+    pmt: PMT-SPAWN
+  spawn.reviewer:
+    channel: worker
+    slots: [worker_id, role, persona, report]
+    pmt: PMT-SPAWN
+  # ASSIGN — the work, delivered after the worker reports online (01-07).
+  assign.engineer:
+    channel: worker
+    slots: [worker_id, block]
+    pmt: PMT-ENG-ASSIGN
+  assign.reviewer:
+    channel: worker
+    slots: [worker_id, count]
+    pmt: PMT-REV-ASSIGN
   arch.forward:
     channel: worker
     slots: [block]
@@ -50,10 +67,6 @@ templates:
     channel: worker
     slots: [detail]
     pmt: PMT-ARCH-TRIAGE
-  spawn.reviewer:
-    channel: worker
-    slots: [worker_id, count]
-    pmt: PMT-REV-BRIEF
   release.worker:
     channel: worker
     slots: [worker_id]
