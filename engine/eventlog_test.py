@@ -153,9 +153,7 @@ def induce_dispatch_fail(ctx):
     jobs.spawn_detached = lambda *a, **k: (_ for _ in ()).throw(OSError("simulated spawn failure"))
     raised = False
     try:
-        eng._spawn("ENG-A-01", "spawn.engineer",
-                   {"worker_id": "ENG-A-01", "block": "A-01", "branch": "feat/A-01"},
-                   role="engineer", block="A-01")
+        eng._spawn("ENG-A-01", "spawn.engineer", "engineer", block="A-01")
     except OSError:
         raised = True
     finally:

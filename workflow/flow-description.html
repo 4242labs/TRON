@@ -189,8 +189,9 @@
         pulse re-arms through WAKE). <b class="k">ANCHOR</b> ends the run; <b class="k">TICK END</b> ends only the tick.</li>
       <li><b class="k">On work → AGENT.</b> It dispatches the agent the tick needs — a <b class="k">worker</b>
         for a ready block, a <b class="k">reviewer</b> for a due milestone, or the persistent
-        <b class="k">architect</b> for cleared-ahead work — each spawned/assigned with its <b class="k">BRIEF</b>.
-        All three run the identical process, so the flow draws it once as the <b class="k">AGENT</b>.</li>
+        <b class="k">architect</b> for cleared-ahead work — each <b class="k">spawned</b> identity-only, then
+        <b class="k">assigned</b> the work once it reports in. All three run the identical process, so the flow
+        draws it once as the <b class="k">AGENT</b>.</li>
     </ul>
     </div>
   </details>
@@ -223,8 +224,9 @@
     <ul>
       <li><b class="k">What it does:</b> the one LLM agent — dispatched as a <b class="k">worker</b> (per block),
         a <b class="k">reviewer</b> (per milestone), or the <b class="k">architect</b> (one, persistent, alive
-        the whole run). A merge gateway takes either the spawn <b class="k">BRIEF</b> or an inbox message into
-        the work; the work reads its per-task prompt; the outcome — a result, an in-flight problem, a question,
+        the whole run). A merge gateway takes either the identity-only <b class="k">SPAWN</b> or an inbox message
+        into the work — the assignment itself rides the inbox, once the worker reports in; the work reads its
+        per-task prompt; the outcome — a result, an in-flight problem, a question,
         or a verdict — leaves via <b class="k">FLEET INTAKE</b>, then it waits at its inbox for the reply or next
         work.</li>
       <li><b class="k">No self-end.</b> The sub has no end of its own; PULSE disposes a worker (Settle), and TRON

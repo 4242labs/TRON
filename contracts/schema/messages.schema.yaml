@@ -20,6 +20,8 @@ slots:
   block: <str>
   branch: <str>
   pr: <str>
+  persona: <str>        # SPAWN: absolute path to the project's agent file
+  report: <str>         # SPAWN: absolute path to the report-channel script
   detail: <str>         # free-text judgment payload (the one slot the LLM may fill with prose)
   reason: <str>
   count: <int>
@@ -33,9 +35,12 @@ slots:
 templates:
 
   # dispatch / spawn (worker channel) — each references a PMT id, never inline copy.
-  spawn.engineer:   {channel: worker,   slots: [worker_id, block, branch], pmt: PMT-ENG-BRIEF}
-  spawn.architect:  {channel: worker,   slots: [],                          pmt: PMT-ARCH-BRIEF}
-  spawn.reviewer:   {channel: worker,   slots: [worker_id, count],          pmt: PMT-REV-BRIEF}
+  # SPAWN is identity-only (01-07): every role uses PMT-SPAWN; the work follows on `online` (assign.*).
+  spawn.engineer:   {channel: worker,   slots: [worker_id, role, persona, report], pmt: PMT-SPAWN}
+  spawn.architect:  {channel: worker,   slots: [worker_id, role, persona, report], pmt: PMT-SPAWN}
+  spawn.reviewer:   {channel: worker,   slots: [worker_id, role, persona, report], pmt: PMT-SPAWN}
+  assign.engineer:  {channel: worker,   slots: [worker_id, block],          pmt: PMT-ENG-ASSIGN}     # work, after engineer reports online
+  assign.reviewer:  {channel: worker,   slots: [worker_id, count],          pmt: PMT-REV-ASSIGN}     # work, after reviewer reports online
   arch.forward:     {channel: worker,   slots: [block],                     pmt: PMT-ARCH-FORWARD}   # architect forward-review job
   arch.log:         {channel: worker,   slots: [type],                      pmt: PMT-ARCH-LOGREVIEW} # architect log-review job
   arch.triage:      {channel: worker,   slots: [detail],                    pmt: PMT-ARCH-TRIAGE}    # unclassified -> architect triage

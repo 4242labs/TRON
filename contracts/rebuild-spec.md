@@ -52,7 +52,7 @@ situation absent here is **out of scope for Phase 1**.
 ### C. Dispatch (`ND-03 SWITCHBOARD` — exclusive 3-arm gateway, exactly one per tick)
 | # | Situation | Node | Behavior |
 |:--|:--|:--|:--|
-| C1 | Work to dispatch | ND-03 → AGENT | spawn/assign with its BRIEF (T3); priority: oldest adhoc → due-cadence reviewer (consume counter) → next block by pipeline order |
+| C1 | Work to dispatch | ND-03 → AGENT | two-step (T3): SPAWN identity-only, then ASSIGN the work on the worker's `online` report; priority: oldest adhoc → due-cadence reviewer (consume counter) → next block by pipeline order |
 | C2 | Run-end condition holds | ND-03 → ANCHOR | the run terminates (teardown) |
 | C3 | Idle tick | ND-03 → TICK END | this tick ends only; the run continues |
 | C4 | Dispatch a **worker** (engineer) | AGENT | for a ready block; a block is in-flight iff it has a worker **or** an open PR **or** an active gate (safe re-assignment) |
@@ -62,7 +62,7 @@ situation absent here is **out of scope for Phase 1**.
 ### D. The AGENT sub-process (`AGENT` — one shape, every role)
 | # | Situation | Node | Behavior |
 |:--|:--|:--|:--|
-| D1 | Merge-in: spawn or inbox | AGENT (BRIEF ⊕ AGENT INBOX) | a spawn BRIEF **or** an inbox message enters the work; only variables (name, work, prompt) differ by role |
+| D1 | Merge-in: spawn or inbox | AGENT (SPAWN ⊕ AGENT INBOX) | a SPAWN (identity-only) **or** an inbox message enters the work; the ASSIGN (the work) rides the AGENT INBOX path after the worker reports `online`; only variables (name, work, prompt) differ by role |
 | D2 | Do the work | AGENT | reads its per-task prompt (a PMT, T3) |
 | D3 | Outcome leaves | AGENT → FLEET INTAKE | result \| in-flight problem \| question \| verdict — all exit via FLEET INTAKE into TRON's transport |
 | D4 | Wait for reply/next work | AGENT INBOX | the agent waits at its **ID-addressed** inbox; no agent ends its own process (R7) |
@@ -149,19 +149,19 @@ findings-triage (architect's log-review skill), stall detection (engine liveness
 Which milestones/nodes **prompt an agent** (carry a `PMT-*`) and which don't. Per ADR R-PMT: a PMT is a
 self-contained, slot-filled prompt, referenced **by id** through a registry and imported **at tick**.
 Id scheme **`PMT-<ROLE>-<PURPOSE>`** (or `PMT-<PURPOSE>` when generic) — R-PMT.5. The diagram draws these
-generically (`PMT-BRIEF`, `<PMT-*>`); the role-keyed file is the variable the single AGENT fills (ADR §13).
+generically (`<PMT-*>`); the role-keyed file is the variable the single AGENT fills (ADR §13).
 A PMT may surface through a **node** *or* through a **message** (R-PMT.2) — the worker-channel
 `messages.yaml` lines **reference** a PMT body, never inline it (M-04).
 
 ### Prompts an agent — carries a PMT
 | Node / milestone | Origin | PMT id | Today's `messages.yaml` ref |
 |:--|:--|:--|:--|
-| Dispatch engineer (C4) | ND-03 → AGENT BRIEF | `PMT-ENG-BRIEF` | `spawn.engineer` |
-| Spawn architect (C6) | ND-03 → AGENT BRIEF | `PMT-ARCH-BRIEF` | `spawn.architect` |
+| Spawn any worker — identity-only (C1/C4/C5/C6) | ND-03 → AGENT SPAWN | `PMT-SPAWN` | `spawn.engineer` · `spawn.reviewer` · `spawn.architect` |
+| Assign engineer — on `online` (C4) | AGENT INBOX | `PMT-ENG-ASSIGN` | `assign.engineer` |
+| Assign reviewer — on `online` (C5) | AGENT INBOX | `PMT-REV-ASSIGN` | `assign.reviewer` |
 | Architect clear-ahead (C6) | AGENT INBOX | `PMT-ARCH-FORWARD` | `arch.forward` |
 | Architect log-review (C6) | AGENT INBOX | `PMT-ARCH-LOGREVIEW` | `arch.log` |
 | Architect triage (T5 unclassified path) | AGENT INBOX | `PMT-ARCH-TRIAGE` | `arch.triage` |
-| Dispatch reviewer (C5) | ND-03 → AGENT BRIEF | `PMT-REV-BRIEF` | `spawn.reviewer` |
 | DONE gate challenge (T4) | ND-02 gate | `PMT-GATE-DONE` | `gate.step` |
 | Liveness ping (H1) | engine side-system | `PMT-PING` | `heartbeat.ping` |
 | Release worker (H4) | ND-02 Settle / ANCHOR | `PMT-RELEASE` | `release.worker` |

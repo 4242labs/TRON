@@ -444,7 +444,7 @@ const FLOW = {
   // only the variables (name, work, prompts) differ. The throw is non-terminating; the agent never ends
   // its own process (TRON releases the session).
   'LLM': { num:'LLM', name:'AGENT', owner:'✦  AGENT', grid:true, noEnd:true,
-    start:'', startData:{name:'PMT-BRIEF', dir:'in', at:'above'},
+    start:'', startData:{name:'<PMT-*>', dir:'in', at:'above'},
     startPos:[-1,0],
     steps:[
       {n:'AGENT INBOX', id:'01', kind:'mcatch', pos:[0,-1], lblPos:'top'},
@@ -746,7 +746,7 @@ function subXML(def){
     }
     return {i, d, at, W, H, out, store:isStore, dx, dy, p1, p2};
   });
-  if(def.startData){   // a data object attached to the START event (e.g. the BRIEF the agent receives on spawn)
+  if(def.startData){   // a data object attached to the START event (e.g. the <PMT-*> the agent receives on spawn)
     const d=def.startData, g=G('S'), at=d.at||'below', isStore=!!d.store, W=isStore?TOK.storeW:TOK.dataW, H=isStore?TOK.storeH:TOK.dataH, out=d.dir!=='in';
     let dx,dy,p1,p2;
     if(at==='above'){ dx=g.cx-W/2; dy=snapRowY(g.cy,-1,H) ?? bandY(g.cy,-1,H) ?? (g.top-TOK.dataGap-H); p1=[g.cx,g.top]; p2=[g.cx,dy+H]; }
