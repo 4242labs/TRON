@@ -124,21 +124,71 @@ def t_staging_ask_holds():
        any(c.get("kind") == "merge_staging" for c in eng.st.pending_cases.values()))
 
 
-# ── AC-3: the git-hygiene contract reaches the worker (pull/rebase + branch ownership) ──
-def t_hygiene_surface():
-    eng = _eng()
-    brief = eng._handover("engineer", "A-01")
-    ok("AC-3 brief tells the agent to name + report its own branch",
-       "report" in brief.lower() and "branch" in brief.lower()
-       and "feat/A-01" not in brief)             # no dictated name
-    pmt = open(os.path.join(ROOT, "prompts", "PMT-ENG-BRIEF.md")).read().lower()
-    ok("AC-3 PMT-ENG-BRIEF mandates pull/rebase before push",
-       "rebase" in pmt and "push" in pmt)
+# ── 01-07: two-step dispatch — SPAWN (identity) then ASSIGN (work) on `online` ──
+def t_two_step_engineer():
+    ctx, _ = build(blocks=[("A-01", "📋", "none")])
+    eng = Engine(ctx); started(eng)
+    # SPAWN copy itself is identity-only (the prompt is the spawn process input, not an emit).
+    spawn_copy = eng.renderer.render(
+        "spawn.engineer", {"worker_id": "ENG-A-01", "role": "engineer",
+                           "persona": "/p/engineer.md", "report": "/s/report.sh"})
+    ok("two-step: SPAWN copy is identity-only (online check-in, no assignment)",
+       "online" in spawn_copy.lower() and "acceptance criteria" not in spawn_copy.lower()
+       and "/p/engineer.md" in spawn_copy and "/s/report.sh" in spawn_copy)
+
+    n0 = len(events(ctx))
+    eng._dispatch_engineer("A-01")
+    spawn_ev = events(ctx)[n0:]
+    w = next(x for x in eng.st.workers if x.get("role") == "engineer")
+    ok("two-step: spawn records a pending engineer assignment",
+       w.get("pending_assign") == {"kind": "engineer", "block": "A-01"})
+    ok("two-step: dispatch emits no assignment (work waits for online)",
+       not any("acceptance criteria" in t.lower() for t in spawn_ev))
+
+    n1 = len(events(ctx))
+    eng._h_worker_online({"worker_id": w["id"]})
+    assign_ev = events(ctx)[n1:]
+    ok("two-step: online clears the pending assignment", w.get("pending_assign") is None)
+    ok("two-step: online emits assign.engineer carrying the block",
+       any("A-01" in t and "acceptance criteria" in t.lower() for t in assign_ev))
+
+
+def t_two_step_reviewer():
+    ctx, _ = build(blocks=[("A-01", "📋", "none")])
+    eng = Engine(ctx); started(eng)
+    eng.cadence_cfg = {"code": 3}
+    eng._dispatch_reviewer("code")
+    w = next(x for x in eng.st.workers if x.get("role") == "reviewer")
+    ok("two-step: reviewer spawn records a pending reviewer assignment",
+       (w.get("pending_assign") or {}).get("kind") == "reviewer")
+    n1 = len(events(ctx))
+    eng._h_worker_online({"worker_id": w["id"]})
+    assign_ev = events(ctx)[n1:]
+    ok("two-step: reviewer online clears the pending assignment", w.get("pending_assign") is None)
+    ok("two-step: reviewer online emits assign.reviewer (findings pass)",
+       any("findings" in t.lower() for t in assign_ev))
+
+
+def t_two_step_architect_noop():
+    # The architect spawns identity-only too (PMT-SPAWN) but carries NO pending assignment —
+    # its jobs arrive via the queue/pump. An `online` report from it is a harmless no-op (AC-5).
+    ctx, _ = build(blocks=[("A-01", "📋", "none")])
+    eng = Engine(ctx); started(eng)
+    eng._spawn_architect()
+    arch = eng._architect()
+    ok("two-step: architect spawn carries no pending assignment",
+       arch is not None and arch.get("pending_assign") is None)
+    n1 = len(events(ctx))
+    eng._h_worker_online({"worker_id": arch["id"]})
+    ok("two-step: architect online emits no assignment",
+       not any("acceptance criteria" in t.lower() or "findings" in t.lower()
+               for t in events(ctx)[n1:]))
 
 
 def main():
     for t in (t_branch_ownership, t_single_gate, t_two_gate,
-              t_staging_ask_holds, t_hygiene_surface):
+              t_staging_ask_holds, t_two_step_engineer, t_two_step_reviewer,
+              t_two_step_architect_noop):
         t()
     bad = [r for r in _results if not r[1]]
     for name, good, detail in _results:

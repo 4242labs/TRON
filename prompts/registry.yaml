@@ -13,12 +13,12 @@
 # sentry<->PMT map in contracts/rebuild-spec.md (T3).
 
 prompts:
-  PMT-ENG-BRIEF:      { file: PMT-ENG-BRIEF.md,      slots: [worker_id, block, branch] }
-  PMT-ARCH-BRIEF:     { file: PMT-ARCH-BRIEF.md,     slots: [] }
+  PMT-SPAWN:          { file: PMT-SPAWN.md,          slots: [worker_id, role, persona, report] }
+  PMT-ENG-ASSIGN:     { file: PMT-ENG-ASSIGN.md,     slots: [worker_id, block] }
+  PMT-REV-ASSIGN:     { file: PMT-REV-ASSIGN.md,     slots: [worker_id, count] }
   PMT-ARCH-FORWARD:   { file: PMT-ARCH-FORWARD.md,   slots: [block] }
   PMT-ARCH-LOGREVIEW: { file: PMT-ARCH-LOGREVIEW.md, slots: [type] }
   PMT-ARCH-TRIAGE:    { file: PMT-ARCH-TRIAGE.md,    slots: [detail] }
-  PMT-REV-BRIEF:      { file: PMT-REV-BRIEF.md,      slots: [worker_id, count] }
   PMT-GATE-DONE:      { file: PMT-GATE-DONE.md,      slots: [worker_id, block, detail] }
   PMT-PING:           { file: PMT-PING.md,           slots: [worker_id] }
   PMT-RELEASE:        { file: PMT-RELEASE.md,        slots: [worker_id] }

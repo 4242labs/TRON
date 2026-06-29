@@ -50,6 +50,7 @@ from render import Renderer
 TABLE = [
     ("tron:start",                 "_h_bootup"),
     ("build:block:next",           "_h_dispatch_engineer"),  # see note above: not emitted in normal flow
+    ("worker:online",              "_h_worker_online"),  # spawned worker checked in -> emit its pending assignment (01-07)
     ("block:next:build",           None),               # engineer building
     ("block:next:done",            "_h_worker_done"),   # done is a trigger -> DONE gate (§F)
     ("review:next:<block>",        "_h_forward_review"),     # not emitted in normal flow (SWITCHBOARD calls directly)
@@ -492,13 +493,14 @@ class Engine:
         if not row or not self._available(row, idx):
             return
         wid = self._worker_id("engineer", block)
+        # Pending assignment recorded on the durable worker record (01-07): the SPAWN brings the
+        # engineer online; the block is delivered (assign.engineer) on its `online` report. A crash
+        # between spawn and assign survives — the pending assignment persists in the MANIFEST.
         w = {"id": wid, "role": "engineer", "session_id": "", "shortid": "",
-             "spawned_at": util.now_iso(), "status": "spawning", "block": block}
+             "spawned_at": util.now_iso(), "status": "spawning", "block": block,
+             "pending_assign": {"kind": "engineer", "block": block}}
         self._reserve(w)                               # durable intent before spawn
-        session, short = self._spawn(
-            wid, "spawn.engineer",
-            {"worker_id": wid, "block": block, "branch": self._branch(block)},
-            role="engineer", block=block)
+        session, short = self._spawn(wid, "spawn.engineer", "engineer", block=block)
         w["session_id"], w["shortid"], w["status"] = session, short, "working"
         self.st.record_dispatch(wid, session, block, self._branch(block), 1)
         self.events.event("dispatch", actor=wid, block=block, role="engineer",
@@ -523,12 +525,10 @@ class Engine:
             return
         wid = self._worker_id("engineer", block)
         w = {"id": wid, "role": "engineer", "session_id": "", "shortid": "",
-             "spawned_at": util.now_iso(), "status": "spawning", "block": block}
+             "spawned_at": util.now_iso(), "status": "spawning", "block": block,
+             "pending_assign": {"kind": "engineer", "block": block}}
         self._reserve(w)
-        session, short = self._spawn(
-            wid, "spawn.engineer",
-            {"worker_id": wid, "block": block, "branch": self._branch(block)},
-            role="engineer", block=block)
+        session, short = self._spawn(wid, "spawn.engineer", "engineer", block=block)
         w["session_id"], w["shortid"], w["status"] = session, short, "working"
         self.st.record_dispatch(wid, session, block, self._branch(block), 2)
         self.events.event("dispatch", actor=wid, block=block, role="engineer",
@@ -540,20 +540,25 @@ class Engine:
         wid = self._worker_id("reviewer", typ)
         thresh = self.cadence_cfg.get(typ, 0)
         w = {"id": wid, "role": "reviewer", "rtype": typ, "session_id": "", "shortid": "",
-             "spawned_at": util.now_iso(), "status": "spawning", "block": f"review:{typ}"}
+             "spawned_at": util.now_iso(), "status": "spawning", "block": f"review:{typ}",
+             "pending_assign": {"kind": "reviewer", "count": thresh}}
         self._reserve(w)                               # durable intent before spawn
-        session, short = self._spawn(
-            wid, "spawn.reviewer", {"worker_id": wid, "count": thresh}, role="reviewer", rtype=typ)
+        session, short = self._spawn(wid, "spawn.reviewer", "reviewer", rtype=typ)
         w["session_id"], w["shortid"], w["status"] = session, short, "working"
         self.events.event("dispatch", actor=wid, block=f"review:{typ}", role="reviewer",
                           session=session, rtype=typ)
         self.emit("terminal.review", {"count": thresh})
         self.log("flow", f"cadence:{typ} -> review:{typ}")
 
-    def _spawn(self, wid, template_id, slots, role=None, block=None, rtype=None):
+    def _spawn(self, wid, template_id, role, block=None, rtype=None):
+        """Identity-only spawn (01-07 two-step): fill PMT-SPAWN's slots and bring the worker
+        online — no assignment. `persona` (the project's agent file) and `report` (report.sh)
+        are now carried by the SPAWN copy itself (delta-only over the project's persona), so they're
+        filled here. The work follows on the worker's `online` report (assign.*)."""
+        persona = self._agent_file(rtype and f"reviewer-{rtype}" or role) or self._agent_file(role)
+        report = self.ctx.p("scripts", "report.sh")
+        slots = {"worker_id": wid, "role": role, "persona": persona, "report": report}
         prompt = self.renderer.render(template_id, slots)
-        if role:
-            prompt = prompt + "\n\n" + self._handover(role, block, rtype)
         if self.dry:
             return "dry", "dry"
         try:
@@ -566,23 +571,6 @@ class Engine:
                 node="SWITCHBOARD dispatch", next_action="crash (reservation recovered next sweep)")
             raise
         return rec.get("session_id", ""), rec.get("shortid", "")
-
-    def _handover(self, role, block, rtype=None):
-        """Technical kickoff appended to the spawn line. TRON ships no persona — it points
-        the worker at the PROJECT's agent file and adds only its thin dispatch/report
-        protocol (decision #11). Kept out of messages.yaml."""
-        agent_file = self._agent_file(rtype and f"reviewer-{rtype}" or role) or self._agent_file(role)
-        report = self.ctx.p("scripts", "report.sh")
-        lines = [f"Method: read {agent_file} (your persona) and follow it.",
-                 f'Report to TRON: bash {report} <your-id> "<message>"']
-        if block and not str(block).startswith("review:"):
-            lines.append(f"Block {block} is yours alone. Create + name your own branch+worktree off "
-                         f"trunk (per the project's convention) and report the name to me — I track "
-                         f"your PR/CI by the name you choose, I never assume one.")
-            lines.append("Drive it to DONE per its Block Completion Gate. Report DONE only "
-                         "with a clean Completion Report — TRON gates on the evidence on trunk, "
-                         "not your word: merge, re-validate, deploy-clean, then flip ✅ + archive.")
-        return "\n".join(lines)
 
     def _agent_file(self, role):
         for a in (self.project.get("agents") or []):
@@ -612,6 +600,30 @@ class Engine:
     def _h_dispatch_reviewer(self, m):
         if m.get("type"):
             self._dispatch_reviewer(m["type"])
+
+    def _h_worker_online(self, m):
+        # worker:online (01-07 two-step) — a spawned worker checked in. Deliver its pending
+        # assignment (assign.engineer / assign.reviewer) to its session, then clear it. Mirrors the
+        # architect idle-pump: spawn is identity-only; the work follows on `online`. Crash-safe —
+        # the pending assignment is durable on the worker record (set at reserve), so a crash
+        # between spawn and assign re-emits cleanly (at-least-once; deduped by the worker already
+        # being online). No pending (architect, or already assigned) -> nothing to do.
+        wid = m.get("worker_id")
+        w = next((x for x in self.st.workers if x.get("id") == wid), None)
+        if not w:
+            return
+        pend = w.get("pending_assign")
+        if not pend:
+            return
+        sess = w.get("session_id")
+        if pend.get("kind") == "reviewer":
+            self.emit("assign.reviewer", {"worker_id": wid, "count": pend.get("count", 0)},
+                      worker_session=sess)
+        else:
+            self.emit("assign.engineer", {"worker_id": wid, "block": pend.get("block")},
+                      worker_session=sess)
+        w["pending_assign"] = None
+        self.log("flow", f"{wid} online -> assign ({pend.get('kind')})")
 
     def _h_worker_done(self, m):
         # block:next:done — the worker SAYS it's done. Not truth: open/advance the DONE gate.
@@ -968,7 +980,7 @@ class Engine:
         w = {"id": "ARCH-PERSIST", "role": "architect", "session_id": "", "shortid": "",
              "spawned_at": util.now_iso(), "status": "idle", "current_job": None, "block": None}
         self._reserve(w)                               # durable intent before spawn
-        session, short = self._spawn("ARCH-PERSIST", "spawn.architect", {}, role="architect")
+        session, short = self._spawn("ARCH-PERSIST", "spawn.architect", "architect")
         w["session_id"], w["shortid"] = session, short
 
     def _forward_review(self, block):

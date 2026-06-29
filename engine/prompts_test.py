@@ -54,8 +54,8 @@ def main():
             f"{mid}: slot mismatch vs {pid}"
 
     # 3) load() resolves an id and fills slots.
-    out = p.load("PMT-ENG-BRIEF", {"worker_id": "ENG-01-02", "block": "01-02", "branch": "feat/x"})
-    assert "ENG-01-02" in out and "01-02" in out and "feat/x" in out, "slots not filled"
+    out = p.load("PMT-ENG-ASSIGN", {"worker_id": "ENG-01-02", "block": "01-02"})
+    assert "ENG-01-02" in out and "01-02" in out, "slots not filled"
 
     # 4) fresh read: edit a temp PMT, load twice, second call sees the change.
     with tempfile.TemporaryDirectory() as td:
