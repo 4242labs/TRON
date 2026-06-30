@@ -97,7 +97,7 @@ def cmd_start(ctx):
 
 def cmd_tick(ctx):
     import wake
-    wake.locked_tick(ctx)         # single-flight: never overlaps a daemon-fired tick
+    wake.locked_tick(ctx, "manual")   # operator-forced CLI tick; never overlaps a daemon-fired tick
     return 0
 
 
@@ -114,7 +114,7 @@ def cmd_msg(ctx):
                       {"text": text, "sender": {"kind": "operator"}})
     # Single-flight: if a daemon tick holds the lock, the line still landed on the inbox
     # and the daemon's event-wake picks it up on its next tick — never lost.
-    wake.locked_tick(ctx)
+    wake.locked_tick(ctx, "event")    # a fresh operator message drove it
     return 0
 
 
