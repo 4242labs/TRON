@@ -219,7 +219,7 @@ class Console:
 
     def _tick(self):
         import wake
-        ran, ended = wake.locked_tick(self.ctx)   # single-flight; emits live to stdout
+        ran, ended = wake.locked_tick(self.ctx, "manual")  # operator-forced tick; emits live to stdout
         if not ran:
             print(f"{DIM}  (a tick is already running — the daemon has it){RST}")
             return False
@@ -236,7 +236,7 @@ class Console:
         util.append_jsonl(self.ctx.operator_inbox,
                           {"text": line, "sender": {"kind": "operator"}})
         before = len(self._events())
-        wake.locked_tick(self.ctx)            # emits live to stdout
+        wake.locked_tick(self.ctx, "event")   # a fresh operator message drove it; emits live to stdout
         if len(self._events()) == before:
             print(f"{DIM}  (noted){RST}")
 

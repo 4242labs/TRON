@@ -29,6 +29,7 @@ into triggers, drain the trigger queue to quiescence, persist atomically, exit.
 """
 import os
 import json
+import hashlib
 
 import util
 import jobs
@@ -87,6 +88,7 @@ class Engine:
         self.table = TABLE
         self.paths = ctx.repo_paths(self.project)
         self._trunk_sha = ""                          # last-known trunk HEAD (forensic state context)
+        self._snapshot_hash = ""                      # hash of the rebuilt trunk-read snapshot (per-tick provenance)
         self.events = eventlog.EventLog(ctx, self._log_env)
 
     def _log_env(self):
@@ -128,7 +130,7 @@ class Engine:
         util.log_line(self.ctx.logs_dir, name, text)
 
     # ── the tick (contracts §5) ──
-    def tick(self):
+    def tick(self, trigger_source="timer"):
         # No session has started -> nothing to do. A stray tick (a manual `tron tick`
         # before `tron start`) must never sweep, classify, or consume inbox messages
         # into a phantom session — the WAKE daemon only runs once a session is live.
@@ -143,6 +145,11 @@ class Engine:
         if self.ended:                                   # refresh hit the trunk-fail death-cap -> halted loud (T6)
             self.st.save()
             return self.ended
+        # Per-tick forensic record (01-09): run · tick_seq · trigger_source · trunk_sha ·
+        # snapshot_hash · ts. Emitted after refresh so trunk + snapshot are the ones this tick
+        # decides on. trigger_source is timer|event|manual — recorded honestly, never inferred.
+        self.events.event("tick", trigger_source=trigger_source,
+                          snapshot_hash=self._snapshot_hash)
         rc = self.st.run_control
         if rc != "pause":                                # PAUSE freezes liveness pings + gate nudges; DRAIN keeps them
             self._sweep()                                # engine liveness -> worker:stalled
@@ -205,6 +212,15 @@ class Engine:
         except Exception as e:
             self.log("trunk", f"read failed (reusing snapshot): {e}")
         self.st.data["open_prs"] = trunk.open_prs(self.paths["root"], self.dry)
+        # Per-tick provenance (01-09): a stable hash over the canonical serialization of the
+        # rebuilt trunk-read snapshot (pipeline view + PR cache + trunk sha). Lets a trace pin
+        # exactly which state a tick decided on, and feeds E1 determinism (same snapshot -> same
+        # decisions). Recomputed every refresh; a reused stale snapshot keeps its prior hash.
+        snap = {"trunk": self._trunk_sha,
+                "pipeline": self.st.pipeline,
+                "open_prs": self.st.data.get("open_prs") or {}}
+        self._snapshot_hash = hashlib.sha256(
+            json.dumps(snap, sort_keys=True, default=str).encode()).hexdigest()
         if not count:
             return
         # Newly-done blocks: count toward cadence once, finalize any worker still on them.
@@ -705,6 +721,8 @@ class Engine:
                     if w.get("role") == "reviewer" and w.get("rtype") == typ), None)
         if self.st.gate.get(gkey) is None:
             self.st.gate[gkey] = {"stage": "review"}
+            self.events.event("gate_advance", block=gkey,
+                              **{"from": None, "to": "review", "detail": "attest coverage"})
             sess = rev.get("session_id") if rev else None
             wid = rev.get("id") if rev else self._worker_id("reviewer", typ)
             if sess:
@@ -715,7 +733,7 @@ class Engine:
         self.st.gate.pop(gkey, None)                 # confirmation -> release + remediation
         for w in list(self.st.workers):
             if w.get("role") == "reviewer" and w.get("rtype") == typ:
-                self._release_worker(w)
+                self._release_worker(w, reason="review-complete")
         if self._architect():                       # no architect -> nothing drains a log job
             self.st.architect_queue.append({"kind": "log", "type": typ, "block": block})
             self._pump_architect()
@@ -827,6 +845,9 @@ class Engine:
         block = (case or {}).get("block") or m.get("block")
         if case is not None:
             case["decision"] = decision                  # Settle writes the reply onto the pending record
+        if decision:                                     # forensic record (01-09): disposition applied
+            self.events.event("settle", block=block, cid=m.get("case"),
+                              **{"disposition": decision})
         if case is not None and case.get("kind") == "merge":
             # Ask-before-merging (T8): the operator's call on the trunk-merge step. Four outcomes,
             # all resolved here (no new flow). The engineer never left; nothing to un-park.
@@ -904,7 +925,7 @@ class Engine:
         for w in list(self.st.workers):
             if not wid or w.get("id") == wid:
                 block, role, rtype = w.get("block"), w.get("role"), w.get("rtype")
-                self._release_worker(w, notify=False)
+                self._release_worker(w, notify=False, reason="stall-recover")
                 if role == "reviewer" and rtype:
                     self.st.cadence[rtype] = max(self.st.cadence.get(rtype, 0),
                                                  self.cadence_cfg.get(rtype, 0))
@@ -996,10 +1017,14 @@ class Engine:
                 stage, msg = "merge", "gate.merge"
 
         if stage != g.get("stage") or renudge:
+            prev = g.get("stage")
             g["stage"], g["pr"] = stage, ((pr or {}).get("number") or g.get("pr"))
             if msg and sess:
                 self.emit(msg, {"worker_id": wid, "block": block}, worker_session=sess)
             self.log("flow", f"gate[{block}] -> {stage}" + (f" ({reason})" if reason else ""))
+            if stage != prev:                            # a real stage advance (01-09), not a re-nudge
+                self.events.event("gate_advance", block=block,
+                                  **{"from": prev, "to": stage, "detail": reason})
 
     def _drive_close(self, block, g, sess, wid):
         """CLOSE stage (T7): ✅ landed. Fire CLOSE once and HOLD the slot — the worker wraps up
@@ -1007,9 +1032,12 @@ class Engine:
         confirmation (_confirm_close). Re-nudge up to a cap, then force-release so a silent worker
         can't strand the slot forever."""
         if g.get("stage") != "close":
+            prev = g.get("stage")
             g["stage"] = "close"
             if sess:
                 self.emit("close.worker", {"worker_id": wid}, worker_session=sess)
+            self.events.event("gate_advance", block=block,
+                              **{"from": prev, "to": "close", "detail": "✅ on trunk"})
             self.log("flow", f"gate[{block}] -> close (slot held)")
             return
         n = g.get("close_nudges", 0)
@@ -1026,7 +1054,7 @@ class Engine:
         """The worker confirmed a clean exit -> kill its process + free the slot (T7)."""
         for w in list(self.st.workers):
             if w.get("role") == "engineer" and w.get("block") == block:
-                self._release_worker(w, notify=False)    # CLOSE already sent; just kill + free
+                self._release_worker(w, notify=False, reason="close-confirmed")  # CLOSE already sent
         self.st.gate.pop(block, None)
         self.log("flow", f"{block} close confirmed -> worker released")
         self._emit("pulse")
@@ -1034,7 +1062,7 @@ class Engine:
     def _force_release_block(self, block):
         for w in list(self.st.workers):
             if w.get("role") == "engineer" and w.get("block") == block:
-                self._release_worker(w, notify=False)
+                self._release_worker(w, notify=False, reason="force-release")
 
     def _gate_giveup(self, block, g, wid, detail, code, action):
         """No-silent-stuck: drop the gate + escalate to the operator (forensic record)."""
@@ -1147,7 +1175,7 @@ class Engine:
         self._pump_architect()
 
     # ── worker release ──
-    def _release_worker(self, w, notify=True):
+    def _release_worker(self, w, notify=True, reason="released"):
         sess = w.get("session_id")
         if notify and sess and sess != "dry" and not self.dry:
             jobs.send(sess, self.renderer.render("close.worker", {"worker_id": w["id"]}))
@@ -1155,6 +1183,10 @@ class Engine:
             jobs.release(sess)
         if w in self.st.workers:
             self.st.workers.remove(w)
+        # Forensic record (01-09): a worker slot was freed. Single chokepoint — every release
+        # site (close-confirm, reviewer-complete, stall-recover, force-release) funnels here.
+        self.events.event("release", actor=w.get("id"), block=w.get("block"),
+                          **{"role": w.get("role"), "reason": reason})
 
     # ── inbound classification + side handlers ──
     def _ingest(self, tag, slots, sender):
@@ -1335,7 +1367,8 @@ class Engine:
         payload = {"text": msg.get("text", ""), "sender": msg.get("sender", {})}
         sender = msg.get("sender", {})
         raw = msg.get("text", "")
-        ok, out, attempts = judge.call("classify_message", payload, self.ctx, self._max_retries)
+        ok, out, attempts = judge.call("classify_message", payload, self.ctx, self._max_retries,
+                                       elog=self.events)
         if not ok:
             # By design, an exhausted classify is double-recorded: a `classify-fail` failure
             # (the deterministic step that failed) AND an `unclassified` record (the message still
