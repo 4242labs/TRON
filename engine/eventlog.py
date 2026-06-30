@@ -32,6 +32,25 @@ FAILURE_CLASSES = {
     "dispatch-fail", "crash",
 }
 
+# The closed vocabulary of `type` values an `event` record carries — the engine's own
+# forensic record of what it did, complete enough to reconstruct a run's per-tick / per-
+# decision / per-model-call trace offline (the run-trace observer reads exactly these). Not
+# enforced at emit (a forensic log never blocks); the taxonomy test asserts every emit site
+# stays inside this set so the vocabulary can't drift silently.
+#   tick          — one per tick: trigger_source (timer|event|manual) + snapshot_hash (provenance)
+#   model_call    — one per LLM call at the judge chokepoint: tool · tier · retries · ok
+#   dispatch      — a worker was spawned/assigned to a block
+#   gate_advance  — a DONE-gate stage transition (from -> to)
+#   settle        — an operator decision / disposition was applied to a parked case or block
+#   release       — a worker slot was freed
+#   escalate      — a condition was raised to the operator (wall/await)
+#   block_done    — a block reached ✅ on trunk
+#   session_start / session_end / halt — session lifecycle
+EVENT_TYPES = {
+    "tick", "model_call", "dispatch", "gate_advance", "settle", "release",
+    "escalate", "block_done", "session_start", "session_end", "halt",
+}
+
 
 class EventLog:
     """Append-only writer over `ctx.event_log`. `env` is a zero-arg callable returning the

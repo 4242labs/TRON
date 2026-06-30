@@ -166,7 +166,7 @@ def induce_crash(ctx):
     # A whole tick raising is recorded as `crash` by wake.locked_tick, then re-raised for the
     # supervised loop. Monkeypatch tick to blow up; assert the record is written.
     orig = Engine.tick
-    Engine.tick = lambda self: (_ for _ in ()).throw(RuntimeError("simulated tick crash"))
+    Engine.tick = lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("simulated tick crash"))
     raised = False
     try:
         wake.locked_tick(ctx)

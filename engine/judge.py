@@ -114,17 +114,33 @@ def _call_llm(tool, payload, ctx, correction=None):
         return ""
 
 
-def call(tool, payload, ctx, max_retries=2):
+def _record_model_call(elog, tool, *, retries, ok, cid):
+    """Forensic record of one model call (01-09): the engine's only LLM call is here, so this
+    single chokepoint logs every current/future judgment tool's cost/operability accounting —
+    plane · tool · tier · retries · ok. Emitted for the engine's own audit; the run-trace
+    observer happens to read it. Stays unaware of measurement (no measurement-specific code)."""
+    if elog is None:
+        return
+    elog.event("model_call", cid=cid, plane="control", tool=tool,
+               tier=TIER.get(tool), retries=retries, ok=bool(ok))
+
+
+def call(tool, payload, ctx, max_retries=2, elog=None, cid=None):
     """Run one judgment tool. Returns (ok, output_dict_or_None, raw_attempts).
 
     ok=False means the invalid-output budget was exhausted -> the caller maps
     this to `unclassified` / the `*` SENTRY catch-all (contracts §4).
+
+    `elog` (an EventLog) + `cid` are the forensic sink: one `model_call` record is emitted
+    per call from this single chokepoint — never from the fsm call site (one place, every tool).
     """
     validate = VALIDATORS[tool]
     stub = _stub_response(tool)
     if stub is not None:
         err = validate(stub, ctx)
-        return (err is None), (stub if err is None else None), [stub]
+        ok = err is None
+        _record_model_call(elog, tool, retries=0, ok=ok, cid=cid)
+        return ok, (stub if ok else None), [stub]
 
     raw_attempts = []
     correction = None
@@ -137,6 +153,8 @@ def call(tool, payload, ctx, max_retries=2):
             continue
         err = validate(obj, ctx)
         if err is None:
+            _record_model_call(elog, tool, retries=len(raw_attempts) - 1, ok=True, cid=cid)
             return True, obj, raw_attempts
         correction = err
+    _record_model_call(elog, tool, retries=len(raw_attempts) - 1, ok=False, cid=cid)
     return False, None, raw_attempts
