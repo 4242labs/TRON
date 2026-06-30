@@ -71,6 +71,10 @@ The project's canon pipeline (`pipeline.md` + `blocks/`) lives in the project tr
 Check silently; **report only problems.**
 
 - The runtime can read this canon clone and write to the target. (Required.)
+- **Personas are complete deltas-ready.** TRON's worker prompts are deltas layered over the project's own
+  agent personas — so each persona AND every skill it references must already be present and complete before
+  seeding. TRON ships none and adds none; if a persona or a skill it points at is missing, the lean prompts
+  have nothing to lean on. (Required — verified per-role at Step 4.)
 - The worker-spawn runtime is available (needed later when TRON dispatches). Warn if absent; seeding can still finish.
 - `git` — only if the build commits via git (the default does). Warn, don't hard-fail.
 - `jq` — the shell connectors parse JSON (report + Telegram); warn if absent.
@@ -142,7 +146,7 @@ With canon in place, **apply the Step 1 knob changes to `knobs.yaml`** (worker/a
 
 ## Step 4 — Validate agents + the canon pipeline
 
-- **Agents** (TRON ships none — it dispatches whatever the project provides): enumerate `<role>.md` in `<agents>` and record the role→file map (role = the file's stem, e.g. `reviewer-code`) for `project.yaml`. TRON requires no specific agent. The only check is that the roles **TRON's own `knobs.yaml` references** resolve to a persona the project ships: each cadence lens `<type>` needs a reviewer persona the engine can resolve (a `reviewer-<type>.md`, or a generic `reviewer.md` it falls back to), and every peer-consult role must exist. If one doesn't: stop. *"Cadence runs a `code` review, but no `reviewer-code.md` or `reviewer.md` is here. Add a reviewer persona or drop the `code` cadence?"* Never create agent files.
+- **Agents** (TRON ships none — it dispatches whatever the project provides): enumerate `<role>.md` in `<agents>` and record the role→file map (role = the file's stem, e.g. `reviewer-code`) for `project.yaml`. TRON requires no specific agent. The only check is that the roles **TRON's own `knobs.yaml` references** resolve to a persona the project ships: each cadence lens `<type>` needs a reviewer persona the engine can resolve (a `reviewer-<type>.md`, or a generic `reviewer.md` it falls back to), and every peer-consult role must exist. **For each resolved persona, also confirm the skills it references are present and complete** — TRON's prompts are deltas over the persona + its skills, so a persona pointing at a missing skill fails the same way a missing persona does. If one doesn't (persona OR a skill it references): stop. *"Cadence runs a `code` review, but no `reviewer-code.md` or `reviewer.md` is here. Add a reviewer persona or drop the `code` cadence?"* *"`engineer.md` references `skills/skill-validate.md`, which isn't present. Add it before seeding."* Never create agent or skill files.
 - **Canon pipeline** (against the format the reader needs): confirm `pipeline.md` follows the canon contract — `### Phase N:` headers, `ID | Task | Status | Notes` tables, an emoji-only Status cell, and a block-file ref in Notes — and that `blocks/*.md` carry the fixed headers (`Status`, `Depends on`, `Reviewer class`, `Merge`, `Deploy`; `Phase` optional). This is what the deterministic reader parses. Never rewrite the project's pipeline or blocks — flag drift to the operator and let an agent fix it via PR.
 
 ## Step 5 — Point at the pipeline
@@ -152,7 +156,7 @@ TRON owns no pipeline. The project's git-tracked **living doc** (`pipeline.md`, 
 Record in `project.yaml` (paths relative to `repo.root`):
 
 - `pipeline_path` (e.g. `meta/pipeline.md`), `blocks_dir` (e.g. `meta/blocks/`), `archive_dir` (e.g. `meta/blocks/archive/`).
-- `repo.staging` — `staging` (two-gate: staging then main) or `none` (single gate). Sets the merge model.
+- `repo.staging` — `staging` (a staging deploy exists for workers to validate against after they merge to trunk) or `none` (no staging). Workers merge only to trunk; promotion to prod/main is operator-only, outside TRON.
 
 In sessions: a block is dispatchable only when its file is `📋` with every `Depends on` already `✅` on trunk; pipeline order is preference, block dependencies are the hard gates. TRON never writes status — agents land `✅` (merged, re-validated, deployed-clean) via PR, and TRON reads it on the next refresh.
 
@@ -188,7 +192,7 @@ Sign off in persona, with a terse summary — **project-relative paths only** (n
 - Project: {NAME}
 - Agents: <agents>/      TRON: <agents>/tron/
 - Pipeline: {pipeline_path} + {blocks_dir}   (read-only; agents write it)
-- Merge model: {staging | single-gate}
+- Worker merge target: trunk ({staging-validated | single-gate}); prod promotion: operator-only
 - Telegram: {on | off}   Cron: {on | off}
 - Lint: pass
 - Trace: <agents>/tron/seed-trace.md
