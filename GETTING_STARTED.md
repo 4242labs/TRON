@@ -8,6 +8,8 @@ How to install, seed, and run TRON. For what it is and how it works, see [`READM
 - `jq` — the shell connectors parse JSON.
 - A background-capable agent runtime on `PATH` — it runs the worker agents TRON dispatches. TRON drives
   it; you never address it directly.
+- Complete agent personas + the skills they reference. TRON's worker prompts are deltas over your project's
+  personas, so every persona and every skill it points at must be present and complete before you seed.
 
 ## Commands
 

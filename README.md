@@ -68,7 +68,8 @@ TRON reads your project's structure — it never scaffolds it. Before you seed, 
 three things, all git-tracked and written by your agents via PR:
 
 - **Agents.** Your own worker personas as `agents/<role>.md`. TRON dispatches them; it ships none and
-  imposes none.
+  imposes none. Its worker prompts are *deltas* over your personas, so each persona — and every skill it
+  references — must be present and complete before you seed; the lean prompts assume that base exists.
 - **Blocks.** Your work, broken into right-sized units — one file per block (`blocks/<id>.md`) with a
   fixed header (status, dependencies, reviewer class, merge and deploy gates) plus acceptance criteria.
   A block is the unit TRON dispatches, gates, and drives to done.

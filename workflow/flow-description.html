@@ -125,7 +125,9 @@
       <li><b class="k">Reviews are PULL</b> — each tick checks whether one is due and fires it; never pushed on its own timer.</li>
       <li><b class="k">Done is a challenge, not a trunk-read.</b> <code>Flag candidates</code> only marks blocks that
         <em>might</em> be done — candidates, never confirmed. A milestone is settled by the gate's prompted
-        challenge (validate → authorize → PR → deploy-if-declared), not by a block appearing on the trunk.</li>
+        challenge (validate locally → merge to trunk, CI deploys staging → re-validate on trunk → close out),
+        not by a block appearing on the trunk. The worker flow ends at trunk; promotion to prod is outside
+        the run (the operator does it).</li>
       <li><b class="k">Unclassified is a tag too.</b> Classify tags every inbound message; an <em>unclassified</em>
         one is just another tag — routed to the <b class="k">architect</b> for triage, like any architect-bound
         message. Nothing dead-ends at Route.</li>
