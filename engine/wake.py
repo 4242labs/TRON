@@ -64,16 +64,17 @@ def single_flight(ctx):
         f.close()
 
 
-def locked_tick(ctx):
+def locked_tick(ctx, trigger_source="timer"):
     """One tick under single-flight. Returns (ran, ended): ran=False means the lock was
-    held (skipped). The single entry point for every tick — daemon, console, CLI."""
+    held (skipped). The single entry point for every tick — daemon, console, CLI.
+    `trigger_source` (timer|event|manual) is recorded on the tick's forensic record (01-09)."""
     from fsm import Engine
     with single_flight(ctx) as won:
         if not won:
             return False, False
         eng = Engine(ctx)
         try:
-            return True, eng.tick()
+            return True, eng.tick(trigger_source)
         except Exception as e:
             # A whole tick crashed (an unhandled exception escaped the bounded pass). Record it
             # forensically (AC-2/AC-6) on the engine's own log — which carries the run/tick/trunk
@@ -142,8 +143,11 @@ def run(ctx):
             sig = _inbox_sig(ctx)
             new_msg = sig != last_sig
             if due(new_msg, now - last_tick, cooldown, ceiling):
+                # Honest trigger: an early wake on a fresh inbox change is `event`; a wake at the
+                # CEILING cadence with no new message is `timer`. Mirrors due()'s own condition.
+                trig = "event" if (new_msg and (now - last_tick) >= cooldown) else "timer"
                 try:
-                    ran, ended = locked_tick(ctx)
+                    ran, ended = locked_tick(ctx, trig)
                 except Exception as e:                 # supervision: one bad tick ≠ dead loop
                     util.log_line(ctx.logs_dir, "wake", f"tick raised, loop continues: {e}")
                     ran, ended = True, False
