@@ -244,7 +244,8 @@ def t_seq_idempotent():
 # ── AC-6 (F5): the runner delivers spawn + a mid-life message, in order (echo adapter) ──
 def t_runner_e2e():
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    store = tempfile.mkdtemp(prefix="tron-store-")
+    store = os.path.join(tempfile.mkdtemp(prefix="tron-store-"), "workers")  # workers_dir under the instance
+    os.makedirs(store)
     jobs.configure(store)
     wid = "ENG-A-01"
     wd = os.path.join(store, wid)
@@ -273,7 +274,8 @@ def t_runner_e2e():
 # ── AC-7 (F5): a restarted runner resumes from the high-water seq — no replay ──
 def t_runner_resume():
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    store = tempfile.mkdtemp(prefix="tron-store2-")
+    store = os.path.join(tempfile.mkdtemp(prefix="tron-store2-"), "workers")  # workers_dir under the instance
+    os.makedirs(store)
     jobs.configure(store)
     wid = "ENG-B-02"
     wd = os.path.join(store, wid)
@@ -293,7 +295,8 @@ def t_runner_crash_resume():
     """A LIVE runner is hard-killed (SIGKILL — no graceful released) after processing to its
     high-water; a fresh runner on the same dir resumes from it, replaying nothing (recover corner)."""
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    store = tempfile.mkdtemp(prefix="tron-crash-")
+    store = os.path.join(tempfile.mkdtemp(prefix="tron-crash-"), "workers")  # workers_dir under the instance
+    os.makedirs(store)
     jobs.configure(store)
     wid = "ENG-C-03"
     wd = os.path.join(store, wid)
@@ -313,10 +316,35 @@ def t_runner_crash_resume():
     jobs.release(wid)
 
 
+# ── worker->engine return path (01-10 follow-up): the runner forwards every finished turn's
+#    result to the instance worker-inbox, so worker.online fires without the agent running
+#    report.sh — the deadlock the 02-02-02 re-run surfaced. ──
+def t_runner_forwards_to_engine():
+    os.environ["TRON_RUNNER_POLL_S"] = "0.2"
+    inst = tempfile.mkdtemp(prefix="tron-inst-")
+    store = os.path.join(inst, "workers")          # workers_dir under the instance
+    os.makedirs(store)
+    jobs.configure(store)
+    wid = "ENG-D-04"
+    wd = os.path.join(store, wid)
+    os.makedirs(wd)
+    jobs.send(wd, 1, "spawn.engineer", "come online")
+    jobs.spawn_runner(wid, wd, "sess-fwd", cwd=store, adapter="echo")
+    ok("return path: turn ran", _wait(lambda: _hwm(wd) >= 1))
+    inbox = os.path.join(inst, "worker-inbox.jsonl")
+    ok("return path: turn result forwarded to the instance worker-inbox",
+       _wait(lambda: os.path.isfile(inbox) and _read(inbox).strip() != ""))
+    rec = json.loads(_read(inbox).strip().splitlines()[0])
+    ok("return path: forward carries the turn result text", rec.get("text") == "echo: come online")
+    ok("return path: schema matches _normalize (sender kind+id, no re-wrap)",
+       rec.get("sender", {}).get("kind") == "worker" and rec.get("sender", {}).get("id") == wid)
+    jobs.release(wid)
+
+
 def main():
     for t in (t_no_remote_trunk, t_fsm_threads_remote, t_judge_stdin, t_worker_online,
               t_mailbox_append, t_seq_idempotent, t_runner_e2e, t_runner_resume,
-              t_runner_crash_resume):
+              t_runner_crash_resume, t_runner_forwards_to_engine):
         try:
             t()
         except Exception as e:
