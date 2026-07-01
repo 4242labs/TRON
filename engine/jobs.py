@@ -14,8 +14,10 @@ stable; the session id is not). Each worker owns a directory under `<instance>/w
     timeline.jsonl     the worker's turn log     (console tail + the engine's liveness sweep)
     .stop              release sentinel          (engine writes it; the runner exits cleanly)
 
-The worker->engine direction is unchanged: workers call `report.sh` -> `worker-inbox.jsonl`,
-which the engine drains every tick. This module is the symmetric mirror for engine->worker.
+The worker->engine direction lands on `worker-inbox.jsonl`, which the engine drains every tick:
+the runner forwards each finished turn's result there deterministically (worker_runner
+`_forward_to_engine`), and a worker may also call `report.sh` for an explicit report. This
+module is the symmetric mirror for engine->worker.
 """
 import os
 import json
