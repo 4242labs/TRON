@@ -244,8 +244,7 @@ def t_seq_idempotent():
 # ── AC-6 (F5): the runner delivers spawn + a mid-life message, in order (echo adapter) ──
 def t_runner_e2e():
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    store = os.path.join(tempfile.mkdtemp(prefix="tron-store-"), "workers")  # workers_dir under the instance
-    os.makedirs(store)
+    store = tempfile.mkdtemp(prefix="tron-store-")
     jobs.configure(store)
     wid = "ENG-A-01"
     wd = os.path.join(store, wid)
@@ -274,8 +273,7 @@ def t_runner_e2e():
 # ── AC-7 (F5): a restarted runner resumes from the high-water seq — no replay ──
 def t_runner_resume():
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    store = os.path.join(tempfile.mkdtemp(prefix="tron-store2-"), "workers")  # workers_dir under the instance
-    os.makedirs(store)
+    store = tempfile.mkdtemp(prefix="tron-store2-")
     jobs.configure(store)
     wid = "ENG-B-02"
     wd = os.path.join(store, wid)
@@ -295,8 +293,7 @@ def t_runner_crash_resume():
     """A LIVE runner is hard-killed (SIGKILL — no graceful released) after processing to its
     high-water; a fresh runner on the same dir resumes from it, replaying nothing (recover corner)."""
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    store = os.path.join(tempfile.mkdtemp(prefix="tron-crash-"), "workers")  # workers_dir under the instance
-    os.makedirs(store)
+    store = tempfile.mkdtemp(prefix="tron-crash-")
     jobs.configure(store)
     wid = "ENG-C-03"
     wd = os.path.join(store, wid)
@@ -316,35 +313,30 @@ def t_runner_crash_resume():
     jobs.release(wid)
 
 
-# ── worker->engine return path (01-10 follow-up): the runner forwards every finished turn's
-#    result to the instance worker-inbox, so worker.online fires without the agent running
-#    report.sh — the deadlock the 02-02-02 re-run surfaced. ──
-def t_runner_forwards_to_engine():
+# ── worker->engine return path (01-10 follow-up): the two-step ONLINE handshake fires off a
+#    deterministic runner liveness signal (spawn-turn completion), NOT a classified report — so
+#    the assignment delivers without the agent running report.sh, and without forwarding turns
+#    (which duplicated report.sh + tripped the DONE gate; see the 02-02-02 tron-03 run). ──
+def t_runner_liveness_online_signal():
     os.environ["TRON_RUNNER_POLL_S"] = "0.2"
-    inst = tempfile.mkdtemp(prefix="tron-inst-")
-    store = os.path.join(inst, "workers")          # workers_dir under the instance
-    os.makedirs(store)
+    store = tempfile.mkdtemp(prefix="tron-online-")
     jobs.configure(store)
     wid = "ENG-D-04"
     wd = os.path.join(store, wid)
     os.makedirs(wd)
-    jobs.send(wd, 1, "spawn.engineer", "come online")
-    jobs.spawn_runner(wid, wd, "sess-fwd", cwd=store, adapter="echo")
-    ok("return path: turn ran", _wait(lambda: _hwm(wd) >= 1))
-    inbox = os.path.join(inst, "worker-inbox.jsonl")
-    ok("return path: turn result forwarded to the instance worker-inbox",
-       _wait(lambda: os.path.isfile(inbox) and _read(inbox).strip() != ""))
-    rec = json.loads(_read(inbox).strip().splitlines()[0])
-    ok("return path: forward carries the turn result text", rec.get("text") == "echo: come online")
-    ok("return path: schema matches _normalize (sender kind+id, no re-wrap)",
-       rec.get("sender", {}).get("kind") == "worker" and rec.get("sender", {}).get("id") == wid)
+    jobs.send(wd, 1, "spawn.engineer", "come online")   # identity-only spawn; no assignment yet
+    jobs.spawn_runner(wid, wd, "sess-online", cwd=store, adapter="echo")
+    ok("online signal: spawn turn completes", _wait(lambda: _hwm(wd) >= 1))
+    # turns>=1 is the exact deterministic fact fsm._sweep reads to deliver the pending assignment
+    ok("online signal: turns>=1 surfaced via jobs.index (deterministic handshake)",
+       _wait(lambda: (jobs.find(wid) or {}).get("turns", 0) >= 1))
     jobs.release(wid)
 
 
 def main():
     for t in (t_no_remote_trunk, t_fsm_threads_remote, t_judge_stdin, t_worker_online,
               t_mailbox_append, t_seq_idempotent, t_runner_e2e, t_runner_resume,
-              t_runner_crash_resume, t_runner_forwards_to_engine):
+              t_runner_crash_resume, t_runner_liveness_online_signal):
         try:
             t()
         except Exception as e:

@@ -141,10 +141,6 @@ class Runner:
     def __init__(self, worker_id, worker_dir, session_id, cwd, runtime, adapter):
         self.worker_id, self.worker_dir = worker_id, worker_dir
         self.session_id = session_id
-        # The instance-level engine inbox (same file report.sh + ctx.worker_inbox use). The
-        # per-worker store lives at <instance>/workers/<id>, so the instance is two levels up.
-        self.worker_inbox = os.path.join(
-            os.path.dirname(os.path.dirname(worker_dir)), "worker-inbox.jsonl")
         self.mailbox = os.path.join(worker_dir, jobs.MAILBOX)
         self.hwm_path = os.path.join(worker_dir, jobs.HWM)
         self.state_path = os.path.join(worker_dir, jobs.RUNNER_STATE)
@@ -182,19 +178,6 @@ class Runner:
         fields["at"] = _now()
         with open(self.timeline, "a") as fh:
             fh.write(json.dumps(fields) + "\n")
-
-    def _forward_to_engine(self, text):
-        """Deterministic worker->engine return path (01-10 follow-up): after a turn finishes,
-        hand its FULL result to the engine by appending one line to the instance worker-inbox —
-        so the engine sees worker output every turn without depending on the agent choosing to
-        run report.sh (the prompt-hope that deadlocked the two-step dispatch). No LLM in the
-        runner; pure code. Append-only open-write-close mirrors report.sh, so it composes with
-        the tick's atomic-rename claim (appends after a claim land in a fresh inbox). Schema is
-        exactly what _normalize expects: text + sender{kind,id}."""
-        rec = {"at": _now(), "text": text,
-               "sender": {"kind": "worker", "id": self.worker_id}}
-        with open(self.worker_inbox, "a") as fh:
-            fh.write(json.dumps(rec) + "\n")
 
     def _pending(self, hwm):
         """New mailbox messages (seq > hwm), in seq order, deduped by seq (at-least-once ->
@@ -257,10 +240,6 @@ class Runner:
                     self._write_hwm(seq)
                     self._timeline(event="turn_done", seq=seq,
                                    text=(result or "")[:200])
-                    # Deterministic return path: hand the full result back to the engine (not the
-                    # 200-char timeline slice). Skip an empty turn — nothing to classify.
-                    if result and result.strip():
-                        self._forward_to_engine(result)
             self._write_state("released")
             self._timeline(event="stopped", text="released by TRON")
             return 0
