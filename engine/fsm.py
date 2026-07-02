@@ -55,6 +55,7 @@ TABLE = [
     ("worker:online",              "_h_worker_online"),  # spawned worker checked in -> emit its pending assignment (01-07)
     ("block:next:build",           None),               # engineer building
     ("block:next:done",            "_h_worker_done"),   # done is a trigger -> DONE gate (§F)
+    ("block:next:recorded",        "_h_worker_recorded"),  # record receipt (tron-07 W6a) — never a close confirmation
     ("review:next:<block>",        "_h_forward_review"),     # not emitted in normal flow (SWITCHBOARD calls directly)
     ("block:<block>:reconciled",   "_h_reconcile"),     # architect re-checked/authored the path ahead (M-05)
     ("worker:await:<block>",       "_h_await"),         # worker paused for go-ahead -> await ladder (R-AWAIT)
@@ -726,8 +727,10 @@ class Engine:
                                      "unknown block id (no canon row)")
             return
         if row and row.get("status") == "done":
-            # ✅ already landed -> this report is the CLOSE clean-confirmation (T7), or the
-            # record receipt (01-11 FX-3: stage record + ✅ on trunk -> content-check + close).
+            # ✅ already landed -> this report is the CLOSE clean-confirmation (T7); at stage
+            # record it still drives the content-check + close (a done-claim with ✅ visible).
+            # The record RECEIPT itself routes separately (worker.recorded -> _h_worker_recorded,
+            # tron-07 W6a) and never lands here.
             g = self.st.gate.get(block)
             if g and g.get("stage") == "close":
                 self._confirm_close(block, g)
@@ -748,6 +751,27 @@ class Engine:
                                   "gate-step-cap", f"advance DONE gate stage '{before}'")
         else:
             g["stall_attempts"] = 0
+        self._emit("pulse")
+
+    def _h_worker_recorded(self, m):
+        # block:next:recorded — the record RECEIPT ("recorded <block>"), split from
+        # block:next:done (tron-07 W6a): the receipt arriving in the same tick that opened
+        # CLOSE was read as the clean-confirmation, ran _confirm_close against a replica the
+        # worker had not begun to clean, and burned a close nudge on a spurious rejection.
+        # The gate reads trunk truth: ✅ at stage record -> advance to CLOSE; anything else
+        # is a receipt to note, never a step.
+        block = m.get("block")
+        if not block:
+            return
+        row = self.st.row(block)
+        if row is None:
+            self.log("flow", f"worker.recorded for unknown block '{block}' -> ignored (no canon row)")
+            return
+        g = self.st.gate.get(block)
+        if g and g.get("stage") == "record" and row.get("status") == "done":
+            self._drive_close(block, g, self._worker_id("engineer", block))
+        else:
+            self.log("flow", f"record receipt for {block} noted (stage={(g or {}).get('stage')})")
         self._emit("pulse")
 
     def _h_release_reviewer(self, m):
@@ -1228,11 +1252,21 @@ class Engine:
                               **{"from": prev, "to": "close", "detail": "✅ on trunk"})
             self.log("flow", f"gate[{block}] -> close (slot held)")
             return
+        # tron-07 W6b: close nudges are idle-keyed, exactly like the gate's idle machinery —
+        # a worker mid-close-out (runner `working`) never accrues. Per-tick accrual capped a
+        # working engineer out of its own paperwork in 74 seconds and force-released without
+        # the cleanliness check.
+        if wid and not jobs.runner_idle(wid):
+            return
         n = g.get("close_nudges", 0)
         if n >= int(self.knobs.get("gate_close_cap", 3)):
             self._force_release_block(block)
             self.st.gate.pop(block, None)
             self.log("flow", f"gate[{block}] close cap -> force release")
+            # tron-07 W6c: a freed slot without a pulse leaves the SWITCHBOARD asleep — the
+            # due reviewer never dispatches and session-end never evaluates. Every
+            # slot-freeing path pulses.
+            self._emit("pulse")
             return
         g["close_nudges"] = n + 1
         if wid:

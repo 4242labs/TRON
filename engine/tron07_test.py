@@ -134,6 +134,61 @@ def t_block_ref_resolution():
     ok("W3 known block id still gates", "01-02-logic" in eng.st.gate)
 
 
+# ── W6: the close stage — receipt vs confirmation, idle-keyed nudges, pulse on release ──
+def t_close_stage_discipline():
+    # W6a: the record receipt routes to its own handler and is never a close confirmation.
+    eng = _eng()
+    row = eng.st.row("A-01")
+    row["status"] = "done"
+    g = eng.st.gate.setdefault("A-01", {"stage": "close", "pr": None})
+    confirmed = []
+    orig_cc = eng._confirm_close
+    eng._confirm_close = lambda b, gg: confirmed.append(b)
+    try:
+        eng._h_worker_recorded({"block": "A-01"})
+        ok("W6a record receipt at CLOSE never runs the clean-confirmation",
+           not confirmed and g.get("close_nudges", 0) == 0, f"confirmed={confirmed}")
+        # ...but the receipt at stage RECORD still drives record -> close.
+        eng2 = _eng()
+        eng2.st.row("A-01")["status"] = "done"
+        g2 = eng2.st.gate.setdefault("A-01", {"stage": "record", "pr": None,
+                                              "record_checked": True})
+        eng2._h_worker_recorded({"block": "A-01"})
+        ok("W6a record receipt at RECORD advances to close", g2.get("stage") == "close")
+        # routing carries the split: worker.recorded fires block:next:recorded.
+        eng2._tq = []
+        eng2._ingest("worker.recorded", {"block": "A-01"}, {"id": "ENG-A-01"})
+        ok("W6a worker.recorded routes to block:next:recorded",
+           any(t == "block:next:recorded" for t, _ in eng2._tq), f"tq={eng2._tq}")
+    finally:
+        eng._confirm_close = orig_cc
+
+    # W6b: a worker mid-close-out (runner working) never accrues close nudges.
+    eng3 = _eng()
+    eng3.st.row("A-01")["status"] = "done"
+    g3 = eng3.st.gate.setdefault("A-01", {"stage": "close", "pr": None})
+    orig_idle = jobs.runner_idle
+    jobs.runner_idle = lambda wid, idx=None: False        # working
+    try:
+        for _ in range(5):
+            eng3._drive_close("A-01", g3, "ENG-A-01")
+        ok("W6b working runner never accrues close nudges (no force-release)",
+           g3.get("close_nudges", 0) == 0 and "A-01" in eng3.st.gate, f"g={g3}")
+        jobs.runner_idle = lambda wid, idx=None: True     # idle -> accrue to the cap
+        eng3._tq = []
+        for _ in range(5):
+            if "A-01" not in eng3.st.gate:
+                break
+            eng3._drive_close("A-01", eng3.st.gate["A-01"], "ENG-A-01")
+        ok("W6b idle runner accrues to the cap and force-releases",
+           "A-01" not in eng3.st.gate)
+        # W6c: the force-release pulses the SWITCHBOARD (reviewer dispatch / session end).
+        ok("W6c force-release pulses the switchboard",
+           any(t == "pulse" for t, _ in eng3._tq), f"tq={eng3._tq}")
+    finally:
+        jobs.runner_idle = orig_idle
+
+
 # ── W4: release + end-session render through emit() (universal slots injected) ──
 def t_release_renders_clean():
     eng = _eng()
@@ -166,7 +221,8 @@ def t_release_renders_clean():
 
 def main():
     for t in (t_gate_holds_at_trunk, t_merge_approval_single_use,
-              t_block_ref_resolution, t_release_renders_clean):
+              t_block_ref_resolution, t_close_stage_discipline,
+              t_release_renders_clean):
         t()
     fails = [(n, d) for n, c, d in _results if not c]
     for n, c, d in _results:

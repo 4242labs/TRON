@@ -348,8 +348,10 @@ def t_confirm_close_gate():
 def t_tag_sweep():
     routing = util.load_yaml(os.path.join(ROOT, "routing.yaml"))
     tags = routing.get("tags", {})
+    # tron-07 W6a: the receipt has its OWN row now (block:next:recorded) — same tag, its
+    # route split from the build claim so it can never read as a close confirmation.
     ok("AC-7 routing.yaml knows worker.recorded",
-       tags.get("worker.recorded") == {"trigger": "block:next:done"})
+       tags.get("worker.recorded") == {"trigger": "block:next:recorded"})
     ok("AC-7 lint CANON_TAGS knows worker.recorded", "worker.recorded" in lint.CANON_TAGS)
     with open(os.path.join(ROOT, "tron.md")) as fh:
         ok("AC-7 tron.md catalog documents worker.recorded", "worker.recorded" in fh.read())
