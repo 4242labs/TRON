@@ -159,12 +159,15 @@ def timeline_tail(worker_id, n=20, idx=None):
     return "\n".join(b for b in bits if b)
 
 
-def activity_signals(worker_id, worktree=None, since_iso=None, idx=None):
+def activity_signals(worker_id, since_iso=None, idx=None):
     """Liveness signals for the engine's deterministic stall sweep (contracts §5).
 
-    Any positive signal => the worker is alive. The runner refreshes runner.json every
-    poll/turn, so its `updated_at` freshness is the primary signal; a dirty/growing
-    worktree is a secondary one. Stall detection stays engine-side — never asks the LLM.
+    The runner's own record is the source: `updated_at` freshness (stamped on every state
+    transition and idle poll) yields the silence delta, and its advance past the last sweep
+    is the positive-activity signal. S-5/F-6 (tron-07 review cycle): the old worktree-scan
+    branch (git-status + os.walk per worker per tick) was never fed by the sweep and is the
+    wrong cost at worker_count > 1 — deleted; the runner-declared turn deadline (A-4) owns
+    what it was for. Stall detection stays engine-side — never asks the LLM.
     """
     rec = find(worker_id, idx) or {}
     updated = _parse_iso(rec.get("updated_at"))
@@ -177,40 +180,15 @@ def activity_signals(worker_id, worktree=None, since_iso=None, idx=None):
         if since:
             grew = updated > since
 
-    dirty = False
-    mtime_grew = False
-    if worktree and os.path.isdir(worktree):
-        try:
-            r = subprocess.run(["git", "-C", worktree, "status", "--porcelain"],
-                               capture_output=True, text=True, timeout=10)
-            dirty = bool(r.stdout.strip())
-        except (subprocess.SubprocessError, OSError):
-            pass
-        if since:
-            cutoff = since.timestamp()
-            for root, _, files in os.walk(worktree):
-                if ".git" in root:
-                    continue
-                for f in files:
-                    try:
-                        if os.path.getmtime(os.path.join(root, f)) > cutoff:
-                            mtime_grew = True
-                            break
-                    except OSError:
-                        continue
-                if mtime_grew:
-                    break
-
     return {
         "last_activity_delta_s": last_delta,
-        "worktree_dirty": dirty,
-        "mtime_grew": mtime_grew or grew,
+        "record_advanced": grew,
     }
 
 
 def has_positive_activity(sig):
     """Pre-filter: True => alive, short-circuit before any LLM stall call."""
-    return bool(sig.get("worktree_dirty") or sig.get("mtime_grew"))
+    return bool(sig.get("record_advanced"))
 
 
 def runner_idle(worker_id, idx=None):
@@ -278,6 +256,21 @@ def spawn_runner(worker_id, worker_dir, session_id, cwd=None,
             return {"session_id": session_id, "worker_id": worker_id}
         time.sleep(0.25)
     return {"session_id": session_id, "worker_id": worker_id}   # runner may still be coming up; sweep confirms
+
+
+def kill_hard(worker_id, idx=None):
+    """SIGKILL a runner presumed suspended (R-2(ii)): past its own turn deadline, SIGTERM
+    (release) can't be trusted — a SIGSTOPped process ignores it. ONLY the past-ceiling
+    escalation path calls this; ordinary releases stay graceful."""
+    rec = find(worker_id, idx)
+    pid = (rec or {}).get("pid")
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), signal.SIGKILL)
+        return True
+    except (ProcessLookupError, PermissionError, ValueError, TypeError):
+        return False
 
 
 def release(worker_id, idx=None):

@@ -169,6 +169,10 @@ class Runner:
         rec = {"worker_id": self.worker_id, "session_id": self.session_id,
                "pid": os.getpid(), "state": state, "turns": self.turns,
                "updated_at": _now()}
+        if state == "working":
+            # A-4: the runner DECLARES its own turn deadline — the engine's sweep reads it
+            # instead of mirroring env, so per-role/remote ceilings never desynchronize.
+            rec["deadline"] = time.time() + TURN_TIMEOUT_S
         tmp = self.state_path + ".tmp"
         with open(tmp, "w") as fh:
             json.dump(rec, fh)

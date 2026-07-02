@@ -133,6 +133,8 @@ def induce_ingest_drop(ctx):
         raise ValueError("simulated classify explosion")
 
     eng._classify = boom
+    eng.st.workers.append({"id": "W-3", "role": "engineer", "block": "A-01",
+                           "session_id": "dry", "status": "working"})   # on-roster (R-2(i))
     util.append_jsonl(ctx.worker_inbox, {"text": "anything", "sender": {"kind": "worker", "id": "W-3"}})
     eng.tick()                                          # the per-message guard records ingest-drop
     return [r for r in failures(ctx) if r.get("fclass") == "ingest-drop"]
@@ -142,11 +144,13 @@ def induce_gate_stuck(ctx):
     eng = engine(ctx)
     # A block whose PR merged (gone) but never re-validated on trunk -> escalate (no silent
     # stuck). Stage 'trunk' HOLDS (tron-07 W1 monotonic ladder); the no-silent-stuck owner
-    # there is the idle machinery: the dry runner reads idle, so gate_idle_cap ticks accrue
-    # -> _gate_giveup emits the gate-stuck failure record.
-    eng.st.gate["A-01"] = {"pr": 11, "trunk_nudges": 99, "stage": "trunk"}
-    for _ in range(int(eng.knobs.get("gate_idle_cap", 3))):
-        eng._drive_gate("A-01", eng.st.gate["A-01"])
+    # is the WALL-CLOCK idle machinery (S-1): fake the clock past gate_idle_cap x ceiling.
+    eng.st.gate["A-01"] = {"pr": 11, "stage": "trunk"}
+    clock = {"t": 1000.0}
+    eng._now_s = lambda: clock["t"]
+    eng._drive_gate("A-01", eng.st.gate["A-01"])          # idle_since anchored
+    clock["t"] += eng._pace("gate_idle_cap", 3) + 1
+    eng._drive_gate("A-01", eng.st.gate["A-01"])          # past the cap -> giveup
     return [r for r in failures(ctx) if r.get("fclass") == "gate-stuck"]
 
 
@@ -196,7 +200,7 @@ def t_per_class():
         "refresh-fail": lambda r: "simulated network down" in (r.get("cause") or ""),
         "classify-fail": lambda r: "garble" in str((r.get("inputs") or {}).get("text", "")),
         "ingest-drop": lambda r: "simulated classify explosion" in (r.get("cause") or ""),
-        "gate-stuck": lambda r: "nudges" in (r.get("inputs") or {}) and bool(r.get("cause")),
+        "gate-stuck": lambda r: "idle_since" in (r.get("inputs") or {}) and bool(r.get("cause")),
         "dispatch-fail": lambda r: "simulated spawn failure" in (r.get("cause") or ""),
         "crash": lambda r: "simulated tick crash" in (r.get("cause") or ""),
     }

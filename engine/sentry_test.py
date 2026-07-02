@@ -170,14 +170,13 @@ def t_no_silent_stuck():
                            "session_id": "dry", "status": "working"})
     g = eng.st.gate.setdefault("A-01", {"stage": "merge", "pr": 7})
     eng.st.data["open_prs"] = {}        # PR gone, block not ✅ -> trunk re-validate
-    cap = int(eng.knobs.get("gate_post_merge_cap", 3))
-    nudged = False
-    for _ in range(cap):
-        eng._tq = []
-        eng._drive_gate("A-01", eng.st.gate.get("A-01", g))
-        if eng.st.gate.get("A-01", {}).get("stage") == "trunk":
-            nudged = True
-    ok("AC-8 trunk re-validate keeps re-nudging (not silent)", nudged)
+    clock = {"t": 1000.0}               # S-1: the wall-clock idle machinery owns this stall
+    eng._now_s = lambda: clock["t"]
+    eng._drive_gate("A-01", eng.st.gate.get("A-01", g))   # merge -> trunk (PR gone)
+    ok("AC-8 trunk re-validate keeps re-nudging (not silent)",
+       eng.st.gate.get("A-01", {}).get("stage") == "trunk")
+    eng._drive_gate("A-01", eng.st.gate.get("A-01", g))   # anchor idle_since (W1 hold)
+    clock["t"] += eng._pace("gate_idle_cap", 3) + 1
     eng._tq = []
     eng._drive_gate("A-01", eng.st.gate.get("A-01", g))   # cap exceeded -> escalate
     walled = any(t.startswith("wall:raised:A-01") for t, _ in eng._tq)

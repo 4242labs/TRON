@@ -137,7 +137,7 @@ def run():
         quiet_tick(ctx)
         ok("A-02 lands ✅ -> CLOSE; cadence reviewer comes due (PULL)",
            pipe(ctx)["A-02"] == "done" and workers(ctx, "reviewer"))
-        report(ctx, "A-02 cleaned up", "worker.done", {"block": "A-02"})   # release ENG-A-02
+        report(ctx, "clean A-02: worktree gone, branch gone, local synced", "worker.done", {"block": "A-02"})   # release ENG-A-02
 
         # Reviewer DONE-REVIEW gate (T5): the first hand-back challenges full coverage (held);
         # the attestation releases it + queues the architect remediation.

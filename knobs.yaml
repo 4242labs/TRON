@@ -21,11 +21,22 @@ knobs:
   # DONE-gate liveness caps — ticks stalled at the same stage before escalating (MG-01,
   # rewired by 01-11: idle = the runner's own `state: idle`, a deterministic file read —
   # heartbeat freshness can't mask it). Read by name via knobs.get(key, default).
-  gate_idle_cap: 3         # idle ticks at one stage before the gate escalates (raise-and-defer)
-  gate_nudge_after: 2      # idle ticks before the pending stage prompt is re-sent once (01-11);
-                           # a deliberate duplicate on a fresh mailbox seq — keep < gate_idle_cap
-  gate_post_merge_cap: 3   # trunk re-validate stage specifically (merged, not yet ✅)
-  gate_close_cap: 3        # close-confirm stage specifically (✅ landed, awaiting clean exit)
+  # ── gate pacing (S-1, tron-07): ONE wall-clock law. These are MULTIPLIERS of
+  # wake_ceiling_sec — "N ticks' worth of time" — measured against continuous runner-idle,
+  # never tick counts (event bursts and event-starved timers both lie about time).
+  # Derived detection latencies (R-8) at the default wake_ceiling_sec 30:
+  #   re-nudge an idle worker after  gate_nudge_after x 30s = 60s of idle;
+  #   escalate the gate after        gate_idle_cap   x 30s = 90s of idle;
+  #   force-release a silent close   gate_close_cap  x 30s = 90s of idle.
+  # A WORKING runner never accrues — its own turn deadline (TRON_TURN_TIMEOUT_S, runner-
+  # declared) bounds long turns; past it the sweep escalates + hard-kills after a grace.
+  # NOTE (S-3 interim, rider 5): until the unified paperwork-lander block lands,
+  # worker_count > 1 close-outs may race on landing their parked docs — run multi-worker
+  # sessions only after that block.
+  gate_idle_cap: 3         # x wake_ceiling_sec of continuous idle at one stage -> escalate
+  gate_nudge_after: 2      # x wake_ceiling_sec of continuous idle -> re-send the stage prompt once
+                           # (fresh mailbox seq); keep < gate_idle_cap
+  gate_close_cap: 3        # x wake_ceiling_sec of idle at close -> force release
   # WAKE pulse-timing bounds (the daemon reads these, 01-04). Fixed knobs: edit here,
   # never asked at start, never changed by a runtime command. cooldown <= ceiling.
   wake_cooldown_sec: 5     # min gap between ticks — floor (debounce a chatty fleet)

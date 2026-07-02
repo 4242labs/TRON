@@ -313,6 +313,62 @@ def _reply_contract(ctx):
     return [Result("L19 every PMT carries the reply channel", not d19, "; ".join(d19))]
 
 
+def _reply_prefixes(ctx):
+    # L20 — prescribed-prefix sync (S-4, tron-07 review cycle): each PMT's `reply_prefix`
+    # (the registry is the single source) must appear in the PMT body AND in tron.md's
+    # classify context, so a copy edit can't silently break the reply contract. The body may
+    # carry the {block} slot literally; tron.md documents it as `<block>` — both accepted.
+    doc = util.load_yaml(ctx.prompts_registry) if os.path.exists(ctx.prompts_registry) else {}
+    reg = (doc or {}).get("prompts", {})
+    tron_md = ""
+    if os.path.exists(ctx.tron_md):
+        with open(ctx.tron_md, encoding="utf-8") as fh:
+            tron_md = fh.read()
+    bad = []
+    for pid, spec in reg.items():
+        pfx = (spec or {}).get("reply_prefix")
+        if not pfx:
+            continue
+        f = (spec or {}).get("file")
+        path = os.path.join(ctx.prompts_dir, f) if f else None
+        body = ""
+        if path and os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+        # The PMT body must carry the prefix VERBATIM (slots literal: `done {block} — local:`).
+        if pfx not in body:
+            bad.append(f"{pid}: body lacks prescribed prefix '{pfx}'")
+        # tron.md documents slots as <block> and may abbreviate the shared head — require the
+        # distinctive tail after the slot (`— local:`), else the head itself.
+        tail = pfx.split("}")[-1].strip() if "}" in pfx else pfx
+        probe = tail or pfx.split("{")[0].strip()
+        if probe and probe not in tron_md:
+            bad.append(f"{pid}: tron.md classify context lacks '{probe}'")
+    return [Result("L20 prescribed reply prefixes in sync (registry -> PMT + tron.md)",
+                   not bad, "; ".join(bad))]
+
+
+def _emit_only_renders(ctx):
+    # L21 — every worker-facing render goes through emit()'s slot injection (W4/S-4): a bare
+    # `renderer.render(` outside emit() is the crash class that broke `stop --force` and the
+    # reviewer release. Source check over the engine's own fsm.py; the sole legal call site
+    # is inside `def emit(`.
+    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fsm.py")
+    bad = []
+    if os.path.exists(src_path):
+        with open(src_path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+        in_emit = False
+        for i, ln in enumerate(lines, 1):
+            stripped = ln.strip()
+            if stripped.startswith("def "):
+                in_emit = stripped.startswith("def emit(")
+            if "renderer.render(" in ln and not in_emit:
+                bad.append(f"fsm.py:{i}")
+    return [Result("L21 worker renders only through emit()", not bad,
+                   "bare renderer.render at: " + ", ".join(bad))]
+
+
 # ── VERSION rule (M-06): the instance's stamped tron_version vs its own copied
 # canon VERSION — the two are written from the same source at every seed, so any
 # gap means the instance was patched or partially re-seeded, not fully. A canon
@@ -342,5 +398,6 @@ def run(ctx, project=None):
     if project is None:
         project = ctx.load_project()
     results = (_canon(routing) + _composition(comp, project) + _prompts(ctx)
-               + _version(ctx, project) + _reply_contract(ctx))
+               + _version(ctx, project) + _reply_contract(ctx)
+               + _reply_prefixes(ctx) + _emit_only_renders(ctx))
     return all(x.ok for x in results), results
