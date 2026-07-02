@@ -220,7 +220,11 @@ def land_docs(repo_root, branch, allowlist, main_branch="main", dry=False,
     files = [ln.strip() for ln in out.splitlines() if ln.strip()]
     if not files:
         # Nothing beyond trunk (or already landed): delete the empty branch and be done.
-        _run(["git", "-C", repo_root, "branch", "-d", branch])
+        rc, _, derr = _run(["git", "-C", repo_root, "branch", "-d", branch])
+        if rc != 0:
+            # W10 rider: a worktree still holding the branch blocks -d — the ref must
+            # not vanish from every net; name it (the residue sweep owns worktrees).
+            return "landed", f"no changes beyond trunk; ref survives: {derr.strip()}"
         return "landed", "no changes beyond trunk"
     exact_allows = [e for e in (allowlist or []) if not e.strip().endswith("/")]
     offenders = []
@@ -243,8 +247,9 @@ def land_docs(repo_root, branch, allowlist, main_branch="main", dry=False,
     if not okm:
         return "non-ff", err.strip()
     sha = head_sha(repo_root)
-    _run(["git", "-C", repo_root, "branch", "-d", branch])
-    return "landed", f"{len(files)} file(s) @ {sha[:7]}"
+    rc, _, derr = _run(["git", "-C", repo_root, "branch", "-d", branch])
+    note = f"; ref survives: {derr.strip()}" if rc != 0 else ""
+    return "landed", f"{len(files)} file(s) @ {sha[:7]}{note}"
 
 
 def _lines_scoped_ok(repo_root, branch, path, token, main_branch="main"):
@@ -315,6 +320,30 @@ def replica_clean(repo_root, branch, main_branch="main", dry=False):
             elif ln.startswith("branch ") and ln.split(" ", 1)[1] == ref:
                 leftovers.append(f"leftover worktree on {branch}: {tree}")
     return (not leftovers), "; ".join(leftovers)
+
+
+def list_worktrees(repo_root, dry=False):
+    """All secondary worktrees: [(path, branch)] excluding the root checkout itself.
+    D1 residue sweep: at session end every worker is gone, so ANY remaining worktree
+    is residue to name (a worktree also blocks the lander's branch cleanup — `git
+    branch -d` refuses a checked-out branch, leaving an orphan ref)."""
+    if dry or not repo_root:
+        return []
+    rc, out, _ = _run(["git", "-C", repo_root, "worktree", "list", "--porcelain"])
+    if rc != 0:
+        return []
+    trees, cur = [], {}
+    for ln in out.splitlines() + [""]:
+        if ln.startswith("worktree "):
+            cur = {"path": ln.split(" ", 1)[1]}
+        elif ln.startswith("branch "):
+            cur["branch"] = ln.split(" ", 1)[1].replace("refs/heads/", "")
+        elif not ln and cur:
+            trees.append(cur)
+            cur = {}
+    root_real = os.path.realpath(repo_root)
+    return [(t.get("path"), t.get("branch")) for t in trees
+            if os.path.realpath(t.get("path", "")) != root_real]
 
 
 def _rollup(checks):

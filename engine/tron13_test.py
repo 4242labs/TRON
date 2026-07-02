@@ -646,6 +646,143 @@ def t_review_landing_cap_leaves_named_residue():
         jobs.runner_idle = orig_idle
 
 
+# ── W10: `branch` is a modifier, never a terminal verb ──
+def _mock_classify(result_tag):
+    import fsm as fsm_mod
+    orig = fsm_mod.judge.call
+    calls = []
+
+    def fake(tool, payload, ctx, retries, elog=None):
+        calls.append(payload)
+        return True, {"tag": result_tag, "slots": {}}, []
+    fsm_mod.judge.call = fake
+    return calls, (lambda: setattr(fsm_mod.judge, "call", orig))
+
+
+def t_branch_verb_falls_through():
+    # Dual-act reply (declare + complete): the declaration records from the slot AND the
+    # text still classifies — neither act is lost (the attempt-1 architect deadlock).
+    eng = _eng()
+    eng.st.workers.append({"id": "ARCH-PERSIST", "role": "architect",
+                           "session_id": "dry", "status": "busy"})
+    calls, restore = _mock_classify("architect.reconciled")
+    try:
+        tag, slots = eng._classify({"text": "forward review complete — 01-03 ready",
+                                    "tag": "branch",
+                                    "slots": {"branch": "docs/fwd-01-03"},
+                                    "sender": {"kind": "worker", "id": "ARCH-PERSIST"}})
+        arch = eng._architect()
+        ok("W10 the declaration records from the slot",
+           arch.get("pending_landings") == ["docs/fwd-01-03"], f"arch={arch}")
+        ok("W10 the text still classifies (completion act survives)",
+           tag == "architect.reconciled" and len(calls) == 1,
+           f"tag={tag} calls={len(calls)}")
+    finally:
+        restore()
+
+
+def t_branch_dedup_invariant():
+    # Peer rider: dedup is THE load-bearing invariant — hoist-record + classify re-yield
+    # + a verbatim repeat must produce exactly ONE FIFO entry.
+    eng = _eng()
+    eng.st.workers.append({"id": "REV-code", "role": "reviewer", "rtype": "code",
+                           "block": "review:code", "session_id": "dry",
+                           "status": "working"})
+    calls, restore = _mock_classify("worker.branch")
+    try:
+        m = {"text": "parked my findings on docs/rev-1", "tag": "branch",
+             "slots": {"branch": "docs/rev-1"},
+             "sender": {"kind": "worker", "id": "REV-code"}}
+        for _ in range(2):                                # verbatim repeat
+            tag, slots = eng._classify(m)
+            eng._ingest(tag, slots, m["sender"])          # classify re-yields worker.branch
+        rev = next(w for w in eng.st.workers if w.get("id") == "REV-code")
+        ok("W10 hoist + classify + repeat -> exactly one FIFO entry",
+           rev.get("pending_landings") == ["docs/rev-1"], f"rev={rev}")
+    finally:
+        restore()
+
+
+def t_slot_merge_data_over_prose():
+    # Peer required change: structured slots survive INTO the classify result — a terse
+    # declaration whose prose classify can't parse still carries its branch as data.
+    eng = _eng()
+    eng.st.workers.append({"id": "REV-code", "role": "reviewer", "rtype": "code",
+                           "block": "review:code", "session_id": "dry",
+                           "status": "working"})
+    calls, restore = _mock_classify("worker.progress")    # model sees nothing useful
+    try:
+        tag, slots = eng._classify({"text": "^", "tag": "branch",
+                                    "slots": {"branch": "docs/terse"},
+                                    "sender": {"kind": "worker", "id": "REV-code"}})
+        rev = next(w for w in eng.st.workers if w.get("id") == "REV-code")
+        ok("W10 terse declaration records via the hoist regardless of classify",
+           rev.get("pending_landings") == ["docs/terse"], f"rev={rev}")
+        ok("W10 structured slots merge over the model's slots",
+           slots.get("branch") == "docs/terse", f"slots={slots}")
+    finally:
+        restore()
+
+
+def t_branch_verb_without_slot_never_silent():
+    eng = _eng()
+    eng.st.workers.append({"id": "ARCH-PERSIST", "role": "architect",
+                           "session_id": "dry", "status": "busy"})
+    calls, restore = _mock_classify("worker.progress")
+    try:
+        tag, _ = eng._classify({"text": "made a branch, named it in prose only",
+                                "tag": "branch",
+                                "sender": {"kind": "worker", "id": "ARCH-PERSIST"}})
+        ok("W10 missing --branch records nothing but still classifies",
+           not eng._architect().get("pending_landings") and len(calls) == 1
+           and tag == "worker.progress", f"tag={tag}")
+    finally:
+        restore()
+
+
+def t_branch_verb_engineer_keeps_admit_path():
+    # The engineer's block comes from its ASSIGNMENT via _admit — the direct record
+    # must not bypass that (FS-3 guard); the classify path owns engineer declarations.
+    eng = _eng()
+    calls, restore = _mock_classify("worker.branch")
+    try:
+        eng._classify({"text": "branch named", "tag": "branch",
+                       "slots": {"branch": "fix/own-name"},
+                       "sender": {"kind": "worker", "id": "ENG-A-01"}})
+        ok("W10 an engineer's structured declaration defers to the classify path",
+           "fix/own-name" not in (eng.st.branches or {}).values()
+           and not any(w.get("pending_landings") for w in eng.st.workers),
+           f"branches={eng.st.branches}")
+    finally:
+        restore()
+
+
+def t_worktree_residue_named():
+    d = _mkrepo()
+    _git(d, "worktree", "add", os.path.join(d, "worktrees", "wt-a"), "-b", "docs/wt-a")
+    trees = trunk.list_worktrees(d)
+    ok("W10 leftover worktrees are enumerable",
+       len(trees) == 1 and trees[0][1] == "docs/wt-a", f"trees={trees}")
+
+
+def t_lander_deletes_already_merged_branch():
+    # The empty-diff path (branch fully on trunk) still deletes the branch — a landed
+    # declaration never leaves an orphan ref behind.
+    d = _mkrepo()
+
+    def w():
+        with open(os.path.join(d, "meta", "logs", "log.md"), "w") as fh:
+            fh.write("log\n")
+    _on_branch(d, "docs/dup", w)
+    code, _ = trunk.land_docs(d, "docs/dup", ALLOW, "main", False, denylist=DENY)
+    ok("W10 first landing lands", code == "landed")
+    _git(d, "branch", "docs/dup")                       # re-declare the same (merged) ref
+    code, detail = trunk.land_docs(d, "docs/dup", ALLOW, "main", False, denylist=DENY)
+    ok("W10 an already-merged declaration lands as no-op and deletes the ref",
+       code == "landed" and not trunk.branch_exists(d, "docs/dup"),
+       f"{code}: {detail}")
+
+
 # ── W9: trunk truth is the PINNED COMMITTED tree, never the working tree ──
 def t_snapshot_reads_pinned_tree():
     d = _mkrepo()
@@ -756,6 +893,13 @@ TESTS = [
     t_release_preserves_unlanded_paperwork,
     t_architect_fifo_never_deadlocks,
     t_snapshot_reads_pinned_tree,
+    t_branch_verb_falls_through,
+    t_branch_dedup_invariant,
+    t_slot_merge_data_over_prose,
+    t_branch_verb_without_slot_never_silent,
+    t_branch_verb_engineer_keeps_admit_path,
+    t_worktree_residue_named,
+    t_lander_deletes_already_merged_branch,
 ]
 
 
