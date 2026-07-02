@@ -93,6 +93,15 @@ def branch_merged(repo_root, branch, main_branch="main", dry=False):
     return rc == 0
 
 
+def tip_sha(repo_root, branch, dry=False):
+    """The branch's current tip sha, or '' (dry / unresolvable). A-3: the merge grant binds
+    the exact sha the operator saw at park — this is how park and execution compare it."""
+    if dry or not repo_root or not branch:
+        return ""
+    rc, out, _ = _run(["git", "-C", repo_root, "rev-parse", "--verify", "--quiet", branch])
+    return out.strip() if rc == 0 else ""
+
+
 def branch_exists(repo_root, branch, dry=False):
     """True iff `branch` resolves to a real commit in this repo. The local/no-remote gate needs
     this: with no PR to prove a branch was pushed, the engine merges the block's branch (reported

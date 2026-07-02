@@ -117,7 +117,8 @@ def run():
                 or (next((w for w in st.get("active_workers", []) if w.get("role") == "architect"),
                          {}).get("current_job") or {}).get("block") == "A-02"))
 
-        report(ctx, "A-01 cleaned up", "worker.done", {"block": "A-01"})   # CLOSE clean-confirm (T7)
+        # tron-07 peer risk 2: the confirmation must open `clean` (PMT-CLOSE prescribes it).
+        report(ctx, "clean A-01: worktree gone, branch gone, local synced", "worker.done", {"block": "A-01"})   # CLOSE clean-confirm (T7)
         st = util.load_yaml(ctx.state)
         ok("CLOSE confirmed -> engineer released, gate cleared",
            not any(w.get("block") == "A-01" for w in workers(ctx, "engineer"))
@@ -136,7 +137,7 @@ def run():
         quiet_tick(ctx)
         ok("A-02 lands ✅ -> CLOSE; cadence reviewer comes due (PULL)",
            pipe(ctx)["A-02"] == "done" and workers(ctx, "reviewer"))
-        report(ctx, "A-02 cleaned up", "worker.done", {"block": "A-02"})   # release ENG-A-02
+        report(ctx, "clean A-02: worktree gone, branch gone, local synced", "worker.done", {"block": "A-02"})   # release ENG-A-02
 
         # Reviewer DONE-REVIEW gate (T5): the first hand-back challenges full coverage (held);
         # the attestation releases it + queues the architect remediation.

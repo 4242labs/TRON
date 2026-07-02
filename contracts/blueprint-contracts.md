@@ -124,6 +124,7 @@ genuinely new *shape* of control (beyond the grammar) is the only thing that is 
 | Tag | Meaning | Maps to |
 |:--|:--|:--|
 | `worker.done` | block built | `block:next:done` |
+| `worker.recorded` | record receipt (✅ commit landed) — never a close confirmation | `block:next:recorded` |
 | `worker.wall` | hit a wall needing the operator | `wall:raised:<block>` |
 | `worker.review_done` | reviewer delivered its log | `review:<type>:done` |
 | `worker.await_confirm` | pause mid-block for go-ahead | `worker:await:<block>` |
