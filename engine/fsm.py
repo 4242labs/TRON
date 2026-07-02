@@ -1774,7 +1774,6 @@ class Engine:
         "done":        ("worker.done", {}),
         "recorded":    ("worker.recorded", {}),
         "wall":        ("worker.wall", {}),
-        "branch":      ("worker.branch", {}),
         "review-done": ("worker.review_done", {}),
         "clean":       ("worker.done", {"clean_confirm": True}),
     }
@@ -1783,12 +1782,27 @@ class Engine:
         """Resolve a structured report (A-2) without the model. Returns (tag, slots) or
         (None, None) when the line carries no verb (-> classify). An unknown verb is
         recorded (with its sender — forensics at scale) and DROPPED: never a trigger,
-        never a guess; the gate's own pacing re-prompts the worker."""
+        never a guess; the gate's own pacing re-prompts the worker.
+        W10 (tron-13 attempt 1): `branch` is NOT a terminal verb — a branch declaration
+        is a MODIFIER that rides other work (the architect's one-message
+        declare-and-complete deadlocked its own job queue when `branch` swallowed the
+        completion act). Record the declaration from the slot deterministically
+        (non-engineer FIFO; engineers keep the classify+_admit path so the assignment
+        backfills the block), then fall the TEXT through to classify: a dual-act reply
+        loses neither act, a pure declaration re-classifies to worker.branch
+        (idempotent), and a missing --branch never silently no-ops."""
         verb = str(msg.get("tag") or "").strip().lower()
         if not verb:
             return None, None
-        hit = self.REPORT_VERBS.get(verb)
         sender = msg.get("sender") or {}
+        if verb == "branch":
+            # The declaration itself was hoisted to _classify (any verb records it);
+            # nothing terminal remains — the text classifies.
+            if not (msg.get("slots") or {}).get("branch"):
+                self.log("flow", f"--tag branch without --branch from "
+                                 f"{sender.get('id')} -> text classifies")
+            return None, None
+        hit = self.REPORT_VERBS.get(verb)
         if not hit:
             self.log("flow", f"unknown structured verb '{verb}' from "
                              f"{sender.get('id')} -> dropped")
@@ -2162,6 +2176,15 @@ class Engine:
     def _classify(self, msg):
         # A-2 (tron-13 D2): a structured report resolves deterministically — the model is
         # never consulted for a line that already carries its verb as data.
+        # W10 (co-signed shape): `--branch` is a MODIFIER honored on ANY report — the
+        # reply_line promises it, so it records HERE, verb or no verb (non-engineers ->
+        # the FIFO; an engineer's declaration keeps the classify+_admit path so its
+        # assignment pins the block). Structured slots then MERGE OVER the classify
+        # result (data over prose) so a terse declaration can never silently no-op.
+        data_slots = dict(msg.get("slots") or {})
+        if data_slots.get("branch"):
+            self._record_branch({"branch": data_slots["branch"],
+                                 "worker_id": (msg.get("sender") or {}).get("id")})
         stag, sslots = self._structured(msg)
         if stag == "drop":
             return "drop", {}
@@ -2189,7 +2212,7 @@ class Engine:
         tag = out["tag"]
         if tag == "unclassified":                         # the model itself found no matching tag (T3)
             self.events.unclassified(raw, "model returned unclassified (no tag matched)", sender=sender)
-        return tag, out.get("slots", {})
+        return tag, {**out.get("slots", {}), **data_slots}   # W10: data over prose
 
     # ── lifecycle ──
     def _reset_session_runtime(self):
@@ -2376,6 +2399,8 @@ class Engine:
         for block, br in (self.st.branches or {}).items():
             if trunk.branch_exists(self.paths["root"], br, self.dry):
                 residue.append(f"{block}: branch {br} still exists")
+        for path, br in trunk.list_worktrees(self.paths["root"], self.dry):
+            residue.append(f"leftover worktree {path} (on {br or '?'})")
         if not residue:
             return
         detail = "; ".join(residue)
