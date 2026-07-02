@@ -214,6 +214,44 @@ def t_event_ticks_never_accrue_idle():
         jobs.runner_idle = orig_idle
 
 
+# ── W8: the silence sweep never kills a working turn (but keeps its backstop) ──
+def t_sweep_spares_working_turns():
+    import fsm as fsm_mod
+
+    def sweep_with(rstate, delta, alive=True):
+        eng = _eng()
+        eng.dry = False
+        w = eng.st.workers[0]
+        w["session_id"], w["status"], w["pinged_at"] = "s1", "working", "old"
+        orig = (jobs.index, jobs.is_alive, jobs.find,
+                jobs.activity_signals, jobs.has_positive_activity)
+        jobs.index = lambda: {}
+        jobs.is_alive = lambda wid, idx=None: alive
+        jobs.find = lambda wid, idx=None: {"state": rstate, "turns": 1}
+        jobs.activity_signals = lambda wid, since_iso=None, idx=None: {
+            "last_activity_delta_s": delta}
+        jobs.has_positive_activity = lambda sig: False
+        eng._tq = []
+        try:
+            eng._sweep()
+        finally:
+            (jobs.index, jobs.is_alive, jobs.find,
+             jobs.activity_signals, jobs.has_positive_activity) = orig
+            eng.dry = True
+        stalled = any(t == "worker:stalled" for t, _ in eng._tq)
+        return stalled, w
+
+    stalled, w = sweep_with("working", 600)                 # mid-turn, young
+    ok("W8 working turn younger than the ceiling is never stalled",
+       not stalled and "pinged_at" not in w, f"stalled={stalled} w={w.get('pinged_at')}")
+    stalled, _ = sweep_with("working", fsm_mod.TURN_CEILING_S + 200)
+    ok("W8 working past the runner ceiling escalates (suspended-runner backstop)", stalled)
+    stalled, _ = sweep_with("working", 600, alive=False)    # crashed: stale working file
+    ok("W8 dead runner with a stale working state still hits the stalled path", stalled)
+    stalled, _ = sweep_with("idle", 600)                    # idle silence keeps escalating
+    ok("W8 idle silence past the escalate threshold still stalls", stalled)
+
+
 # ── W4: release + end-session render through emit() (universal slots injected) ──
 def t_release_renders_clean():
     eng = _eng()
@@ -247,7 +285,8 @@ def t_release_renders_clean():
 def main():
     for t in (t_gate_holds_at_trunk, t_merge_approval_single_use,
               t_block_ref_resolution, t_close_stage_discipline,
-              t_event_ticks_never_accrue_idle, t_release_renders_clean):
+              t_event_ticks_never_accrue_idle, t_sweep_spares_working_turns,
+              t_release_renders_clean):
         t()
     fails = [(n, d) for n, c, d in _results if not c]
     for n, c, d in _results:

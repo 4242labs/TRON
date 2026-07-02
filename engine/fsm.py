@@ -70,6 +70,10 @@ TABLE = [
 ]
 
 OPEN_STATUSES = ("to-do", "in-progress")   # work that still counts as not-done
+# The runner's single-turn wall-clock ceiling — the SAME env the spawned runner reads
+# (worker_runner.TURN_TIMEOUT_S), so the sweep's working-turn exemption (tron-07 W8) and
+# the runner's own hang protection share one clock.
+TURN_CEILING_S = float(os.environ.get("TRON_TURN_TIMEOUT_S", "1800"))
 
 
 class Engine:
@@ -1589,9 +1593,23 @@ class Engine:
             if w.get("status") in ("working", "idle") and rstate in ("working", "idle"):
                 w["status"] = rstate
             sig = jobs.activity_signals(w.get("id"), since_iso=last, idx=idx)
+            delta = sig.get("last_activity_delta_s")
+            # tron-07 W8: a runner mid-turn is WORKING, not silent — it writes `working`
+            # once at turn start and nothing more until the turn ends, so to the silence
+            # machinery a long turn is indistinguishable from death (an 8-minute review
+            # turn was stall-recovered at 8m05s -> infinite reviewer churn). Exempt a
+            # working runner while its turn is younger than the runner's own ceiling
+            # (+grace): updated_at is stamped at turn start, so delta IS turn age. Past
+            # the ceiling the runner is presumed suspended (SIGSTOP/host freeze — its own
+            # TURN_TIMEOUT_S loop isn't executing) and the escalation below remains the
+            # deterministic backstop (no-silent-stuck). A wedged-but-running turn ends via
+            # the adapter's TimeoutError -> state `error` -> the dead path above.
+            if (rstate == "working" and delta is not None
+                    and delta <= TURN_CEILING_S + 120):
+                w.pop("pinged_at", None)      # a working turn ends the silence episode
+                continue
             if jobs.has_positive_activity(sig):
                 continue
-            delta = sig.get("last_activity_delta_s")
             if delta is None:
                 continue
             if delta > esc * 60:
