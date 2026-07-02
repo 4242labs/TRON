@@ -1948,15 +1948,32 @@ class Engine:
         (never `st.branches`, which is block-gate territory and R-4-guarded), FIFO so a
         second declaration never orphans a parked first."""
         block, branch = slots.get("block"), slots.get("branch")
-        if branch and not block:
-            wid = slots.get("worker_id")
-            w = next((x for x in self.st.workers if x.get("id") == wid), None)
+        if not branch:
+            return
+        wid = slots.get("worker_id")
+        w = next((x for x in self.st.workers if x.get("id") == wid), None)
+        # W11 (tron-13 attempt 1): st.branches is OWNER-ONLY — a block's branch is
+        # writable only by the ENGINEER ASSIGNED to it (A-1 sender-first, now for
+        # declarations too). The architect's reconcile report named a block in prose;
+        # classify handed that ref to this recorder and the architect's PAPERWORK branch
+        # became the block's registered branch — the gate then chased a deleted ref and
+        # walled the block's own engineer. A non-owner's block ref is DISCARDED here;
+        # its branch routes to the sender's paperwork FIFO, which is what a non-owner's
+        # branch always is.
+        owner = (w is not None and w.get("role") == "engineer"
+                 and block and w.get("block") == block)
+        if not owner:
             if w is None or w.get("role") == "engineer":
-                return                               # an engineer's branch always carries its block (A-1)
+                # Unknown sender, or an engineer naming someone else's block: never record.
+                self.log("flow", f"branch declaration from {wid} for '{block}' refused "
+                                 f"(not the owner) -> dropped")
+                return
             fifo = w.setdefault("pending_landings", [])
             if branch not in fifo:
                 fifo.append(branch)
-            self.log("flow", f"paperwork branch[{wid}] += {branch}")
+            self.log("flow", f"paperwork branch[{wid}] += {branch}"
+                             + (f" (block ref '{block}' discarded — W11: non-owners "
+                                f"never claim a block)" if block else ""))
             return
         if not block or not branch:
             return

@@ -783,6 +783,45 @@ def t_lander_deletes_already_merged_branch():
        f"{code}: {detail}")
 
 
+# ── W11: st.branches is owner-only ──
+def t_branch_registry_owner_only():
+    # The attempt-1 poisoning: an architect report naming a block in prose must NEVER
+    # register its paperwork branch as the block's branch.
+    eng = _eng()
+    eng.st.workers.append({"id": "ARCH-PERSIST", "role": "architect",
+                           "session_id": "dry", "status": "busy"})
+    eng._ingest("worker.branch", {"block": "A-01", "branch": "docs/fwd-review"},
+                {"id": "ARCH-PERSIST"})
+    arch = eng._architect()
+    ok("W11 a non-owner's block ref never claims the block",
+       "A-01" not in (eng.st.branches or {}), f"branches={eng.st.branches}")
+    ok("W11 the non-owner's branch routes to its paperwork FIFO",
+       arch.get("pending_landings") == ["docs/fwd-review"], f"arch={arch}")
+    # The assigned engineer still owns its registration.
+    eng._ingest("worker.branch", {"block": "A-01", "branch": "fix/real-work"},
+                {"id": "ENG-A-01"})
+    ok("W11 the assigned engineer's declaration records",
+       eng.st.branches.get("A-01") == "fix/real-work", f"branches={eng.st.branches}")
+    # An engineer naming a block that isn't its assignment is refused outright.
+    eng.st.workers.append({"id": "ENG-B-02", "role": "engineer", "block": "B-02",
+                           "session_id": "dry", "status": "working"})
+    eng._ingest("worker.branch", {"block": "A-01", "branch": "feat/hijack"},
+                {"id": "ENG-B-02"})
+    ok("W11 a foreign engineer's claim is refused",
+       eng.st.branches.get("A-01") == "fix/real-work", f"branches={eng.st.branches}")
+    # Rider 1: owner is role AND assignment — an architect whose record happens to carry
+    # a block field must not satisfy a naive assignment match.
+    eng2 = _eng()
+    eng2.st.workers.append({"id": "ARCH-PERSIST", "role": "architect", "block": "A-01",
+                            "session_id": "dry", "status": "busy"})
+    eng2._ingest("worker.branch", {"block": "A-01", "branch": "docs/arch-claim"},
+                 {"id": "ARCH-PERSIST"})
+    ok("W11 role gates ownership, not just the assignment field",
+       "A-01" not in (eng2.st.branches or {})
+       and eng2._architect().get("pending_landings") == ["docs/arch-claim"],
+       f"branches={eng2.st.branches} arch={eng2._architect()}")
+
+
 # ── W9: trunk truth is the PINNED COMMITTED tree, never the working tree ──
 def t_snapshot_reads_pinned_tree():
     d = _mkrepo()
@@ -900,6 +939,7 @@ TESTS = [
     t_branch_verb_engineer_keeps_admit_path,
     t_worktree_residue_named,
     t_lander_deletes_already_merged_branch,
+    t_branch_registry_owner_only,
 ]
 
 
