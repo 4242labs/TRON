@@ -183,6 +183,77 @@ def t_merge_anchors_sha():
             orig_be, orig_ff, orig_ts)
 
 
+# ── D4/F-4/R-7: operator re-ping ladder -> named resumable safe-park ──
+def _clocked(eng, t0=1000.0):
+    clock = {"t": t0}
+    eng._now_s = lambda: clock["t"]
+    return clock
+
+
+def t_case_reping_ladder():
+    # ceiling 30 x case_reping_after 20 = 600s spans: re-pings at each span, park after
+    # case_reping_max unanswered — an AFK operator costs latency, never silence.
+    eng = _eng()
+    clock = _clocked(eng)
+    cid = eng._open_case("A-01", "wall", "ENG-A-01", "needs a human")
+    sent = _capture(eng)
+    eng._drive_cases()                                   # anchors; no ping yet
+    ok("D4 no re-ping inside the first span", sent == [], f"sent={sent}")
+    for i in (1, 2, 3):
+        clock["t"] += 600
+        eng._drive_cases()
+    pings = [s for t, s in sent if t == "escalate.wall"
+             and "still parked" in s.get("detail", "")]
+    ok("D4 three re-pings across three spans", len(pings) == 3, f"sent={sent}")
+    ok("D4 re-pings carry the case id", all(s.get("case") == cid for s in pings))
+    clock["t"] += 600
+    eng._drive_cases()                                   # 4th span -> safe-park notice
+    case = eng.st.pending_cases[cid]
+    parked = [s for t, s in sent if t == "escalate.wall"
+              and "safe-parked" in s.get("detail", "")]
+    ok("D4 caps into a named safe-park", case.get("parked") == "safe" and len(parked) == 1,
+       f"case={case}")
+    ok("D4 safe-park is a forensic event",
+       any(e.get("type") == "case_safe_parked" for e in _events(eng)),
+       f"events={[e.get('type') for e in _events(eng)]}")
+    n = len(sent)
+    clock["t"] += 6000
+    eng._drive_cases()
+    ok("D4 a safe-parked case goes quiet", len(sent) == n, f"sent={sent[n:]}")
+
+
+def t_case_park_is_resumable():
+    # The safe-park is state, not a dead-end: the operator's reply settles it exactly
+    # like a fresh case (resume path through _h_apply_decision).
+    eng = _eng()
+    cid = eng._open_case("A-01", "wall", "ENG-A-01", "needs a human")
+    eng.st.pending_cases[cid]["parked"] = "safe"
+    eng.st.blocked.append("A-01")
+    eng._h_apply_decision({"decision": "resume", "case": cid, "block": "A-01"})
+    ok("D4 a safe-parked case settles on the operator's reply",
+       cid not in eng.st.pending_cases and "A-01" not in eng.st.blocked,
+       f"cases={eng.st.pending_cases} blocked={eng.st.blocked}")
+
+
+def t_case_visibility():
+    # The clock is pull — parked calls lead the digest and survive into the session-end
+    # record; visibility never depends on the operator asking the right question.
+    eng = _eng()
+    cid = eng._open_case("A-01", "wall", "ENG-A-01", "needs a human")
+    ok("D4 digest leads with the parked call",
+       eng._digest().startswith("your call first") and cid in eng._digest(),
+       f"digest={eng._digest()}")
+    sent = _capture(eng)
+    eng._end_session()
+    ok("D4 session end re-surfaces the parked call",
+       any(t == "escalate.wall" and "session is ending" in s.get("detail", "")
+           for t, s in sent), f"sent={sent}")
+    ends = [e for e in _events(eng) if e.get("type") == "session_end"]
+    ok("D4 session_end event names the parked case",
+       ends and cid in ((ends[-1].get("payload") or {}).get("parked_cases") or []),
+       f"ends={ends}")
+
+
 TESTS = [
     t_ratchet_floor_paperwork_commits,
     t_ratchet_record_holds,
@@ -190,6 +261,9 @@ TESTS = [
     t_ratchet_pr_reopened_contradiction,
     t_ratchet_no_sha_holds_quietly,
     t_merge_anchors_sha,
+    t_case_reping_ladder,
+    t_case_park_is_resumable,
+    t_case_visibility,
 ]
 
 

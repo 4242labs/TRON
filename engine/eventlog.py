@@ -44,11 +44,14 @@ FAILURE_CLASSES = {
 #   settle        — an operator decision / disposition was applied to a parked case or block
 #   release       — a worker slot was freed
 #   escalate      — a condition was raised to the operator (wall/await)
+#   case_reping   — a parked operator case was re-pinged (F-4/R-7 ladder, n = ping count)
+#   case_safe_parked — the re-ping ladder capped; the case is safe-parked (named, resumable)
 #   block_done    — a block reached ✅ on trunk
 #   session_start / session_end / halt — session lifecycle
 EVENT_TYPES = {
     "tick", "model_call", "dispatch", "gate_advance", "settle", "release",
-    "escalate", "block_done", "session_start", "session_end", "halt",
+    "escalate", "case_reping", "case_safe_parked", "block_done",
+    "session_start", "session_end", "halt",
 }
 
 
