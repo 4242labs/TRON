@@ -55,6 +55,7 @@ TABLE = [
     ("worker:online",              "_h_worker_online"),  # spawned worker checked in -> emit its pending assignment (01-07)
     ("block:next:build",           None),               # engineer building
     ("block:next:done",            "_h_worker_done"),   # done is a trigger -> DONE gate (§F)
+    ("block:next:recorded",        "_h_worker_recorded"),  # record receipt (tron-07 W6a) — never a close confirmation
     ("review:next:<block>",        "_h_forward_review"),     # not emitted in normal flow (SWITCHBOARD calls directly)
     ("block:<block>:reconciled",   "_h_reconcile"),     # architect re-checked/authored the path ahead (M-05)
     ("worker:await:<block>",       "_h_await"),         # worker paused for go-ahead -> await ladder (R-AWAIT)
@@ -69,6 +70,17 @@ TABLE = [
 ]
 
 OPEN_STATUSES = ("to-do", "in-progress")   # work that still counts as not-done
+# S-1 (tron-07 review cycle): one pacing law. All silence/idle machinery compares WALL-CLOCK
+# spans — never tick counts (event ticks arrive in bursts and, under sustained traffic, timer
+# ticks may never come at all — R-1). The counter knobs keep their names and their operator
+# intuition: they are multipliers of the wake ceiling ("N ticks' worth of time").
+# R-2(ii): a presumed-suspended runner (past its own turn ceiling) gets SIGTERM via release,
+# then SIGKILL after this grace — never on ordinary release paths.
+KILL_GRACE_S = 60.0
+# The runner's single-turn wall-clock ceiling — the SAME env the spawned runner reads
+# (worker_runner.TURN_TIMEOUT_S), so the sweep's working-turn exemption (tron-07 W8) and
+# the runner's own hang protection share one clock.
+TURN_CEILING_S = float(os.environ.get("TRON_TURN_TIMEOUT_S", "1800"))
 
 
 class Engine:
@@ -179,11 +191,27 @@ class Engine:
         if rc != "pause":                                # PAUSE freezes liveness pings + gate nudges; DRAIN keeps them
             self._sweep()                                # engine liveness -> worker:stalled
         claimed, msgs = self._claim_inboxes()            # rotate each inbox to a .proc sidecar, read it
+        live = {w.get("id") for w in self.st.workers if w.get("status") != "released"}
         for msg in msgs:
+            # R-2(i): released is not dead — a stall-recovered or long-turn runner can still
+            # write into the shared inbox after release (observed live in tron-10). A report
+            # from a worker id not on the live roster is QUARANTINED: logged for forensics,
+            # never classified into a trigger — a zombie 'done' must not gate its
+            # replacement's block.
+            snd = msg.get("sender") or {}
+            if snd.get("kind") == "worker" and snd.get("id") and snd["id"] not in live:
+                self.log("flow", f"quarantined report from off-roster worker '{snd['id']}'")
+                self.events.unclassified(msg.get("text", "")[:200],
+                                         f"off-roster sender {snd['id']} (quarantined)", sender=snd)
+                continue
             # One malformed message must not abort the tick: that would leave it in the sidecar
             # (released only after a clean save) and re-fire it every sweep — a poison pill.
             try:
                 tag, slots = self._classify(msg)
+                # Carry the raw text alongside the pulled slots — deterministic guards (the
+                # close-confirmation prefix check, tron-07 peer risk 2) read the message
+                # itself, never re-judge it.
+                slots = {**slots, "_raw": msg.get("text", "")}
                 self._ingest(tag, slots, msg.get("sender", {}))
             except Exception as e:
                 self.log("flow", f"ingest dropped a message: {e}")
@@ -195,7 +223,7 @@ class Engine:
                     inputs={"text": msg.get("text", "")[:200]},
                     node="§5 tick drain", next_action="drop (re-read next tick at-least-once)")
         if rc != "pause":
-            self._drive_gates()                          # advance in-flight DONE gates on fresh evidence
+            self._drive_gates()          # S-1: pacing is wall-clock inside the gate machinery
         self._drain_triggers()
         self.st.data.setdefault("last_sweep", {})["at"] = util.now_iso()  # count bumped at tick start
         self.st.save()                                   # persist effects FIRST
@@ -613,14 +641,14 @@ class Engine:
         (delta-only over the project's persona). Returns (session_id, shortid) — the session id is
         engine-minted and stable for the worker's whole life; the shortid is the worker id."""
         persona = self._agent_file(rtype and f"reviewer-{rtype}" or role) or self._agent_file(role)
-        report = self.ctx.p("scripts", "report.sh")
-        slots = {"worker_id": wid, "role": role, "persona": persona, "report": report}
-        prompt = self.renderer.render(template_id, slots)
+        slots = {"worker_id": wid, "role": role, "persona": persona}
         if self.dry:
             return "dry", "dry"
         session_id = str(uuid.uuid4())                 # engine-minted; stable identity, never re-minted
         try:
-            self._to_worker(wid, prompt, template_id)  # turn 1: the persona/onboarding, via the mailbox
+            # turn 1: the persona/onboarding, via the mailbox — through emit() (S-4/W4:
+            # every worker send goes through the one slot-injecting sender).
+            self.emit(template_id, slots, worker_id=wid)
             jobs.spawn_runner(wid, self.ctx.worker_dir(wid), session_id, cwd=self.paths["root"])
         except Exception as e:
             self.events.failure(                          # forensic record (AC-2/AC-6)
@@ -707,7 +735,8 @@ class Engine:
         else:
             rng = "all changes since your last review"
         return (f"Run a {typ} review over {rng}. Cover every applicable change in that range — "
-                f"all of it, not a sample. Deliver your findings log when done.")
+                f"all of it, not a sample. Deliver your findings log when done, and open that "
+                f"hand-back reply `review done {typ}:` then the log path.")
 
     def _h_worker_done(self, m):
         # block:next:done — the worker SAYS it's done. Not truth: open/advance the DONE gate.
@@ -716,9 +745,13 @@ class Engine:
         if not block:
             return
         row = self.st.row(block)
+        if row is None:
+            return                                       # admission (S-2-lite) already refused these
         if row and row.get("status") == "done":
-            # ✅ already landed -> this report is the CLOSE clean-confirmation (T7), or the
-            # record receipt (01-11 FX-3: stage record + ✅ on trunk -> content-check + close).
+            # ✅ already landed -> this report is the CLOSE clean-confirmation (T7); at stage
+            # record it still drives the content-check + close (a done-claim with ✅ visible).
+            # Admission (S-2-lite/_admit) has already enforced the `clean` prefix and routed
+            # record receipts away — no re-checks here (rider 4).
             g = self.st.gate.get(block)
             if g and g.get("stage") == "close":
                 self._confirm_close(block, g)
@@ -739,6 +772,26 @@ class Engine:
                                   "gate-step-cap", f"advance DONE gate stage '{before}'")
         else:
             g["stall_attempts"] = 0
+        self._emit("pulse")
+
+    def _h_worker_recorded(self, m):
+        # block:next:recorded — the record RECEIPT ("recorded <block>"), split from
+        # block:next:done (tron-07 W6a): the receipt arriving in the same tick that opened
+        # CLOSE was read as the clean-confirmation, ran _confirm_close against a replica the
+        # worker had not begun to clean, and burned a close nudge on a spurious rejection.
+        # The gate reads trunk truth: ✅ at stage record -> advance to CLOSE; anything else
+        # is a receipt to note, never a step.
+        block = m.get("block")
+        if not block:
+            return
+        row = self.st.row(block)
+        g = self.st.gate.get(block)
+        # Admission (S-2-lite) only lets a receipt through while the gate is AT record;
+        # trunk truth (row status) still gates the close drive.
+        if row and g and g.get("stage") == "record" and row.get("status") == "done":
+            self._drive_close(block, g, self._worker_id("engineer", block))
+        else:
+            self.log("flow", f"record receipt for {block} noted (stage={(g or {}).get('stage')})")
         self._emit("pulse")
 
     def _h_release_reviewer(self, m):
@@ -984,6 +1037,16 @@ class Engine:
         self._emit("pulse")
 
     # ── the DONE gate (realign §F): one stage-specific prompt per state, advanced on EVIDENCE ──
+    def _now_s(self):
+        """Wall-clock seconds (monkeypatch point for the pacing tests)."""
+        import time as _t
+        return _t.time()
+
+    def _pace(self, mult_knob, default):
+        """A knob expressed as a multiplier of the wake ceiling -> a wall-clock span (S-1)."""
+        ceiling = float(self.knobs.get("wake_ceiling_sec", 30))
+        return float(self.knobs.get(mult_knob, default)) * ceiling
+
     def _drive_gates(self):
         for block in list(self.st.gate.keys()):
             self._drive_gate(block, self.st.gate[block])
@@ -1026,7 +1089,14 @@ class Engine:
             # 01-11 FX-3: the worker's trunk-stage evidence report is ACCEPTED -> order the
             # ✅ record. The flip is ordered only after this acceptance — never before.
             stage, msg = "record", "gate.record"
-            g.pop("trunk_nudges", None)
+        elif g.get("stage") == "trunk":
+            # tron-07 W1: the DONE ladder is MONOTONIC. Trunk was reached through an
+            # authorized merge; the git predicates below go stale the moment the worker
+            # commits again on its branch (post-merge session docs), and recomputing from
+            # them regressed the gate trunk -> local — a duplicate DONE-LOCAL, then a
+            # second un-asked merge. Hold at trunk: only the worker's accepted report
+            # (on_report above) advances to record; the idle machinery re-nudges a stall.
+            stage = "trunk"
         elif not pr:
             if not g.get("pr"):
                 # MG-01: trunk is the only done-truth. Before parking at local, check whether
@@ -1055,12 +1125,28 @@ class Engine:
                         if g.get("self_merge"):
                             stage, msg = "trunk", "gate.trunk"        # operator merged it themselves
                         elif on_report or g.get("approved_merge"):
+                            # A-3: the grant binds the exact sha the operator saw at park. A tip
+                            # that moved between park and execution voids the grant and re-parks
+                            # NAMING the new tip (rider 2) — unseen commits never ride an old yes.
+                            cur_tip = trunk.tip_sha(self.paths["root"], branch, self.dry)
+                            if (g.get("approved_merge") and g.get("case_tip") and cur_tip
+                                    and cur_tip != g.get("case_tip")):
+                                self.log("flow", f"gate[{block}] approved tip {str(g.get('case_tip'))[:7]} "
+                                                 f"moved to {cur_tip[:7]} -> grant void, re-park")
+                                g.pop("approved_merge", None)
+                                g.pop("case_merge", None)
+                                g.pop("case_tip", None)
                             if self._merge_gated(block, g, wid):
                                 return                                # ASK: parked on the operator, hold
                             ok, err = trunk.merge_ff_only(
                                 self.paths["root"], branch,
                                 self.paths.get("main_branch", "main"), self.dry)
                             if ok:
+                                # tron-07 W2: one approval = one EXECUTED merge. Consume the
+                                # grant here (not on the order) so a non-ff retry — the same
+                                # unexecuted merge — keeps it, but nothing after execution can
+                                # ride it into a second un-asked merge.
+                                g.pop("approved_merge", None)
                                 stage, msg = "trunk", "gate.trunk"    # merged -> re-validate on trunk
                             else:
                                 self.log("flow", f"gate[{block}] local ff-merge non-ff: {err.strip()}")
@@ -1072,16 +1158,9 @@ class Engine:
                     else:
                         stage, msg = "local", "gate.local"   # remote: no PR yet -> validate locally first
             else:
-                # PR gone, not ✅ yet -> merged; re-validate on trunk (DONE-TRUNK). No-silent-stuck:
-                # re-nudge each tick up to the cap, then escalate.
-                n = g.get("trunk_nudges", 0)
-                if n >= int(self.knobs.get("gate_post_merge_cap", 3)):
-                    self._gate_giveup(block, g, wid,
-                                      "merged but not re-validated on trunk (✅ pending)",
-                                      "gate-trunk-cap", "re-validate merged block on trunk (✅)")
-                    return
-                g["trunk_nudges"] = n + 1
-                renudge = True
+                # PR gone, not ✅ yet -> merged; re-validate on trunk (DONE-TRUNK). The wall-clock
+                # idle machinery below owns stalls from here (S-5: the per-tick trunk_nudges cap
+                # was unreachable once W1 made the trunk stage monotonic — removed).
                 stage, msg = "trunk", "gate.trunk"
         elif pr.get("checks") == "failing":
             stage, msg = "ci", "gate.merge"              # CI red -> re-nudge the merge step (get CI green)
@@ -1097,34 +1176,44 @@ class Engine:
             else:
                 stage, msg = "merge", "gate.merge"
 
-        # 01-11 FX-2 (rewires MG-01 T4): tick-time idle accounting off the runner's OWN state.
-        # The runner refreshes runner.json every poll even when idle, so freshness/heartbeat
-        # signals can never distinguish idle-at-gate from working — the exact reason the MG-01
-        # activity-signal cap never fired in tron-06 (P2). The deterministic idle fact is
-        # runner.json `state: idle` (the agent finished its turn and sits waiting on the
-        # mailbox). A busy worker (runner `working`) never accrues. `ci-wait` is excluded —
-        # there the worker legitimately idles on CI, and the PR machinery owns that wait.
+        # 01-11 FX-2 + S-1 (one pacing law): idle-at-gate is a WALL-CLOCK span of the runner's
+        # own `state: idle` — never a tick count (event bursts and event-starved timers both lie
+        # about time; R-1/W7b). A busy worker (runner `working`) never accrues; `ci-wait` is
+        # excluded — the PR machinery owns that wait. Nudge once per idle episode at
+        # gate_nudge_after x ceiling; give up at gate_idle_cap x ceiling.
         if stage == g.get("stage") and not renudge and stage != "ci-wait":
             if not jobs.runner_idle(wid):
-                g["idle_ticks"] = 0
+                g.pop("idle_since", None)
+                g.pop("nudged_at", None)
             else:
-                n = g.get("idle_ticks", 0) + 1
-                g["idle_ticks"] = n
-                if n >= int(self.knobs.get("gate_idle_cap", 3)):
-                    self._gate_giveup(block, g, wid,
-                                      f"gate stalled at '{stage}' — worker idle for {n} ticks",
+                now = self._now_s()
+                since = g.setdefault("idle_since", now)
+                idle_s = now - since
+                if idle_s >= self._pace("gate_idle_cap", 3):
+                    detail = f"gate stalled at '{stage}' — worker idle {int(idle_s)}s"
+                    if stage == "trunk" and not trunk.branch_merged(
+                            self.paths["root"], branch,
+                            self.paths.get("main_branch", "main"), self.dry):
+                        # R-3: a held trunk whose predicates now contradict it (revert /
+                        # force-push) must read as a trunk regression, not a worker stall.
+                        detail += ("; predicate contradiction: the block branch is no longer "
+                                   "on trunk (revert or force-push?)")
+                    self._gate_giveup(block, g, wid, detail,
                                       "gate-idle-cap", "check worker liveness; resume or reassign")
                     return
-                if n == int(self.knobs.get("gate_nudge_after", 2)) and wid:
+                if (idle_s >= self._pace("gate_nudge_after", 2)
+                        and not g.get("nudged_at") and wid):
                     # Re-send the pending stage prompt — a deliberate duplicate on a FRESH
                     # mailbox seq (_to_worker bumps it), so the runner's seq-keyed dedupe
-                    # delivers it (R1-4). One nudge between accrual start and escalation.
+                    # delivers it (R1-4). One nudge per idle episode.
                     nudge = self._stage_template(stage)
                     if nudge:
+                        g["nudged_at"] = now
                         self.emit(nudge, self._stage_slots(stage, wid, block), worker_id=wid)
                         self.log("flow", f"gate[{block}] idle at '{stage}' -> re-nudge")
         else:
-            g["idle_ticks"] = 0
+            g.pop("idle_since", None)
+            g.pop("nudged_at", None)
 
         if stage != g.get("stage") or renudge:
             prev = g.get("stage")
@@ -1206,14 +1295,30 @@ class Engine:
                               **{"from": prev, "to": "close", "detail": "✅ on trunk"})
             self.log("flow", f"gate[{block}] -> close (slot held)")
             return
-        n = g.get("close_nudges", 0)
-        if n >= int(self.knobs.get("gate_close_cap", 3)):
+        # tron-07 W6b + S-1: close pacing is the same wall-clock law as the gate's — a worker
+        # mid-close-out (runner `working`) never accrues (per-tick accrual once capped a working
+        # engineer out of its own paperwork in 74s and force-released with no cleanliness check).
+        # An idle close re-nudges once per ceiling span; at gate_close_cap x ceiling of
+        # continuous idle it force-releases.
+        if wid and not jobs.runner_idle(wid):
+            g.pop("close_idle_since", None)
+            g.pop("close_nudged_at", None)
+            return
+        now = self._now_s()
+        since = g.setdefault("close_idle_since", now)
+        if now - since >= self._pace("gate_close_cap", 3):
             self._force_release_block(block)
             self.st.gate.pop(block, None)
             self.log("flow", f"gate[{block}] close cap -> force release")
+            # tron-07 W6c: a freed slot without a pulse leaves the SWITCHBOARD asleep — the
+            # due reviewer never dispatches and session-end never evaluates. Every
+            # slot-freeing path pulses.
+            self._emit("pulse")
             return
-        g["close_nudges"] = n + 1
-        if wid:
+        last = g.get("close_nudged_at")
+        ceiling = float(self.knobs.get("wake_ceiling_sec", 30))
+        if wid and (last is None or now - last >= ceiling):
+            g["close_nudged_at"] = now
             self.emit("close.worker", {"worker_id": wid}, worker_id=wid)
 
     def _confirm_close(self, block, g):
@@ -1253,7 +1358,8 @@ class Engine:
         """No-silent-stuck: drop the gate + escalate to the operator (forensic record)."""
         self.st.gate.pop(block, None)
         self.events.failure("gate-stuck", code, action, detail, block=block,
-                            inputs={"nudges": g.get("trunk_nudges") or g.get("stall_attempts")},
+                            inputs={"stall_attempts": g.get("stall_attempts"),
+                                    "idle_since": g.get("idle_since")},
                             node="DONE gate", next_action="escalate")
         self._emit("wall:raised:" + block,
                    {"block": block, "worker_id": wid, "detail": detail})
@@ -1284,7 +1390,11 @@ class Engine:
         if self.st.approvals.get("merge", "APPROVED") == "APPROVED" and not needs_user:
             return False
         if not g.get("case_merge"):                      # escalate once; then hold quietly each tick
-            case = self._open_case(block, "merge", wid, f"merge {block} to trunk")
+            tip = trunk.tip_sha(self.paths["root"], self._block_branch(block), self.dry)
+            if tip:
+                g["case_tip"] = tip                      # A-3: the grant binds THIS sha
+            case = self._open_case(block, "merge", wid,
+                                   f"merge {block} to trunk @ {(tip or 'unknown')[:7]}")
             g["case_merge"] = case
             self.emit("escalate.gate", {"worker_id": wid, "block": block,
                                         "detail": f"merge {block} to trunk", "case": case})
@@ -1371,8 +1481,10 @@ class Engine:
     def _release_worker(self, w, notify=True, reason="released"):
         wid = w.get("id")
         if notify and not self.dry:
-            self._to_worker(wid, self.renderer.render("close.worker", {"worker_id": wid}),
-                            "close.worker")
+            # tron-07 W4 (same class as _end_session): emit(), never a bare renderer.render —
+            # the missing universal reply slots crashed this render, and this is the reviewer's
+            # release path (the crash would strand every review loop at hand-back).
+            self.emit("close.worker", {"worker_id": wid}, worker_id=wid)
         if not self.dry:
             jobs.release(wid)
         if w in self.st.workers:
@@ -1383,6 +1495,60 @@ class Engine:
                           **{"role": w.get("role"), "reason": reason})
 
     # ── inbound classification + side handlers ──
+    # Tags whose trigger opens/advances a block gate — the ones admission must pin to a
+    # REAL canon block before they fire (S-2-lite).
+    GATING_TAGS = ("worker.done", "worker.recorded", "worker.wall")
+
+    def _admit(self, tag, slots, sender):
+        """S-2-lite (tron-07 review cycle): the SINGLE admission checkpoint at the
+        classify->trigger boundary. Everything that decides whether a classified message may
+        act on a gate lives here — nowhere else:
+          A-1  the sender's ASSIGNED block is authoritative for its gate-facing reports; the
+               classify-extracted text ref is a cross-check (workers are single-block today —
+               R-5: load-bearing; a multi-block worker design must revisit this);
+          W3   a text ref resolves exact-then-unique-prefix; an id the canon has no row for
+               never opens a gate;
+          W6a  the record receipt is admissible only while its gate is AT the record stage —
+               at close (or with no gate) it is a receipt to note, never a confirmation;
+          risk-2  at CLOSE, only a reply opening the prescribed `clean` prefix is the
+               clean-confirmation.
+        Returns the (possibly adjusted) slots, or None to refuse the trigger (SENTRY-logged)."""
+        w = next((x for x in self.st.workers if x.get("id") == (sender or {}).get("id")), None)
+        assigned = (w or {}).get("block")
+        if assigned and str(assigned).startswith("review:"):
+            assigned = None                              # reviewers gate by <type>, not block
+        ref = slots.get("block")
+        canon = self._resolve_block_ref(str(ref)) if ref else None
+        if ref and canon and canon != ref:
+            self.log("flow", f"block ref '{ref}' -> '{canon}' (canonicalized)")
+        block = canon
+        if assigned:
+            if block and block != assigned:
+                self.log("flow", f"{sender.get('id')}: text ref '{block}' != assigned "
+                                 f"'{assigned}' -> sender's assignment wins (A-1)")
+            block = assigned
+        if block:
+            slots = {**slots, "block": block}
+        if tag in self.GATING_TAGS:
+            if not block or self.st.row(block) is None:
+                self.log("flow", f"{tag} for unknown block '{ref}' -> refused (no canon row)")
+                self.events.unclassified(f"{tag} block ref: {ref}",
+                                         "unknown block id (no canon row)", sender=sender)
+                return None
+            g = self.st.gate.get(block)
+            if tag == "worker.recorded" and not (g and g.get("stage") == "record"):
+                self.log("flow", f"record receipt for {block} noted "
+                                 f"(stage={(g or {}).get('stage')}) -> no action")
+                return None
+            if tag == "worker.done" and g and g.get("stage") == "close":
+                raw = (slots.get("_raw") or "").strip().lower()
+                pfx = (self.renderer.prompts.close_confirm_prefix() or "clean").lower()
+                if raw and not raw.startswith(pfx):
+                    self.log("flow", f"gate[{block}] close: reply doesn't open "
+                                     f"'{pfx}' -> not a confirmation")
+                    return None
+        return slots
+
     def _ingest(self, tag, slots, sender):
         action = self.tags.get(tag)
         if not isinstance(action, dict):
@@ -1390,6 +1556,9 @@ class Engine:
             return
         if sender.get("id") and not slots.get("worker_id"):
             slots = {**slots, "worker_id": sender["id"]}
+        slots = self._admit(tag, slots, sender)          # the ONLY admission checkpoint
+        if slots is None:
+            return
         if "trigger" in action:
             self._emit(self._fill_trigger(action["trigger"], slots), slots)
         elif "side" in action:
@@ -1454,6 +1623,20 @@ class Engine:
         block, branch = slots.get("block"), slots.get("branch")
         if not block or not branch:
             return
+        # R-4: one live gate per branch name. A second block declaring an already-claimed
+        # branch would make branch_merged read block A's merge as block B's — and the W1
+        # ratchet would lock the wrong conclusion in. Refuse + escalate, never record.
+        claimed = next((b for b, br in self.st.branches.items()
+                        if br == branch and b != block and b in self.st.gate), None)
+        if claimed:
+            self.emit("escalate.gate", {"worker_id": slots.get("worker_id") or "?",
+                                        "block": block,
+                                        "detail": f"branch '{branch}' already claimed by live "
+                                                  f"gate {claimed} — refuse duplicate claim",
+                                        "case": self._open_case(block, "branch",
+                                                                slots.get("worker_id"),
+                                                                f"duplicate branch claim: {branch}")})
+            return
         self.st.branches[block] = branch
         for w in self.st.workers:                      # stamp it on the owner record too
             if w.get("block") == block and w.get("role") == "engineer":
@@ -1502,9 +1685,37 @@ class Engine:
             if w.get("status") in ("working", "idle") and rstate in ("working", "idle"):
                 w["status"] = rstate
             sig = jobs.activity_signals(w.get("id"), since_iso=last, idx=idx)
+            delta = sig.get("last_activity_delta_s")
+            # tron-07 W8 + A-4: a runner mid-turn is WORKING, not silent — it writes
+            # `working` once at turn start (now WITH its own declared turn deadline) and
+            # nothing more until the turn ends, so to the silence machinery a long turn is
+            # indistinguishable from death (an 8-minute review turn was stall-recovered at
+            # 8m05s -> infinite reviewer churn). Exempt a working runner until ITS OWN
+            # deadline (+grace) — heterogeneous per-role ceilings for free; the engine-env
+            # mirror is only the fallback for pre-A-4 runner records. Past the deadline the
+            # runner is presumed suspended (SIGSTOP/host freeze — its own TURN_TIMEOUT_S
+            # loop isn't executing): escalate, and R-2(ii) follows the release SIGTERM with
+            # SIGKILL after a grace — on THIS path only, never on ordinary releases.
+            if rstate == "working":
+                rec = jobs.find(w.get("id"), idx) or {}
+                ddl = rec.get("deadline")
+                now_s = self._now_s()
+                within = (now_s <= float(ddl) + KILL_GRACE_S) if ddl else (
+                    delta is not None and delta <= TURN_CEILING_S + 120)
+                if within:
+                    w.pop("pinged_at", None)  # a working turn ends the silence episode
+                    w.pop("kill_at", None)
+                    continue
+                # past the runner's own deadline: presumed suspended
+                if not w.get("kill_at"):
+                    w["kill_at"] = now_s + KILL_GRACE_S
+                    self._emit("worker:stalled", {"worker_id": w.get("id")})
+                elif now_s >= float(w["kill_at"]):
+                    jobs.kill_hard(w.get("id"), idx)
+                    w.pop("kill_at", None)
+                continue
             if jobs.has_positive_activity(sig):
                 continue
-            delta = sig.get("last_activity_delta_s")
             if delta is None:
                 continue
             if delta > esc * 60:
@@ -1769,8 +1980,10 @@ class Engine:
         for w in self.st.workers:
             wid = w.get("id")
             if not self.dry:
-                self._to_worker(wid, self.renderer.render("close.worker", {"worker_id": wid}),
-                                "close.worker")
+                # tron-07 W4: through emit(), never a bare renderer.render — emit injects the
+                # universal reply slots ({report}, {worker_id}) every PMT body now renders;
+                # the direct render made `tron stop --force` crash on the missing slot.
+                self.emit("close.worker", {"worker_id": wid}, worker_id=wid)
                 jobs.release(wid)
             w["status"] = "released"
         done = sum(1 for r in self.st.pipeline if r.get("status") == "done")
@@ -1827,3 +2040,13 @@ class Engine:
         the name — T2), falling back to the convention only before the worker has reported (no PR
         can exist on trunk yet). TRON never guesses a name it then gates on."""
         return self.st.branches.get(block) or self._branch(block)
+
+    def _resolve_block_ref(self, ref):
+        """Canonicalize a worker-mentioned block ref against the pipeline (tron-07 W3):
+        the exact id, else the single id the ref prefixes (worker shorthand '01-02' for
+        '01-02-logic'), else None — TRON never gates on an id the canon doesn't know."""
+        ids = [r.get("id") for r in self.st.pipeline if r.get("id")]
+        if ref in ids:
+            return ref
+        hits = [i for i in ids if i.startswith(ref)]
+        return hits[0] if len(hits) == 1 else None

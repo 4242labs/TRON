@@ -43,7 +43,8 @@ reconciled: []
 # ── DONE-gate progress per block: {block_id: {stage, pr, ...}} (runtime only) ──
 # engineer stage in: local | ci | ci-wait | merge | trunk | close (01-08 T5); the worker gate ends
 # at trunk (merge = merge-to-trunk; CI auto-deploys staging). prod promotion is operator-only.
-# also carries: stall_attempts, trunk_nudges, close_nudges, approved_merge, self_merge,
+# also carries: stall_attempts, idle_since, nudged_at, close_idle_since, close_nudged_at,
+# approved_merge, case_tip, self_merge,
 # awaiting_rework, case_merge. reviewer gate: review:<type> -> {stage: review} (loop-until-clean).
 gate: {}
 

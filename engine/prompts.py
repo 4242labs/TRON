@@ -27,6 +27,16 @@ class Prompts:
     def _registry(self):
         return self._registry_doc().get("prompts", {})
 
+    def reply_prefix(self, pmt_id):
+        """S-4: the prescribed reply opening for a PMT (single source: the registry)."""
+        return (self._registry().get(pmt_id) or {}).get("reply_prefix")
+
+    def close_confirm_prefix(self):
+        """The close clean-confirmation opening word — the engine's admission guard reads
+        it here, never from a hardcoded string."""
+        pfx = self.reply_prefix("PMT-CLOSE") or "clean"
+        return pfx.split()[0]
+
     def reply_line(self):
         """The shared reply-line copy (01-11 FX-1) — the single source of the channel
         instruction, appended to every PMT flagged `reply_expected`."""

@@ -84,14 +84,17 @@ def t_bypass_during_pending_hold_escalates():
 def t_idle_gate_escalates():
     eng = _eng()
     g = eng.st.gate.setdefault("A-01", {"stage": None, "pr": None})
+    clock = {"t": 1000.0}                               # S-1: idle is a WALL-CLOCK span
+    eng._now_s = lambda: clock["t"]
     eng._drive_gate("A-01", g)                          # None -> local (first advance)
     ok("AC-4 first pass parks at local", g.get("stage") == "local")
-    cap = int(eng.knobs.get("gate_idle_cap", 3))
-    for _ in range(cap - 1):
-        eng._tq = []
-        eng._drive_gate("A-01", eng.st.gate.get("A-01", g))
+    eng._tq = []
+    eng._drive_gate("A-01", eng.st.gate.get("A-01", g))          # anchor idle_since
+    clock["t"] += eng._pace("gate_idle_cap", 3) - 1
+    eng._drive_gate("A-01", eng.st.gate.get("A-01", g))
     ok("AC-4 still local before the cap is exceeded (not yet escalated)",
        eng.st.gate.get("A-01", {}).get("stage") == "local")
+    clock["t"] += 2                                     # past the cap
     eng._tq = []
     eng._drive_gate("A-01", eng.st.gate.get("A-01", g))  # cap exceeded -> escalate
     walled = any(t.startswith("wall:raised:A-01") for t, _ in eng._tq)
@@ -103,12 +106,12 @@ def t_idle_reset_on_advance():
     eng = _eng()
     g = eng.st.gate.setdefault("A-01", {"stage": None, "pr": None})
     eng._drive_gate("A-01", g)                          # None -> local
-    eng._drive_gate("A-01", g)                           # local -> local (1 idle tick)
-    ok("AC-4 idle_ticks accrues while stalled", g.get("idle_ticks", 0) == 1)
+    eng._drive_gate("A-01", g)                           # local -> local (idle anchored)
+    ok("AC-4 idle_ticks accrues while stalled", g.get("idle_since") is not None)
     eng.st.data["open_prs"] = {"feat/A-01": {"number": 7, "checks": "passing"}}
     eng._drive_gate("A-01", g)                          # local -> merge (a real advance)
     ok("AC-4 idle_ticks resets on a real stage advance",
-       g.get("stage") == "merge" and g.get("idle_ticks", 0) == 0)
+       g.get("stage") == "merge" and g.get("idle_since") is None)
 
 
 # ── AC-5: `Merge approval: needs-user` holds the merge stage on the operator ──

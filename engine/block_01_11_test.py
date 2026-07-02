@@ -120,17 +120,21 @@ def t_idle_gate(stage_name, setup):
     sent = []
     orig_emit = eng.emit
     eng.emit = lambda tid, slots=None, worker_id=None: sent.append(tid) or orig_emit(tid, slots, worker_id)
+    clock = {"t": 1000.0}                             # S-1: idle is a WALL-CLOCK span
+    eng._now_s = lambda: clock["t"]
     try:
-        eng._drive_gate("A-01", g)                    # tick 1: idle_ticks 1
-        n1 = g.get("idle_ticks")
-        eng._drive_gate("A-01", g)                    # tick 2: nudge (gate_nudge_after=2)
+        eng._drive_gate("A-01", g)                    # anchor idle_since
+        n1 = g.get("idle_since")
+        clock["t"] += eng._pace("gate_nudge_after", 2) + 1
+        eng._drive_gate("A-01", g)                    # past nudge span -> re-nudge
         nudged = list(sent)
-        eng._drive_gate("A-01", g)                    # tick 3: cap (gate_idle_cap=3) -> escalate
+        clock["t"] += eng._pace("gate_idle_cap", 3)   # well past the cap
+        eng._drive_gate("A-01", g)                    # -> escalate
         escalated = "A-01" not in eng.st.gate and any(t == ("wall:raised:A-01")
                                                       for t, _ in eng._tq)
     finally:
         jobs.runner_idle = orig_idle
-    ok(f"AC-2 [{stage_name}] idle accrues on tick", n1 == 1)
+    ok(f"AC-2 [{stage_name}] idle accrues on tick", n1 is not None)
     ok(f"AC-2 [{stage_name}] re-nudge fires at gate_nudge_after",
        any(t in ("gate.local", "gate.trunk", "gate.record", "gate.merge") for t in nudged),
        f"sent={nudged}")
@@ -348,8 +352,10 @@ def t_confirm_close_gate():
 def t_tag_sweep():
     routing = util.load_yaml(os.path.join(ROOT, "routing.yaml"))
     tags = routing.get("tags", {})
+    # tron-07 W6a: the receipt has its OWN row now (block:next:recorded) — same tag, its
+    # route split from the build claim so it can never read as a close confirmation.
     ok("AC-7 routing.yaml knows worker.recorded",
-       tags.get("worker.recorded") == {"trigger": "block:next:done"})
+       tags.get("worker.recorded") == {"trigger": "block:next:recorded"})
     ok("AC-7 lint CANON_TAGS knows worker.recorded", "worker.recorded" in lint.CANON_TAGS)
     with open(os.path.join(ROOT, "tron.md")) as fh:
         ok("AC-7 tron.md catalog documents worker.recorded", "worker.recorded" in fh.read())
