@@ -93,6 +93,18 @@ def branch_merged(repo_root, branch, main_branch="main", dry=False):
     return rc == 0
 
 
+def is_ancestor(repo_root, sha, main_branch="main", dry=False):
+    """True iff `sha` is an ancestor of trunk HEAD. A-5: the held-stage predicate for
+    trunk+ rungs is the MERGED sha's ancestry — never the branch tip, which goes stale
+    the moment the worker parks paperwork commits on its branch (the W1 case). Ancestry
+    survives a `git revert` (history keeps the sha) and breaks only on history surgery
+    (force-push / reset) — exactly the contradiction class the ratchet must name."""
+    if dry or not repo_root or not sha:
+        return True
+    rc, _, _ = _run(["git", "-C", repo_root, "merge-base", "--is-ancestor", sha, main_branch])
+    return rc == 0
+
+
 def tip_sha(repo_root, branch, dry=False):
     """The branch's current tip sha, or '' (dry / unresolvable). A-3: the merge grant binds
     the exact sha the operator saw at park — this is how park and execution compare it."""

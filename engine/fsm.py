@@ -1077,26 +1077,39 @@ class Engine:
         renudge = False
         stage, msg = None, None
 
-        if g.get("stage") == "record":
-            # 01-11 FX-3: the record order is out — the worker lands the gate-authorized ✅
-            # status commit; the next refresh shows `done` (handled at the top of this
-            # function). Nothing here recomputes from PR state, and a record-PR NEVER parks
-            # on the operator (R2-3): identification is stage==record + the content check at
-            # close, never a branch/title convention. The idle machinery below keeps it
-            # un-hangable.
-            stage = "record"
-        elif on_report and g.get("stage") == "trunk":
+        if on_report and g.get("stage") == "trunk":
             # 01-11 FX-3: the worker's trunk-stage evidence report is ACCEPTED -> order the
             # ✅ record. The flip is ordered only after this acceptance — never before.
             stage, msg = "record", "gate.record"
-        elif g.get("stage") == "trunk":
-            # tron-07 W1: the DONE ladder is MONOTONIC. Trunk was reached through an
-            # authorized merge; the git predicates below go stale the moment the worker
-            # commits again on its branch (post-merge session docs), and recomputing from
-            # them regressed the gate trunk -> local — a duplicate DONE-LOCAL, then a
-            # second un-asked merge. Hold at trunk: only the worker's accepted report
-            # (on_report above) advances to record; the idle machinery re-nudges a stall.
-            stage = "trunk"
+        elif g.get("stage") in ("trunk", "record"):
+            # A-5 (tron-13, generalizes tron-07 W1 + R-3): the DONE ladder is MONOTONIC past
+            # the merge. The git predicates below go stale the moment the worker parks
+            # paperwork commits on its branch, and recomputing from them once regressed the
+            # gate trunk -> local — a duplicate DONE-LOCAL, then a second un-asked merge.
+            # Held rungs never recompute downward; instead the held stage's OWN predicate is
+            # re-verified each tick: the merged sha's ancestry (survives paperwork commits
+            # AND `git revert` — only history surgery breaks it) and, in remote mode, the
+            # merged PR staying closed. A contradicted predicate is a NAMED escalation —
+            # a trunk regression must never read as a worker stall. A record-PR still never
+            # parks on the operator (R2-3): identification is stage==record + the content
+            # check at close, never a branch/title convention.
+            held = g["stage"]
+            contra = None
+            if pr:
+                contra = (f"PR #{pr.get('number')} is open again after the merge "
+                          f"(revert + reopen?)")
+            elif g.get("merged_sha") and not trunk.is_ancestor(
+                    self.paths["root"], g["merged_sha"],
+                    self.paths.get("main_branch", "main"), self.dry):
+                contra = (f"merged sha {str(g['merged_sha'])[:7]} no longer in trunk "
+                          f"history (force-push or reset?)")
+            if contra:
+                self._gate_giveup(block, g, wid,
+                                  f"gate-contradiction at '{held}': {contra}",
+                                  "gate-contradiction",
+                                  "audit trunk history; re-validate or reassign")
+                return
+            stage = held
         elif not pr:
             if not g.get("pr"):
                 # MG-01: trunk is the only done-truth. Before parking at local, check whether
@@ -1110,6 +1123,7 @@ class Engine:
                                           "gate-bypass", "audit the out-of-gate merge; re-validate on trunk")
                         return
                     stage, msg = "trunk", "gate.trunk"   # already merged -> skip local, re-validate on trunk
+                    g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)  # A-5 predicate anchor
                 else:
                     # No PR, not yet on trunk. REMOTE mode: the worker opens a PR and the merge
                     # lands via the pr path below. LOCAL mode (no remote): there is no PR to wait
@@ -1124,6 +1138,7 @@ class Engine:
                     if local_mode and have_branch and g.get("stage") == "local":
                         if g.get("self_merge"):
                             stage, msg = "trunk", "gate.trunk"        # operator merged it themselves
+                            g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
                         elif on_report or g.get("approved_merge"):
                             # A-3: the grant binds the exact sha the operator saw at park. A tip
                             # that moved between park and execution voids the grant and re-parks
@@ -1142,6 +1157,10 @@ class Engine:
                                 self.paths["root"], branch,
                                 self.paths.get("main_branch", "main"), self.dry)
                             if ok:
+                                # A-5: anchor the held-stage predicate to the EXACT sha this
+                                # merge landed — paperwork commits after this never touch it.
+                                g["merged_sha"] = cur_tip or trunk.tip_sha(
+                                    self.paths["root"], branch, self.dry)
                                 # tron-07 W2: one approval = one EXECUTED merge. Consume the
                                 # grant here (not on the order) so a non-ff retry — the same
                                 # unexecuted merge — keeps it, but nothing after execution can
@@ -1162,6 +1181,9 @@ class Engine:
                 # idle machinery below owns stalls from here (S-5: the per-tick trunk_nudges cap
                 # was unreachable once W1 made the trunk stage monotonic — removed).
                 stage, msg = "trunk", "gate.trunk"
+                # A-5: best-effort anchor — a remote-merged branch may be unresolvable locally;
+                # an empty sha just skips the ancestry predicate (quiet hold, R-3 detail at cap).
+                g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
         elif pr.get("checks") == "failing":
             stage, msg = "ci", "gate.merge"              # CI red -> re-nudge the merge step (get CI green)
             renudge = True
