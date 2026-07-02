@@ -224,6 +224,7 @@ class Engine:
                     node="§5 tick drain", next_action="drop (re-read next tick at-least-once)")
         if rc != "pause":
             self._drive_gates()          # S-1: pacing is wall-clock inside the gate machinery
+            self._drive_cases()          # F-4/R-7: parked-case re-ping ladder -> safe-park
         self._drain_triggers()
         self.st.data.setdefault("last_sweep", {})["at"] = util.now_iso()  # count bumped at tick start
         self.st.save()                                   # persist effects FIRST
@@ -1671,7 +1672,64 @@ class Engine:
     def _digest(self):
         running = [w["id"] for w in self._pool() if w.get("status") == "working"]
         done = sum(1 for r in self.st.pipeline if r.get("status") == "done")
-        return f"{len(running)} running, {done} done on trunk"
+        base = f"{len(running)} running, {done} done on trunk"
+        # F-4/R-7: parked calls lead the digest — the clock is pull; the park notice sits
+        # where the operator's next pull lands, never behind a separate question.
+        parked = sorted(cid for cid, c in self.st.pending_cases.items()
+                        if c.get("decision") is None)
+        if parked:
+            safe = [cid for cid in parked
+                    if self.st.pending_cases[cid].get("parked") == "safe"]
+            note = f" (safe-parked: {', '.join(safe)})" if safe else ""
+            return f"your call first — parked on you: {', '.join(parked)}{note}. {base}"
+        return base
+
+    def _undecided_cases(self):
+        return {cid: c for cid, c in sorted(self.st.pending_cases.items())
+                if c.get("decision") is None}
+
+    def _drive_cases(self):
+        """F-4/R-7 (tron-13 D4): a parked operator case re-pings on a wall-clock ladder,
+        then caps into a NAMED, resumable safe-park — an AFK operator costs latency,
+        never a silently stalled session (P-1's class, closed at the engine, not the
+        monitor). One pacing law (S-1): re-ping every case_reping_after x wake_ceiling_sec
+        of wall-clock; after case_reping_max unanswered re-pings the next span posts the
+        safe-park notice and goes quiet. A safe-parked case stays in pending_cases
+        (MANIFEST) and settles through _h_apply_decision exactly like a fresh one —
+        resuming costs the operator one reply, nothing else.
+        Derived latencies at defaults (ceiling 30s, R-8): re-pings at 10/20/30 min,
+        safe-parked at 40 min."""
+        now = self._now_s()
+        for cid, case in self._undecided_cases().items():
+            if case.get("parked") == "safe":
+                continue
+            anchor = case.setdefault("ping_anchor_s", now)
+            if now - anchor < self._pace("case_reping_after", 20):
+                continue
+            case["ping_anchor_s"] = now
+            slots = {"worker_id": case.get("worker_id") or "?",
+                     "block": case.get("block") or "?", "case": cid}
+            n = case.get("repings", 0)
+            if n >= int(self.knobs.get("case_reping_max", 3)):
+                case["parked"] = "safe"
+                self.events.event("case_safe_parked", block=case.get("block"), cid=cid,
+                                  **{"repings": n, "detail": case.get("detail")})
+                self.emit("escalate.wall", {**slots, "detail":
+                          f"{case.get('detail')} — safe-parked after {n} unanswered "
+                          f"pings; the session runs on and this resumes the moment "
+                          f"you reply"})
+                self.log("flow", f"case {cid} safe-parked after {n} pings")
+                continue
+            case["repings"] = n + 1
+            self.events.event("case_reping", block=case.get("block"), cid=cid,
+                              **{"n": n + 1})
+            self.emit("escalate.wall", {**slots, "detail":
+                      f"{case.get('detail')} — still parked, {n + 1} unanswered "
+                      f"ping(s)"})
+            if self._tg_on():
+                self.emit("tg.escalate", {"worker_id": slots["worker_id"],
+                                          "detail": f"{cid} still parked: "
+                                                    f"{case.get('detail')}"})
 
     # ── liveness sweep (engine side-system, deterministic — no LLM) ──
     def _sweep(self):
@@ -2009,7 +2067,17 @@ class Engine:
                 jobs.release(wid)
             w["status"] = "released"
         done = sum(1 for r in self.st.pipeline if r.get("status") == "done")
-        self.events.event("session_end", done=done)
+        # F-4/R-7 rider: a call still parked at session end is surfaced HERE — the manifest
+        # archives on a clean end, so an unsurfaced case would vanish from view entirely.
+        parked = self._undecided_cases()
+        for cid, case in parked.items():
+            self.emit("escalate.wall",
+                      {"worker_id": case.get("worker_id") or "?",
+                       "block": case.get("block") or "?", "case": cid,
+                       "detail": f"{case.get('detail')} — session is ending with this "
+                                 f"still parked on you; it goes to the archive unresolved"})
+        self.events.event("session_end", done=done,
+                          **({"parked_cases": sorted(parked)} if parked else {}))
         self.emit("session.end", {"count": done})
         self.ended = True
         sess = self.st.data.setdefault("session", {})
