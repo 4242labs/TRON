@@ -80,6 +80,10 @@ templates:
     channel: worker
     slots: [worker_id, report]
     pmt: PMT-CLOSE
+  close.dirty:
+    channel: worker
+    slots: [worker_id, detail, report]
+    pmt: PMT-CLOSE-DIRTY
   heartbeat.ping:
     channel: worker
     slots: [worker_id, report]

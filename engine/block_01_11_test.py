@@ -272,9 +272,24 @@ def t_record_commit_real_git():
     okc, detail = trunk.record_commit_ok(d, bf)
     ok("AC-5 multi-file record commit fails the check", not okc, detail)
     shutil.rmtree(d, ignore_errors=True)
+    # full-path match (R4-3): a same-named file in another directory is a DIFFERENT path —
+    # a pure flip of the decoy conforms for the decoy's path, and the check for the real
+    # block doc still judges the real doc's own last commit (here: multi-file base -> fail).
+    d2 = _mkrepo()
+    os.makedirs(os.path.join(d2, "evil", "blocks"), exist_ok=True)
+    with open(os.path.join(d2, "evil", "blocks", "A-01.md"), "w") as fh:
+        fh.write("**Status:** ✅ Done\n")
+    _git(d2, "add", "-A")
+    _git(d2, "commit", "-qm", "decoy record")
+    okc, detail = trunk.record_commit_ok(d2, "evil/blocks/A-01.md")
+    ok("AC-5 sanity: the decoy conforms only for its own full path", okc, detail)
+    okc, detail = trunk.record_commit_ok(d2, "blocks/A-01.md")
+    ok("AC-5 full-path match: the decoy commit never answers for the real block doc",
+       not okc and "blocks/A-01.md" in detail, detail)
+    shutil.rmtree(d2, ignore_errors=True)
 
 
-# ── AC-6: CLOSE cleanliness against REAL git + the confirm path ──
+# ── AC-6: CLOSE cleanliness against REAL git + the confirm path — scoped to the block ──
 def t_replica_clean_real_git():
     d = _mkrepo()
     clean, detail = trunk.replica_clean(d, "feat/A-01")
@@ -282,11 +297,20 @@ def t_replica_clean_real_git():
     _git(d, "branch", "feat/A-01")
     clean, detail = trunk.replica_clean(d, "feat/A-01")
     ok("AC-6 leftover branch is rejected", not clean and "feat/A-01" in detail, detail)
-    _git(d, "branch", "-D", "feat/A-01")
-    with open(os.path.join(d, "junk.txt"), "w") as fh:
-        fh.write("left behind\n")
+    # a worktree checked out on THIS block's branch is a leftover
+    wt = os.path.join(d, "wt-a01")
+    _git(d, "worktree", "add", wt, "feat/A-01")
     clean, detail = trunk.replica_clean(d, "feat/A-01")
-    ok("AC-6 uncommitted state is rejected", not clean and "uncommitted" in detail, detail)
+    ok("AC-6 leftover worktree on the block branch is rejected",
+       not clean and "worktree" in detail, detail)
+    _git(d, "worktree", "remove", wt)
+    _git(d, "branch", "-D", "feat/A-01")
+    # ANOTHER worker's live worktree/branch must never read as this closer's dirt (concurrency)
+    _git(d, "branch", "feat/B-02")
+    wt2 = os.path.join(d, "wt-b02")
+    _git(d, "worktree", "add", wt2, "feat/B-02")
+    clean, detail = trunk.replica_clean(d, "feat/A-01")
+    ok("AC-6 another worker's worktree does not false-positive", clean, detail)
     shutil.rmtree(d, ignore_errors=True)
 
 

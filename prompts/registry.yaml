@@ -32,4 +32,5 @@ prompts:
   PMT-DONE-RECORD:       { file: PMT-DONE-RECORD.md,       slots: [worker_id, block, record_path, report], reply_expected: true }
   PMT-DONE-REVIEW:       { file: PMT-DONE-REVIEW.md,       slots: [worker_id, report],         reply_expected: true }
   PMT-CLOSE:             { file: PMT-CLOSE.md,             slots: [worker_id, report],         reply_expected: true }
+  PMT-CLOSE-DIRTY:       { file: PMT-CLOSE-DIRTY.md,       slots: [worker_id, detail, report], reply_expected: true }
   PMT-PING:              { file: PMT-PING.md,              slots: [worker_id, report],         reply_expected: true }

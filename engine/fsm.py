@@ -677,7 +677,7 @@ class Engine:
         # ASSIGN is role-neutral (PMT-ASSIGN); the per-role {assignment} was composed at dispatch.
         assignment = pend.get("assignment", "")
         slots = {"worker_id": wid, "assignment": assignment,
-                 "merge_path": self._merge_path()}   # mode-true merge instruction (01-11 FX-4)
+                 "merge_path": self._merge_path(pend.get("kind") or "engineer")}   # mode-/role-true (01-11 FX-4)
         if pend.get("kind") == "reviewer":
             self.emit("assign.reviewer", slots, worker_id=wid)
         else:
@@ -1148,9 +1148,12 @@ class Engine:
         return ("push it on a side branch, open a PR, and merge that PR yourself, now — "
                 "it needs no approval hold")
 
-    def _merge_path(self):
+    def _merge_path(self, kind="engineer"):
         """The {merge_path} slot of PMT-ASSIGN (01-11 FX-4): the mode-true merge instruction —
-        local mode must never tell a worker to open a PR (tron-05 F2)."""
+        local mode must never tell a worker to open a PR (tron-05 F2), and a reviewer must
+        never receive merge instructions at all (review is a milestone, not a merge)."""
+        if kind == "reviewer":
+            return "you review and report; you never merge — deliver your findings log and report done"
         if self._local_mode():
             return ("build on your branch and report done — there is no PR here; "
                     "I run the trunk merge at the gate")
@@ -1160,6 +1163,13 @@ class Engine:
         """Gate stage -> its worker prompt template (for the first send and the idle re-nudge)."""
         return {"local": "gate.local", "merge": "gate.merge", "ci": "gate.merge",
                 "trunk": "gate.trunk", "record": "gate.record", "close": "close.worker"}.get(stage)
+
+    def _block_relpath(self, block):
+        """The block doc's repo-relative path — reader stores the basename; git pathspecs and
+        the record content check need the full path under the project's blocks dir."""
+        row = self.st.row(block) or {}
+        fname = os.path.basename(row.get("block_file") or f"{block}.md")
+        return os.path.relpath(os.path.join(self.paths["blocks"], fname), self.paths["root"])
 
     def _stage_slots(self, stage, wid, block):
         slots = {"worker_id": wid, "block": block}
@@ -1178,9 +1188,8 @@ class Engine:
         # worker_count > 1), never branch name / message / say-so. Non-conforming = an
         # out-of-gate change wearing the record's clothes -> escalate, don't close.
         if g.get("stage") == "record" and not g.get("record_checked"):
-            row = self.st.row(block) or {}
             okc, detail = trunk.record_commit_ok(
-                self.paths["root"], row.get("block_file") or f"blocks/{block}.md", self.dry)
+                self.paths["root"], self._block_relpath(block), self.dry)
             if not okc:
                 self._gate_giveup(block, g, wid,
                                   f"record commit non-conforming: {detail}",
@@ -1224,9 +1233,8 @@ class Engine:
                                   "gate-close-dirty",
                                   "clean up the leftover worktree/branch/changes, then confirm")
                 return
-            if wid and not self.dry:
-                self._to_worker(wid, f"[TRON]  Not clean yet: {detail}. "
-                                     f"Finish the cleanup, then confirm again.", "close.dirty")
+            if wid:
+                self.emit("close.dirty", {"worker_id": wid, "detail": detail}, worker_id=wid)
             self.log("flow", f"gate[{block}] close claim rejected: {detail}")
             return
         for w in list(self.st.workers):

@@ -121,8 +121,10 @@ def record_commit_ok(repo_root, block_file, dry=False):
     """The record-commit content check (01-11 FX-3): inspect the LAST commit that touched the
     block doc — its OWN diff, never a trunk range (with worker_count > 1 another block's merge
     can land between merge-accept and record; a range check would false-positive a legitimate
-    record). Conforming = exactly one file (the block doc) and every changed line is the
+    record). Conforming = exactly one file (the block doc, matched on its FULL repo-relative
+    path — a same-named file elsewhere never passes) and every changed line is the
     `**Status:**` field. Anything else is an out-of-gate change wearing the record's clothes.
+    `block_file` must be the repo-relative path (the caller resolves it from the blocks dir).
     Returns (ok, detail)."""
     if dry or not repo_root or not block_file:
         return True, "dry/none"
@@ -133,9 +135,9 @@ def record_commit_ok(repo_root, block_file, dry=False):
         return False, f"no commit found touching {block_file}"
     rc, out, _ = _run(["git", "-C", repo_root, "show", "--name-only", "--format=", sha])
     files = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    if rc != 0 or len(files) != 1 or os.path.basename(files[0]) != os.path.basename(block_file):
+    if rc != 0 or files != [block_file]:
         return False, (f"record commit {sha[:8]} touches {files or 'nothing'} "
-                       f"— must be exactly the block doc")
+                       f"— must be exactly {block_file}")
     rc, out, _ = _run(["git", "-C", repo_root, "show", "--unified=0", "--format=", sha])
     if rc != 0:
         return False, f"record commit {sha[:8]}: diff unreadable"
@@ -149,22 +151,23 @@ def record_commit_ok(repo_root, block_file, dry=False):
 
 def replica_clean(repo_root, branch, main_branch="main", dry=False):
     """CLOSE-gate cleanliness (01-11 FX-9): deterministic git reads — the worker's clean-exit
-    claim is verified, never trusted. Clean = the trunk checkout has no uncommitted state, no
-    worktrees beyond the root, and the block's branch is gone. Returns (clean, detail)."""
-    if dry or not repo_root:
+    claim is verified, never trusted. Scoped to THIS block (review finding: with
+    worker_count > 1 another live worker's legitimate worktree must never read as this
+    closer's dirt): clean = the block's branch is gone and no worktree is checked out on it.
+    Returns (clean, detail)."""
+    if dry or not repo_root or not branch or branch == main_branch:
         return True, "dry/none"
     leftovers = []
-    rc, out, _ = _run(["git", "-C", repo_root, "status", "--porcelain"])
-    if rc == 0 and out.strip():
-        leftovers.append("uncommitted changes in the trunk checkout")
+    if branch_exists(repo_root, branch):
+        leftovers.append(f"leftover branch {branch}")
     rc, out, _ = _run(["git", "-C", repo_root, "worktree", "list", "--porcelain"])
     if rc == 0:
-        trees = [ln.split(" ", 1)[1] for ln in out.splitlines() if ln.startswith("worktree ")]
-        extra = [t for t in trees if os.path.realpath(t) != os.path.realpath(repo_root)]
-        if extra:
-            leftovers.append(f"leftover worktree(s): {', '.join(extra)}")
-    if branch and branch != main_branch and branch_exists(repo_root, branch):
-        leftovers.append(f"leftover branch {branch}")
+        tree, ref = None, f"refs/heads/{branch}"
+        for ln in out.splitlines():
+            if ln.startswith("worktree "):
+                tree = ln.split(" ", 1)[1]
+            elif ln.startswith("branch ") and ln.split(" ", 1)[1] == ref:
+                leftovers.append(f"leftover worktree on {branch}: {tree}")
     return (not leftovers), "; ".join(leftovers)
 
 

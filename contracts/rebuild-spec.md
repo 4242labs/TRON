@@ -166,7 +166,7 @@ A PMT may surface through a **node** *or* through a **message** (R-PMT.2) — th
 | DONE gate — engineer (T4) | ND-02 gate | `PMT-DONE-LOCAL` · `PMT-DONE-MERGE` · `PMT-DONE-TRUNK` · `PMT-DONE-RECORD` | `gate.local` · `gate.merge` · `gate.trunk` · `gate.record` |
 | DONE gate — reviewer (T4) | ND-02 gate | `PMT-DONE-REVIEW` | `gate.review` |
 | Liveness ping (H1) | engine side-system | `PMT-PING` | `heartbeat.ping` |
-| Close worker (H4) | ND-02 Settle / ANCHOR | `PMT-CLOSE` | `close.worker` |
+| Close worker (H4) | ND-02 Settle / ANCHOR | `PMT-CLOSE` · `PMT-CLOSE-DIRTY` | `close.worker` · `close.dirty` |
 
 ### Does **not** carry a PMT — operator/terminal copy stays inline (human-facing, `messages.yaml`)
 `terminal.*` (between-task feedback), `escalate.*` (operator/wall copy — AIDE composes the freeform

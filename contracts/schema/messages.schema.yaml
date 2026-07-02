@@ -50,6 +50,7 @@ templates:
   arch.remediation: {channel: worker,   slots: [type, worker_id, report],   pmt: PMT-SCOPE-REMEDIATION} # architect review-remediation job
   arch.triage:      {channel: worker,   slots: [detail, sender, worker_id, report], pmt: PMT-TRIAGE}         # unclassified -> architect triage
   close.worker:     {channel: worker,   slots: [worker_id, report],         pmt: PMT-CLOSE}
+  close.dirty:      {channel: worker,   slots: [worker_id, detail, report], pmt: PMT-CLOSE-DIRTY}   # CLOSE claim rejected — leftovers named (01-11)
   heartbeat.ping:   {channel: worker,   slots: [worker_id, report],         pmt: PMT-PING}
   gate.local:       {channel: worker,   slots: [worker_id, block, report],  pmt: PMT-DONE-LOCAL}     # DONE gate: validate locally
   gate.merge:       {channel: worker,   slots: [worker_id, block, report],  pmt: PMT-DONE-MERGE}     # DONE gate: merge
