@@ -161,6 +161,35 @@ def branch_exists(repo_root, branch, dry=False):
     return rc == 0
 
 
+def _worktree_path_for_branch(repo_root, branch):
+    """The worktree path (if any) with `branch` checked out — None if it's not checked
+    out anywhere. Best-effort: '' output / a git error reads as no worktree."""
+    rc, out, _ = _run(["git", "-C", repo_root, "worktree", "list", "--porcelain"])
+    if rc != 0:
+        return None
+    path, ref = None, f"refs/heads/{branch}"
+    for ln in out.splitlines():
+        if ln.startswith("worktree "):
+            path = ln.split(" ", 1)[1]
+        elif ln.startswith("branch ") and ln.split(" ", 1)[1] == ref:
+            return path
+    return None
+
+
+def remove_worktree_for_branch(repo_root, branch, dry=False):
+    """Lander ordering (D-15-4, tron-15): a worktree still checked out on `branch` blocks
+    `git branch -d` (`ref survives: cannot delete branch ... used by worktree`) — every
+    supervised landing hit this because the branch delete was tried with the worktree still
+    in place. Remove the worktree FIRST (best-effort; a stale/dirty worktree still fails
+    softly and leaves the branch-delete error to name it), THEN the caller deletes the
+    branch. No-op when nothing has `branch` checked out."""
+    if dry or not repo_root or not branch:
+        return
+    path = _worktree_path_for_branch(repo_root, branch)
+    if path:
+        _run(["git", "-C", repo_root, "worktree", "remove", path])
+
+
 def merge_ff_only(repo_root, branch, main_branch="main", dry=False):
     """Fast-forward trunk to an already-validated block branch — the local/no-remote merge.
     The engine owns the trunk merge (MG-01): with no remote there is no PR to land, so the
@@ -172,6 +201,52 @@ def merge_ff_only(repo_root, branch, main_branch="main", dry=False):
     _run(["git", "-C", repo_root, "checkout", main_branch])   # root stays on trunk; belt-and-suspenders
     rc, _, err = _run(["git", "-C", repo_root, "merge", "--ff-only", branch])
     return rc == 0, err
+
+
+def _patch_id_one(repo_root, ref, main_branch):
+    """`git patch-id --stable` for `ref`'s own diff against its merge-base with trunk —
+    one hash representing the CONTENT of everything the branch adds, invariant to which
+    exact commits carry it (a rebase reshuffles commits/shas; the net diff, and so the
+    patch-id, stays the same). '' on any git failure (unresolvable ref, empty diff, patch-id
+    unavailable) — callers must treat '' as a non-match, never a free pass."""
+    rc, base, _ = _run(["git", "-C", repo_root, "merge-base", main_branch, ref])
+    base = base.strip()
+    if rc != 0 or not base:
+        return ""
+    try:
+        diff = subprocess.run(["git", "-C", repo_root, "diff", f"{base}..{ref}"],
+                              capture_output=True, text=True, timeout=_TIMEOUT)
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    if diff.returncode != 0 or not diff.stdout.strip():
+        return ""
+    try:
+        pid = subprocess.run(["git", "-C", repo_root, "patch-id", "--stable"],
+                             input=diff.stdout, capture_output=True, text=True,
+                             timeout=_TIMEOUT)
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    if pid.returncode != 0 or not pid.stdout.strip():
+        return ""
+    return pid.stdout.split()[0]
+
+
+def patch_id_matches(repo_root, ref_a, ref_b, main_branch="main", dry=False):
+    """T1 (D-15-1, tron-15 race): content-identity check for the merge-in-flight re-pin —
+    a moved branch tip while an approved merge is in flight is the worker completing the
+    SAME ordered merge (e.g. a rebase the engine itself asked for after a non-ff), not an
+    unseen change, exactly when the two tips introduce an IDENTICAL diff (`git patch-id
+    --stable`, so line-shift-only differences from the rebase never fool it). Best-effort:
+    dry / an unresolvable ref / any git failure -> False (no match) — the caller's
+    fallback is the pre-existing void-and-re-pin, never a grant carried on an unverifiable
+    diff."""
+    if dry or not repo_root or not ref_a or not ref_b:
+        return False
+    if ref_a == ref_b:
+        return True
+    ida = _patch_id_one(repo_root, ref_a, main_branch)
+    idb = _patch_id_one(repo_root, ref_b, main_branch)
+    return bool(ida) and ida == idb
 
 
 def _path_allowed(path, allowlist):
@@ -220,6 +295,7 @@ def land_docs(repo_root, branch, allowlist, main_branch="main", dry=False,
     files = [ln.strip() for ln in out.splitlines() if ln.strip()]
     if not files:
         # Nothing beyond trunk (or already landed): delete the empty branch and be done.
+        remove_worktree_for_branch(repo_root, branch, dry)   # D-15-4: worktree gone first
         rc, _, derr = _run(["git", "-C", repo_root, "branch", "-d", branch])
         if rc != 0:
             # W10 rider: a worktree still holding the branch blocks -d — the ref must
@@ -247,6 +323,7 @@ def land_docs(repo_root, branch, allowlist, main_branch="main", dry=False,
     if not okm:
         return "non-ff", err.strip()
     sha = head_sha(repo_root)
+    remove_worktree_for_branch(repo_root, branch, dry)       # D-15-4: worktree gone first
     rc, _, derr = _run(["git", "-C", repo_root, "branch", "-d", branch])
     note = f"; ref survives: {derr.strip()}" if rc != 0 else ""
     return "landed", f"{len(files)} file(s) @ {sha[:7]}{note}"
