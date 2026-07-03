@@ -28,6 +28,7 @@ One wake = one bounded tick: refresh from trunk, sweep liveness, drain inboxes
 into triggers, drain the trigger queue to quiescence, persist atomically, exit.
 """
 import os
+import re
 import json
 import uuid
 import hashlib
@@ -81,6 +82,12 @@ KILL_GRACE_S = 60.0
 # (worker_runner.TURN_TIMEOUT_S), so the sweep's working-turn exemption (tron-07 W8) and
 # the runner's own hang protection share one clock.
 TURN_CEILING_S = float(os.environ.get("TRON_TURN_TIMEOUT_S", "1800"))
+# T3 (D-15-3): the deterministic operator-settle regex — a CASE-<n> id plus a settling verb
+# ANYWHERE in the message, in either order (`resume CASE-007` and `CASE-007: resume` both
+# hit). Zero-padding-agnostic (`CASE-7` normalizes the same as `CASE-007`, State.next_case_id's
+# actual format) since the operator types it by hand.
+CASE_ID_RE = re.compile(r"case-0*(\d+)", re.IGNORECASE)
+SETTLE_VERB_RE = re.compile(r"\b(approve|resume|abandon)\b", re.IGNORECASE)
 
 
 class Engine:
@@ -546,9 +553,12 @@ class Engine:
 
     # ── worker-pool accounting (architect EXCLUDED) ──
     def _pool(self):
+        # T2 (D-15-2): a walled worker is HELD, not released, but it must not occupy a
+        # worker_count slot while parked — excluded from work-selection same as "released"
+        # (un-held on operator resume, _h_apply_decision).
         return [w for w in self.st.workers
                 if w.get("role") in ("engineer", "reviewer")
-                and w.get("status") not in ("released",)]
+                and w.get("status") not in ("released", "walled")]
 
     def _worker_count(self):
         return int(self.st.live_config.get("worker_count")
@@ -940,7 +950,8 @@ class Engine:
         return case_id
 
     def _h_escalate(self, m):
-        # wall:raised:<block> — Escalate: free the slot, park the block (runtime), contact operator.
+        # wall:raised:<block> — Escalate: HOLD the slot (T2, D-15-2), park the block
+        # (runtime), contact operator.
         block = m.get("block")
         worker_id = m.get("worker_id")
         if block and block in self.st.blocked:
@@ -951,7 +962,7 @@ class Engine:
                 continue
             if (block and w.get("block") == block) or (worker_id and w.get("id") == worker_id):
                 freed = w.get("id")
-                self._release_worker(w, notify=False)
+                self._hold_worker(w)
         if block:
             if block not in self.st.blocked:
                 self.st.blocked.append(block)
@@ -990,6 +1001,10 @@ class Engine:
             g.pop("case_merge", None)
             if decision in ("resume", "approve"):                 # 1. approve -> agent merges
                 g["approved_merge"] = True
+                # T1 (D-15-1): the order this approval carries is now IN FLIGHT — a tip that
+                # moves before it lands gets the content-identity check (patch-id), never a
+                # blind re-pin (_drive_gate). Cleared on landing or a content-divergent re-pin.
+                g["merge_in_flight"] = True
                 self._close_case(m.get("case"), case)
                 self._drive_gate(block, g, reason="merge approved")
             elif decision in ("self", "self_merge", "merge_self"):  # 2. operator merges it -> resume at trunk
@@ -1016,10 +1031,24 @@ class Engine:
             self.log("flow", f"merge-gate[{block}] -> {decision}")
             self._emit("pulse"); return
         if not block:
+            # T3 (D-15-3): a settle that resolves NO pending case is never a silent no-op —
+            # this is the `resume CASE-007` no-op's exact shape (classify mangled the case
+            # id/block, nothing was ever touched). Name the pending set back to the
+            # operator so a mis-resolved settle is visibly wrong, not silently nothing.
+            if m.get("case") or decision:
+                pending = sorted(self._undecided_cases())
+                self.emit("escalate.unclassified",
+                          {"detail": f"settle '{m.get('case') or '?'}: {decision or '?'}' "
+                                     f"matches no pending case"
+                                     + (f" — still parked: {', '.join(pending)}"
+                                        if pending else " — nothing is parked")})
             self._close_case(m.get("case"), case)
             self._emit("pulse"); return
         if decision == "resume" and block in self.st.blocked:
             self.st.blocked.remove(block)                 # back in the dispatch pool (still 📋 on trunk)
+            for w in self.st.workers:                      # T2: a wall-held worker un-holds on resume
+                if w.get("block") == block and w.get("status") == "walled":
+                    w["status"] = w.pop("held_status", None) or "working"
         elif decision == "amend" and block in self.st.blocked:
             self.st.blocked.remove(block)
             self._forward_review(block)                   # architect re-scopes the block file
@@ -1187,13 +1216,21 @@ class Engine:
                 # seen (an out-of-gate merge) — never silently accept it.
                 if trunk.branch_merged(self.paths["root"], branch,
                                        self.paths.get("main_branch", "main"), self.dry):
-                    if g.get("case_merge") and not (g.get("approved_merge") or g.get("self_merge")):
+                    # T1 (D-15-1): a block whose own ordered merge is IN FLIGHT is exempt —
+                    # merge_in_flight is true only while approved_merge/self_merge holds
+                    # (set at approval, cleared the moment it lands or the grant is voided),
+                    # so this is already covered by the existing exemption below; named
+                    # explicitly per the tron-15 fix spec (bypass detection must SKIP an
+                    # in-flight block, never just happen to miss it).
+                    if g.get("case_merge") and not (g.get("approved_merge") or g.get("self_merge")
+                                                     or g.get("merge_in_flight")):
                         self._gate_giveup(block, g, wid,
                                           "merged to trunk outside the gate (bypassed a pending merge hold)",
                                           "gate-bypass", "audit the out-of-gate merge; re-validate on trunk")
                         return
                     stage, msg = "trunk", "gate.trunk"   # already merged -> skip local, re-validate on trunk
                     g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)  # A-5 predicate anchor
+                    g.pop("merge_in_flight", None)       # T1: landed -> in-flight window closed
                 else:
                     # No PR, not yet on trunk. REMOTE mode: the worker opens a PR and the merge
                     # lands via the pr path below. LOCAL mode (no remote): there is no PR to wait
@@ -1214,14 +1251,34 @@ class Engine:
                             # A-3: the grant binds the exact sha the operator saw at park. A tip
                             # that moved between park and execution voids the grant and re-parks
                             # NAMING the new tip (rider 2) — unseen commits never ride an old yes.
+                            # T1 (D-15-1, tron-15 race): UNLESS the order is already IN FLIGHT
+                            # (merge_in_flight — set at approval in _h_apply_decision) — then a
+                            # moved tip is as likely the worker completing THIS SAME order (e.g.
+                            # the rebase this gate itself asked for on a non-ff below) as an
+                            # unseen change. Verify with content identity (git patch-id --stable)
+                            # before voiding anything: identical -> the grant carries to the new
+                            # tip (rider 2 never fires, gate-bypass never misfires on the ordered
+                            # merge landing under a rebased sha); divergent -> the original
+                            # void-and-re-pin (AC-2). The PRE-order case (tip moves before any
+                            # approval, e.g. tron-15 CASE-005->006) never sets merge_in_flight,
+                            # so it keeps today's unconditional void.
                             cur_tip = trunk.tip_sha(self.paths["root"], branch, self.dry)
                             if (g.get("approved_merge") and g.get("case_tip") and cur_tip
                                     and cur_tip != g.get("case_tip")):
-                                self.log("flow", f"gate[{block}] approved tip {str(g.get('case_tip'))[:7]} "
-                                                 f"moved to {cur_tip[:7]} -> grant void, re-park")
-                                g.pop("approved_merge", None)
-                                g.pop("case_merge", None)
-                                g.pop("case_tip", None)
+                                if g.get("merge_in_flight") and trunk.patch_id_matches(
+                                        self.paths["root"], g["case_tip"], cur_tip,
+                                        self.paths.get("main_branch", "main"), self.dry):
+                                    self.log("flow", f"gate[{block}] approved tip "
+                                                     f"{str(g.get('case_tip'))[:7]} moved to "
+                                                     f"{cur_tip[:7]} -> patch-id match, grant carries")
+                                    g["case_tip"] = cur_tip
+                                else:
+                                    self.log("flow", f"gate[{block}] approved tip {str(g.get('case_tip'))[:7]} "
+                                                     f"moved to {cur_tip[:7]} -> grant void, re-park")
+                                    g.pop("approved_merge", None)
+                                    g.pop("case_merge", None)
+                                    g.pop("case_tip", None)
+                                    g.pop("merge_in_flight", None)   # T1: the old order's authority ends here
                             if self._merge_gated(block, g, wid):
                                 return                                # ASK: parked on the operator, hold
                             ok, err = trunk.merge_ff_only(
@@ -1237,6 +1294,7 @@ class Engine:
                                 # unexecuted merge — keeps it, but nothing after execution can
                                 # ride it into a second un-asked merge.
                                 g.pop("approved_merge", None)
+                                g.pop("merge_in_flight", None)    # T1: landed -> in-flight window closed
                                 stage, msg = "trunk", "gate.trunk"    # merged -> re-validate on trunk
                             else:
                                 self.log("flow", f"gate[{block}] local ff-merge non-ff: {err.strip()}")
@@ -1271,6 +1329,7 @@ class Engine:
                 # A-5: best-effort anchor — a remote-merged branch may be unresolvable locally;
                 # an empty sha just skips the ancestry predicate (quiet hold, R-3 detail at cap).
                 g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
+                g.pop("merge_in_flight", None)   # T1: landed (PR merged/closed) -> flight over
         elif pr.get("checks") == "failing":
             stage, msg = "ci", "gate.merge"              # CI red -> re-nudge the merge step (get CI green)
             renudge = True
@@ -1864,6 +1923,20 @@ class Engine:
             arch.pop("job_nudged_at", None)
         self._pump_architect()
 
+    # ── worker hold (T2, D-15-2) ──
+    def _hold_worker(self, w):
+        """A wall PARKS the case but never releases the sender (D-15-2: a mistagged `wall`
+        used to free the worker instantly, no challenge, on CASE-007's model). The worker
+        stays on the roster (status 'walled') — excluded from work-selection (_pool, so a
+        fresh worker can take up its slot's budget while this one waits) but still resolvable
+        by id, so its follow-up messages process on-roster instead of falling to the
+        off-roster/ghost path. Its session is left running (no jobs.release) — operator
+        `resume` un-holds it via _h_apply_decision and it continues; a still-walled worker
+        is released same as every other worker at session end (_end_session, no special
+        case)."""
+        w["held_status"] = w.get("status")
+        w["status"] = "walled"
+
     # ── worker release ──
     def _release_worker(self, w, notify=True, reason="released"):
         wid = w.get("id")
@@ -2281,7 +2354,11 @@ class Engine:
         ping = int(self.knobs.get("silence_ping_min", 6))
         esc = int(self.knobs.get("silence_escalate_min", 8))
         for w in list(self.st.workers):
-            if w.get("status") == "released":
+            # T2 (D-15-2): a walled worker is deliberately idle (parked on the operator) —
+            # the silence/stall machinery must never treat that as a hang and force a
+            # second, unintended release out from under the hold; same exemption as
+            # "released".
+            if w.get("status") in ("released", "walled"):
                 continue
             sess = w.get("session_id")
             alive = bool(sess) and sess != "dry" and jobs.is_alive(w.get("id"), idx)
@@ -2400,6 +2477,18 @@ class Engine:
         text = m.get("text") or (m.get("message", {}) or {}).get("text", "") or str(m)
         return {"text": text, "sender": {"kind": kind, "id": m.get("id")}}
 
+    def _settle_regex(self, text):
+        """T3 (D-15-3): deterministic operator settle — a CASE-<n> id plus a settling verb
+        (approve|resume|abandon) anywhere in the text resolves to `operator.decision` slots
+        with zero model calls. Returns None (no match -> classify) when either half is
+        missing; `_h_apply_decision` resolves the case (and its block) by the id itself, so
+        no `block` slot is needed here."""
+        m = CASE_ID_RE.search(text or "")
+        v = SETTLE_VERB_RE.search(text or "")
+        if not m or not v:
+            return None
+        return {"case": f"CASE-{int(m.group(1)):03d}", "decision": v.group(1).lower()}
+
     def _classify(self, msg):
         # A-2 (tron-13 D2): a structured report resolves deterministically — the model is
         # never consulted for a line that already carries its verb as data.
@@ -2426,9 +2515,17 @@ class Engine:
             return "drop", {}
         if stag:
             return stag, sslots
-        payload = {"text": msg.get("text", ""), "sender": msg.get("sender", {})}
         sender = msg.get("sender", {})
         raw = msg.get("text", "")
+        # T3 (D-15-3): the operator inbox is trusted input — before any classify/LLM call,
+        # a CASE-<n> id plus a settling verb ANYWHERE in the message settles that case
+        # deterministically (zero model calls; `resume CASE-007` and `CASE-007: resume`
+        # both hit). No match falls through to classify exactly as today.
+        if sender.get("kind") == "operator":
+            settled = self._settle_regex(raw)
+            if settled:
+                return "operator.decision", {**settled, **data_slots}
+        payload = {"text": raw, "sender": sender}
         ok, out, attempts = judge.call("classify_message", payload, self.ctx, self._max_retries,
                                        elog=self.events)
         if not ok:
