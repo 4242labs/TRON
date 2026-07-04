@@ -3117,6 +3117,7 @@ class Engine:
         self.st.data["dropped"] = []
         self.st.data["cadence"] = {}
         self.st.data["counters"] = {}            # T9/S1-12: stall-count (+ case-seq, refresh-fail) must not leak across sessions
+        self.st.data["blocked_bad_since"] = {}   # T6 (01-18 addendum) review fix: a stale prior-session epoch would fire the blocked-list arm INSTANTLY on the first uncovered block of a new run — same T9/S1-12 law
         self.st.data["pending_cases"] = {}
         self.st.data["reconciled"] = []
         self.st.data["review_markers"] = {}      # since-last-review markers don't carry across sessions (T6)
