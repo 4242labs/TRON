@@ -2398,6 +2398,14 @@ class Engine:
         queue before any serial _ingest — serial replay re-walls the worker on the first
         raise and re-queues the rest via the _ingest walled-check, the exact emergent
         re-queue that perpetuated the treadmill (queue counts 1→N→1 in the tron-26 flow log).
+          fold/collapse KEY (impl-review I-2): the block each wall verb is compared and
+            grouped on is the SENDER-FIRST-RESOLVED block — the worker's own assigned block
+            when it has one, else the canon-resolved text ref — exactly what _admit will
+            resolve the verb to at replay (A-1/W3: a worker's wall always lands on its own
+            block). Never the raw slot: a block-less echo ("re-send, unchanged" lines
+            classify without a block ref) would compare None != the settled block, escape
+            rule 1, and hand rule 2 one fresh case per settle — the treadmill reduced
+            instead of killed, and the arming shape of the I-1 strand below.
           rule 1 (fold — takes precedence): a replayed `wall` verb matching the settled
             case's worker+block is FOLDED — already archived at claim time (01-18 T8),
             flow-logged WITH the folded text (so a mis-fold is visible in the log, F7), no
@@ -2410,18 +2418,30 @@ class Engine:
             the gate the wall meant to stop), the NEWEST text. Its raise LEGITIMATELY
             re-walls the worker mid-batch and re-queues the verbs behind it — a genuine new
             wall owning the conversation; the re-queued verbs fold/replay at ITS settle.
-            MECHANISM NOTE (deviation from the spec's cited seam, same outcome): the spec
-            names the _ingest walled-check as the re-queue mechanism, but _ingest -> _emit
-            only QUEUES the wall:raised trigger — _h_escalate holds the worker at
-            _drain_triggers, strictly AFTER this whole batch would have been ingested, so
-            the walled-check can never fire mid-batch. Left to the trigger timing, a
-            done-report behind the fresh wall would drain AFTER the hold and drive the gate
-            the wall meant to stop — the exact hazard the arrival-order rule names. So THIS
-            seam performs the identical re-queue itself, deterministically: once a rule-2
-            wall verb is ingested, the remaining verbs go back onto held_verbs whole (the
-            precise state the walled-check would have produced) and the loop stops.
-          A wall for a different block still raises (its own rule-2 group of one; a second
-          different-block wall behind the first is re-queued whole and raises at ITS turn).
+            MECHANISM NOTE (deviation from the spec's cited seam, adjudicated APPROVED by
+            the impl review): the spec named the _ingest walled-check as the re-queue
+            mechanism, but _ingest -> _emit only QUEUES the wall:raised trigger —
+            _h_escalate holds the worker at _drain_triggers, strictly AFTER this whole
+            batch would have been ingested, so the walled-check can never fire mid-batch.
+            Left to the trigger timing, a done-report behind the fresh wall would drain
+            AFTER the hold and drive the gate the wall meant to stop — the exact hazard the
+            arrival-order rule names. So THIS seam performs the identical re-queue itself,
+            deterministically: once a rule-2 wall verb is ingested, the remaining verbs go
+            back onto held_verbs whole (the precise state the walled-check would have
+            produced) and the loop stops.
+            RE-QUEUE GUARD (impl-review I-1, repro'd live): re-queue ONLY behind a raise
+            that will actually LAND — mirror _h_escalate's own blocked-guard (~986) and the
+            admission row check against the resolved block BEFORE extending held_verbs. A
+            raise the guard will swallow at drain (block already parked) re-walls nobody;
+            re-queuing behind it stranded the remainder on the held_verbs of an UN-walled
+            worker with zero wall cases — a parked block with no operator handle (the
+            D-22-1 case-unreachable class) plus a lost done-report (the F2+N7 class).
+            When the raise cannot land, the serial replay just continues (the old code's
+            live-replay behavior for exactly this shape); the blocked-list invariant arm
+            (01-18 T6) remains the parked-block-with-no-case backstop.
+          A wall for a different worker's block still raises (its own rule-2 group); note
+          sender-first resolution means a WORKER-sent wall can never name a foreign block —
+          its verbs all resolve to its own assignment (pinned in the suite).
           Non-wall verbs replay exactly as today, in arrival order.
 
         ACCEPTED RESIDUAL (F7, named in the spec): a genuinely NOVEL blocker walled while
@@ -2436,11 +2456,23 @@ class Engine:
         queued = self._unhold_worker(w)
         scase_block = (settled_case or {}).get("block")
         scase_wid = (settled_case or {}).get("worker_id")
+        # I-2: the sender-first resolution _admit will apply at replay, mirrored here so
+        # fold/collapse compare what the verb will ACTUALLY raise on (reviewers gate by
+        # <type>, not block — same carve-out as _admit's).
+        assigned = w.get("block")
+        if assigned and str(assigned).startswith("review:"):
+            assigned = None
+
+        def _resolved(slots):
+            if assigned:
+                return assigned
+            ref = (slots or {}).get("block")
+            return self._resolve_block_ref(str(ref)) if ref else None
         replay, kept = [], {}
         for item in queued:
             tag, slots = item.get("tag"), item.get("slots") or {}
             if tag == "worker.wall":
-                iblock = slots.get("block")
+                iblock = _resolved(slots)
                 text = slots.get("detail") or slots.get("_raw") or ""
                 if (settled_case is not None and iblock == scase_block
                         and scase_wid in (None, wid)):
@@ -2458,15 +2490,25 @@ class Engine:
             replay.append(item)
         for i, item in enumerate(replay):
             self._ingest(item["tag"], item["slots"], {"kind": "worker", "id": wid})
-            if item.get("tag") == "worker.wall" and i + 1 < len(replay):
-                # rule 2's fresh raise owns the conversation from here (see the mechanism
-                # note above): re-queue the remainder whole, exactly as the _ingest
-                # walled-check does for a live wall — they fold/replay at ITS settle.
-                rest = replay[i + 1:]
-                w.setdefault("held_verbs", []).extend(rest)
-                self.log("flow", f"unhold[{wid}] re-queued {len(rest)} verb(s) behind "
-                                 f"the fresh wall raise")
-                break
+            if item.get("tag") != "worker.wall" or i + 1 >= len(replay):
+                continue
+            # I-1: re-queue ONLY behind a raise that will actually land — the exact
+            # conditions under which _h_escalate holds at drain: a resolved block the
+            # canon knows (admission would refuse otherwise) that is NOT already parked
+            # (the ~986 blocked-guard swallows a re-raise of a parked block).
+            rb = _resolved(item.get("slots") or {})
+            if not rb or rb in self.st.blocked or self.st.row(rb) is None:
+                self.log("flow", f"unhold[{wid}] wall raise for {rb or '?'} cannot land "
+                                 f"(parked/unknown) -> serial replay continues")
+                continue
+            # rule 2's fresh raise owns the conversation from here (see the mechanism
+            # note above): re-queue the remainder whole, exactly as the _ingest
+            # walled-check does for a live wall — they fold/replay at ITS settle.
+            rest = replay[i + 1:]
+            w.setdefault("held_verbs", []).extend(rest)
+            self.log("flow", f"unhold[{wid}] re-queued {len(rest)} verb(s) behind "
+                             f"the fresh wall raise")
+            break
         if not replay:
             self._post_unhold_nudge(w, block)
         return replay
