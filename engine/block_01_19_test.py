@@ -574,6 +574,38 @@ def t2_changes_settle_still_lands_gate_changes_on_a_walled_worker():
        g.get("awaiting_rework") is True, f"g={g}")
 
 
+def t2_remote_ci_red_renudge_dedupes_until_consumed():
+    # Impl-review adjudication 2 pin (NOTE 5): the remote CI-red arm keeps renudge=True
+    # (the tail runs per tick) but the same-stage send goes through the kind-keyed
+    # dedupe — at most one undelivered gate.merge; a consumed copy un-gags the kind and
+    # the very next tick's renudge sends fresh. Flow control, never a gag, never the
+    # tron-25 29-copy backlog class in remote mode either.
+    import json
+    eng = _eng()
+    eng.dry = False
+    eng.paths["remote"] = "origin"          # remote mode: the PR ladder owns the merge
+    wid = "ENG-A-01"
+    eng.st.branches["A-01"] = "feat/A-01"
+    eng.st.data["open_prs"] = {"feat/A-01": {"number": 7, "checks": "failing"}}
+    g = eng.st.gate.setdefault("A-01", {"stage": "ci", "pr": 7})
+    mbox = jobs.mailbox_path(eng.ctx.worker_dir(wid))
+
+    def merge_kinds():
+        if not os.path.exists(mbox):
+            return []
+        return [json.loads(l) for l in open(mbox) if l.strip()
+                and json.loads(l).get("kind") == "gate.merge"]
+    for _ in range(3):
+        eng._drive_gate("A-01", g)          # per-tick renudge while CI stays red
+    ok("T2 remote CI-red: at most ONE undelivered gate.merge across N red ticks",
+       len(merge_kinds()) == 1, f"mbox={merge_kinds()}")
+    with open(os.path.join(eng.ctx.worker_dir(wid), jobs.HWM), "w") as fh:
+        fh.write(str(merge_kinds()[0]["seq"]))
+    eng._drive_gate("A-01", g)              # consumed -> the next renudge sends fresh
+    ok("T2 remote CI-red: a consumed copy un-gags the kind (fresh order next tick)",
+       len(merge_kinds()) == 2, f"mbox={merge_kinds()}")
+
+
 # ══ T3: held-verb replay folds duplicate walls — at BOTH replay seams ══
 
 def t3_resume_seam_folds_all_matching_echoes_zero_new_cases():
@@ -606,31 +638,63 @@ def t3_resume_seam_folds_all_matching_echoes_zero_new_cases():
            for probe in ("echo-one", "echo-two", "echo-three")), f"logs={logs}")
 
 
-def t3_resume_seam_novel_wall_raises_one_case_and_requeues_the_rest():
-    # AC-1 T3 bullet (resume seam): 1 duplicate + 1 novel-block wall -> exactly one new
-    # case (the novel one), which legitimately re-walls and re-queues the verbs behind
-    # it (R2-2: a genuine new wall owning the conversation — arrival order preserved).
+def t3_resume_seam_rule2_raise_requeues_the_rest_sender_first():
+    # AC-1 T3 bullet (resume seam): a rule-2 fresh raise legitimately re-walls the worker
+    # and re-queues the verbs behind it (R2-2). Impl-review I-2 pinned the reachable
+    # model: admission resolves SENDER-FIRST, so a worker-sent wall can never name a
+    # foreign block — the "novel-block raises separately" shape is unreachable; rule 2
+    # fires when rule 1 has nothing to discriminate against (case is None here). The
+    # wall is deliberately LABELED B-99 to pin the sender-first rewrite: the raised case
+    # is for the worker's OWN block A-01.
     eng = _eng()
     wid = "ENG-A-01"
     cid = _wall(eng, "A-01", wid, detail="the original wall")
     _queue_walls(eng, wid, [
-        ("worker.wall", {"block": "A-01", "detail": "stale echo of the settled wall"}),
-        ("worker.wall", {"block": "B-99", "detail": "a NOVEL blocker on another ref",
-                         "worker_id": wid}),
+        ("worker.wall", {"block": "B-99", "detail": "a fresh blocker", "worker_id": wid}),
         ("worker.done", {"block": "A-01", "_raw": "done A-01 — local: evidence"}),
     ])
-    eng._h_apply_decision({"case": cid, "decision": "resume", "block": "A-01"})
+    eng.st.pending_cases.pop(cid)      # settle resolved by block, no case object (rule 1
+    eng._h_apply_decision({"decision": "resume", "block": "A-01"})   # inert -> rule 2)
     eng._drain_triggers()              # the fresh raise is a queued trigger — drain it
     w = next(x for x in eng.st.workers if x["id"] == wid)
     new_walls = [c for c in eng.st.pending_cases.values() if c.get("kind") == "wall"]
-    ok("T3 resume: exactly ONE new case — the novel wall (the echo folded)",
-       len(new_walls) == 1 and "NOVEL" in (new_walls[0].get("detail") or ""),
+    ok("T3 resume: exactly ONE new case from the rule-2 raise",
+       len(new_walls) == 1 and "a fresh blocker" in (new_walls[0].get("detail") or ""),
        f"cases={eng.st.pending_cases}")
-    ok("T3 resume: the novel raise legitimately re-walls the worker mid-batch",
+    ok("T3 resume: the case lands on the worker's OWN block — sender-first, never the "
+       "raw B-99 label (I-2 model pin)",
+       new_walls and new_walls[0].get("block") == "A-01", f"cases={eng.st.pending_cases}")
+    ok("T3 resume: the fresh raise legitimately re-walls the worker mid-batch",
        w.get("status") == "walled", f"w={w}")
     ok("T3 resume: the verbs behind the fresh wall re-queue (they fold/replay at ITS "
        "settle)", [i.get("tag") for i in (w.get("held_verbs") or [])] == ["worker.done"],
        f"held={w.get('held_verbs')}")
+
+
+def t3_resume_seam_blockless_and_mislabeled_echoes_fold_sender_first():
+    # Impl-review I-2 + NOTE 5: rule 1's fold key is the SENDER-FIRST-resolved block —
+    # a block-less echo (classify filled no ref on a "re-send, unchanged" line) and a
+    # mislabeled echo both resolve to the worker's own block and FOLD; the raw-slot
+    # compare would have let both escape into one-case-per-settle.
+    eng = _eng()
+    wid = "ENG-A-01"
+    cid = _wall(eng, "A-01", wid, detail="the original wall")
+    _queue_walls(eng, wid, [
+        ("worker.wall", {"detail": "re-send, unchanged (no block ref)"}),
+        ("worker.wall", {"block": "B-02", "detail": "same wall, mangled ref"}),
+    ])
+    logs = _capture_log(eng)
+    eng._h_apply_decision({"case": cid, "decision": "resume", "block": "A-01"})
+    eng._drain_triggers()
+    w = next(x for x in eng.st.workers if x["id"] == wid)
+    ok("T3 sender-first fold: a BLOCK-LESS echo folds under rule 1 (never escapes into "
+       "rule 2)", not any(c.get("kind") == "wall" for c in eng.st.pending_cases.values()),
+       f"cases={eng.st.pending_cases}")
+    ok("T3 sender-first fold: the mislabeled echo folds too (both resolve to A-01)",
+       sum(1 for name, text in logs
+           if name == "flow" and "folded stale wall echo" in text) == 2, f"logs={logs}")
+    ok("T3 sender-first fold: the worker is un-held, nothing re-queued",
+       w.get("status") != "walled" and not w.get("held_verbs"), f"w={w}")
 
 
 def t3_resume_seam_case_none_rule1_inert_rule2_collapses_newest_text():
@@ -658,6 +722,9 @@ def t3_resume_seam_case_none_rule1_inert_rule2_collapses_newest_text():
        f"cases={eng.st.pending_cases}")
     ok("T3 resume/case-None: the fresh raise re-walls the worker (a live wall owns the "
        "conversation)", w.get("status") == "walled", f"w={w}")
+    ok("T3 resume/case-None: the collapsed case is keyed sender-first on the worker's "
+       "own block", new_walls and new_walls[0].get("block") == "A-01",
+       f"cases={eng.st.pending_cases}")
 
 
 def t3_resume_seam_non_wall_verbs_replay_unchanged_in_arrival_order():
@@ -683,9 +750,13 @@ def t3_resume_seam_non_wall_verbs_replay_unchanged_in_arrival_order():
        f"replayed={replayed}")
 
 
-def _sweep_fixture(specs, settle="resume"):
+def _sweep_fixture(specs, settle="resume", case_block="A-01", parked=False):
     """A walled worker with held verbs and an already-SETTLED wall case the sweep's
-    invariant arm (a) will act on (block_01_17/01_18 convention: dry off, clock owned)."""
+    invariant arm (a) will act on (block_01_17/01_18 convention: dry off, clock owned).
+    `case_block`: the settled case's block — "A-01" walls through the ordinary escalate
+    path; anything else opens the case manually (a same-worker wall case for another
+    ref, the rule-2 discriminator shape). `parked`: leave A-01 in st.blocked at arm-(a)
+    time (the I-1 crash window: decision written, unblock never ran)."""
     ctx, _ = build(blocks=[("A-01", "🔄", "none")])
     eng = Engine(ctx); started(eng)
     eng.dry = False
@@ -693,11 +764,19 @@ def _sweep_fixture(specs, settle="resume"):
     eng.st.workers.append({"id": wid, "role": "engineer", "block": "A-01",
                            "session_id": "dry", "status": "idle"})
     eng._tq = []
-    eng._h_escalate({"block": "A-01", "worker_id": wid, "detail": "the original wall"})
-    cid = next(c for c, v in eng.st.pending_cases.items() if v.get("kind") == "wall")
+    w = eng.st.workers[-1]
+    if case_block == "A-01":
+        eng._h_escalate({"block": "A-01", "worker_id": wid, "detail": "the original wall"})
+        cid = next(c for c, v in eng.st.pending_cases.items() if v.get("kind") == "wall")
+    else:
+        eng._hold_worker(w)
+        cid = eng._open_case(case_block, "wall", wid, "the original wall")
     _queue_walls(eng, wid, specs)
     eng.st.pending_cases[cid]["decision"] = settle    # settled; nothing un-held it (arm a)
-    if "A-01" in eng.st.blocked:
+    if parked:
+        if "A-01" not in eng.st.blocked:
+            eng.st.blocked.append("A-01")   # the settle's unblock never ran (I-1 window)
+    elif "A-01" in eng.st.blocked:
         eng.st.blocked.remove("A-01")   # the settle's own unblock ran (tron-23 signature:
                                         # only the worker's un-hold was missed)
     clock = {"t": 1000.0}
@@ -734,40 +813,111 @@ def t3_sweep_seam_folds_all_matching_echoes_zero_new_cases():
        f"logs={logs}")
 
 
-def t3_sweep_seam_novel_wall_raises_one_case_and_requeues_the_rest():
-    # AC-1 T3 bullet (sweep seam): 1 duplicate + 1 novel wall -> exactly one new case
-    # (the novel one); it re-walls and re-queues the verbs behind it.
+def t3_sweep_seam_rule2_raise_requeues_the_rest():
+    # AC-1 T3 bullet (sweep seam): a rule-2 raise -> exactly one new case; it re-walls
+    # and re-queues the verbs behind it. Reachable model (I-2): the settled case is a
+    # same-worker case for ANOTHER ref (B-77), so the A-01-resolving echo does not match
+    # rule 1 and rule 2 raises it fresh — on the worker's own block, sender-first.
     eng, wid, cid, clock = _sweep_fixture([
-        ("worker.wall", {"block": "A-01", "detail": "stale sweep echo"}),
-        ("worker.wall", {"block": "B-99", "detail": "a NOVEL blocker via the sweep door",
+        ("worker.wall", {"block": "B-99", "detail": "a fresh blocker via the sweep door",
                          "worker_id": "ENG-A-01"}),
         ("worker.done", {"block": "A-01", "_raw": "done A-01 — local: evidence"}),
-    ])
+    ], case_block="B-77")
     eng._sweep()
     clock["t"] += PING_WINDOW_S
     eng._sweep()
     eng._drain_triggers()              # the fresh raise is a queued trigger — drain it
     w = next(x for x in eng.st.workers if x["id"] == wid)
     new_walls = [c for c in eng.st.pending_cases.values() if c.get("kind") == "wall"]
-    ok("T3 sweep: exactly ONE new case — the novel wall (the echo folded)",
-       len(new_walls) == 1 and "NOVEL" in (new_walls[0].get("detail") or ""),
+    ok("T3 sweep: exactly ONE new case from the rule-2 raise",
+       len(new_walls) == 1 and "a fresh blocker" in (new_walls[0].get("detail") or ""),
        f"cases={eng.st.pending_cases}")
-    ok("T3 sweep: the novel raise legitimately re-walls the worker",
+    ok("T3 sweep: the case lands sender-first on the worker's own block (I-2 model pin)",
+       new_walls and new_walls[0].get("block") == "A-01", f"cases={eng.st.pending_cases}")
+    ok("T3 sweep: the fresh raise legitimately re-walls the worker",
        w.get("status") == "walled", f"w={w}")
     ok("T3 sweep: the verbs behind it re-queue for ITS settle",
        [i.get("tag") for i in (w.get("held_verbs") or [])] == ["worker.done"],
        f"held={w.get('held_verbs')}")
 
 
+def t3_sweep_seam_swallowed_raise_never_strands_the_remainder():
+    # Impl-review I-1 (the live repro, rule-2 door): the settled case is for another ref
+    # AND A-01 is STILL in st.blocked (the settle's unblock never ran — crash window).
+    # The rule-2 raise cannot land (_h_escalate's blocked-guard will swallow it at
+    # drain) — the seam must NOT re-queue behind it: the done-report replays live
+    # instead of stranding on the held_verbs of an un-walled worker.
+    eng, wid, cid, clock = _sweep_fixture([
+        ("worker.wall", {"detail": "block-less echo of some other trouble"}),
+        ("worker.done", {"block": "A-01", "_raw": "done A-01 — local: evidence"}),
+    ], case_block="B-77", parked=True)
+    replayed = []
+    orig_ingest = eng._ingest
+
+    def spy(tag, slots, sender):
+        replayed.append(tag)
+        return orig_ingest(tag, slots, sender)
+    eng._ingest = spy
+    eng._sweep()
+    clock["t"] += PING_WINDOW_S
+    eng._sweep()
+    eng._drain_triggers()
+    w = next(x for x in eng.st.workers if x["id"] == wid)
+    ok("T3/I-1 sweep: the remainder is NEVER stranded behind a raise that cannot land "
+       "(held_verbs empty)", not w.get("held_verbs"), f"w={w}")
+    ok("T3/I-1 sweep: the done-report replayed live (not lost)",
+       "worker.done" in replayed, f"replayed={replayed}")
+    ok("T3/I-1 sweep: the worker is un-held (the swallowed raise walls nobody)",
+       w.get("status") != "walled", f"w={w}")
+    ok("T3/I-1 sweep: no phantom case (the guard-swallow is honest, pre-existing shape)",
+       not any(c.get("kind") == "wall" for c in eng.st.pending_cases.values()),
+       f"cases={eng.st.pending_cases}")
+
+
+def t3_sweep_seam_parked_block_keeps_an_operator_handle_via_the_blocked_arm():
+    # Impl-review I-1 repro (a) + NOTE 5: the reviewer's literal shape — settled case for
+    # A-01, A-01 still parked, a BLOCK-LESS echo (the I-2 escape shape) plus a done
+    # behind it. Post-patch: the echo folds sender-first (rule 1), the done replays
+    # live, nothing strands — and the parked-block-with-no-case residue is picked up by
+    # the blocked-list invariant arm (01-18 T6), which re-raises the operator handle
+    # one window later. No case-unreachable parked block survives.
+    # (Echo-only queue: a replayed done-report would open a fresh gate for A-01, which
+    # legitimately COVERS the block for the T6 arm — the gate's own nets own it then.
+    # The done-behind-a-swallowed-raise no-strand half lives in the rule-2 test above.)
+    eng, wid, cid, clock = _sweep_fixture([
+        ("worker.wall", {"detail": "re-send, unchanged (no block ref)"}),
+    ], parked=True)
+    eng._sweep()                       # anchors wall_bad_since
+    clock["t"] += PING_WINDOW_S
+    eng._sweep()                       # arm (a): un-hold; the echo FOLDS (rule 1, I-2)
+    eng._drain_triggers()
+    w = next(x for x in eng.st.workers if x["id"] == wid)
+    ok("T3/I-1 sweep: the block-less echo folded (I-2) — no strand, nothing re-queued",
+       not w.get("held_verbs") and w.get("status") != "walled", f"w={w}")
+    ok("setup: the parked block sits case-less after the fold (the T6 arm's shape)",
+       "A-01" in eng.st.blocked
+       and not any(c.get("decision") is None for c in eng.st.pending_cases.values()),
+       f"blocked={eng.st.blocked} cases={eng.st.pending_cases}")
+    clock["t"] += PING_WINDOW_S
+    eng._sweep()                       # the blocked-list arm re-raises the handle
+    ok("T3/I-1 sweep: the operator handle is preserved — the blocked-list invariant arm "
+       "re-raises a fresh case for the parked block",
+       any(c.get("kind") == "wall" and c.get("block") == "A-01"
+           and c.get("decision") is None for c in eng.st.pending_cases.values()),
+       f"cases={eng.st.pending_cases}")
+
+
 def t3_sweep_seam_collapses_non_matching_walls_to_newest_text():
     # AC-1 T3 bullet (sweep seam): N same-worker+block NON-matching walls -> one case,
-    # newest text (rule 2 discriminates against the settled case's block).
+    # newest text (rule 2 discriminates against the settled case — here a same-worker
+    # case for ANOTHER ref, the reachable non-matching shape under sender-first I-2;
+    # the raw B-99/blockless labels all resolve to A-01, one group).
     eng, wid, cid, clock = _sweep_fixture([
         ("worker.wall", {"block": "B-99", "detail": "novel v1", "worker_id": "ENG-A-01"}),
-        ("worker.wall", {"block": "B-99", "detail": "novel v2", "worker_id": "ENG-A-01"}),
+        ("worker.wall", {"detail": "novel v2 (block-less)"}),
         ("worker.wall", {"block": "B-99", "detail": "novel v3 (newest)",
                          "worker_id": "ENG-A-01"}),
-    ])
+    ], case_block="B-77")
     eng._sweep()
     clock["t"] += PING_WINDOW_S
     eng._sweep()
@@ -778,6 +928,8 @@ def t3_sweep_seam_collapses_non_matching_walls_to_newest_text():
     ok("T3 sweep: the collapsed case carries the NEWEST text",
        "novel v3 (newest)" in (new_walls[0].get("detail") or "") if new_walls else False,
        f"cases={eng.st.pending_cases}")
+    ok("T3 sweep: the collapsed case lands sender-first on A-01",
+       new_walls and new_walls[0].get("block") == "A-01", f"cases={eng.st.pending_cases}")
 
 
 # ══ T4: operator-relay honesty ══
