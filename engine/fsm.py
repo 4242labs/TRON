@@ -3382,11 +3382,11 @@ class Engine:
         hold = self._fleet_refusal_hold()
         if not hold.get("active"):
             return
-        block = hold.get("canary")
-        if not block:
+        ref = hold.get("canary")           # the canary reference: a block id (engineer) OR an rtype (reviewer)
+        if not ref:
             return
         role = hold.get("canary_role", "engineer")
-        wid = self._worker_id(role, block)
+        wid = self._worker_id(role, ref)
         rec = jobs.find(wid, idx)
         if rec is not None:
             if jobs.is_alive(wid, idx) and rec.get("turns", 0) >= 1:
@@ -3406,7 +3406,12 @@ class Engine:
         if last is None or now - last >= self._pace("gate_nudge_after", 2):
             hold["canary_probed_at"] = now
             if role == "reviewer":
-                self._dispatch_reviewer(block)
+                # A reviewer canary needs none of _redispatch's hard-stop guards: the dead
+                # reviewer was already off the roster (_release_worker at election), the
+                # reviewer wid is keyed on rtype so there is no duplicate-slot risk, and
+                # ordinary cadence dispatch cannot race it — _switchboard, the only other
+                # dispatch path, is fully frozen by _dispatch_held() for the hold's lifetime.
+                self._dispatch_reviewer(ref)
             else:
                 # MAJOR-2: the ONE caller allowed to bypass _redispatch's "already at a
                 # gate stage" no-op — a canary whose block reached the done-gate before
@@ -3414,8 +3419,8 @@ class Engine:
                 # job is proving the RUNTIME is healthy, independent of the block's own
                 # gate progress). Every other hard stop (done/parked/dropped/PR/deps/
                 # active-worker) still applies unconditionally.
-                self._redispatch(block, bypass_gate=True)
-            self.log("flow", f"fleet refusal-hold: canary re-spawn probe on {role}:{block}")
+                self._redispatch(ref, bypass_gate=True)
+            self.log("flow", f"fleet refusal-hold: canary re-spawn probe on {role}:{ref}")
 
     # ── liveness sweep (engine side-system, deterministic — no LLM) ──
     def _sweep(self):
