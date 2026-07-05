@@ -1343,7 +1343,20 @@ class Engine:
                                   "gate-contradiction",
                                   "audit trunk history; re-validate or reassign")
                 return
-            stage = held
+            # T2 (01-20): the ratchet's ONE deterministic re-merge path — a code-bearing
+            # descendant tip (the worker parked a required fix on its branch AFTER the pin)
+            # re-drives the ordinary merge for the delta; every other shape (paperwork-only
+            # descendants, no descendant at all) holds exactly as before.
+            redrive = self._drive_record_redrive(block, g, wid, branch)
+            if redrive == "gated":
+                return                        # ASK: parked on the operator, hold quietly
+            if redrive:
+                # A genuine re-validation cycle for the landed delta — always (re)send the
+                # trunk-stage order, through the same kind-keyed dedupe every other renudge
+                # uses (the remote CI-red convention, T2 01-19), never a forced spam.
+                stage, msg, renudge = redrive, "gate.trunk", True
+            else:
+                stage = held
         elif not pr:
             if not g.get("pr"):
                 # MG-01: trunk is the only done-truth. Before parking at local, check whether
@@ -1594,6 +1607,71 @@ class Engine:
             if stage != prev:                            # a real stage advance (01-09), not a re-nudge
                 self.events.event("gate_advance", block=block,
                                   **{"from": prev, "to": stage, "detail": reason})
+
+    def _drive_record_redrive(self, block, g, wid, branch):
+        """T2 (01-20): the record-stage monotonic ratchet's one deterministic re-merge path
+        (tron-27/28's most frequent killer: merge approved & pinned at tip X; the worker
+        (correctly) parks a REQUIRED fix Y on its branch after the pin; the ratchet has no
+        re-merge path outside stage=='local'; the worker refuses to record; the operator
+        hand-merges). Git-only, never prose: rev-parse ancestry (`trunk.is_descendant` — a
+        STRICT descendant of the already-landed tip; a divergent/rewritten history is the
+        contradiction arm's job, above) AND the existing land_docs path classifier
+        (`trunk.delta_has_code` — a code-lane path in the delta; a paperwork-only
+        descendant keeps landing via the ordinary paperwork lane, untouched by this path).
+
+        Re-enters the SAME gate path as an ordinary local-mode merge: `_merge_gated` (the
+        existing `merge`-kind case, ask-before-merging still gates it when armed — no new
+        case kind), the same patch-identity discipline (`trunk.patch_id_matches`) for a tip
+        that moves again between park and this re-entry, then `trunk.merge_ff_only`. Every
+        OTHER shape (no descendant, divergent history, paperwork-only delta, non-ff) falls
+        through untouched — the ratchet stays monotonic exactly as before.
+
+        Returns 'trunk' on a landed delta (re-validate the fix), 'gated' when parked on the
+        operator (caller holds quietly), or None (nothing to redrive — caller's `stage`
+        stays at the ratchet's held stage, unchanged)."""
+        merged = g.get("merged_sha")
+        if not merged:
+            return None
+        cur_tip = trunk.tip_sha(self.paths["root"], branch, self.dry)
+        if not cur_tip or cur_tip == merged:
+            return None
+        if not trunk.is_descendant(self.paths["root"], cur_tip, merged, self.dry):
+            return None                      # divergent history — the contradiction arm's job
+        allow, deny, _ = self._paperwork_rules("engineer", block)
+        if not trunk.delta_has_code(self.paths["root"], merged, cur_tip, allow,
+                                    self.dry, denylist=deny):
+            return None                      # paperwork-only descendant -> the paperwork lane owns it
+        if g.get("approved_merge") and g.get("case_tip") and cur_tip != g.get("case_tip"):
+            if trunk.patch_id_matches(self.paths["root"], g["case_tip"], cur_tip,
+                                      self.paths.get("main_branch", "main"), self.dry):
+                self.log("flow", f"gate[{block}] record-redrive: approved tip "
+                                 f"{str(g.get('case_tip'))[:7]} moved to {cur_tip[:7]} -> "
+                                 f"patch-id match, grant carries")
+                g["case_tip"] = cur_tip
+            else:
+                self.log("flow", f"gate[{block}] record-redrive: approved tip "
+                                 f"{str(g.get('case_tip'))[:7]} moved to {cur_tip[:7]} -> "
+                                 f"grant void, re-park")
+                g.pop("approved_merge", None)
+                g.pop("case_merge", None)
+                g.pop("case_tip", None)
+                g.pop("merge_in_flight", None)
+        if self._merge_gated(block, g, wid):
+            return "gated"
+        ok, err = trunk.merge_ff_only(self.paths["root"], branch,
+                                      self.paths.get("main_branch", "main"), self.dry)
+        if not ok:
+            self.log("flow", f"gate[{block}] record-redrive non-ff: {err.strip()}")
+            return None
+        g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
+        g.pop("approved_merge", None)
+        g.pop("merge_in_flight", None)
+        # The caller's own bookkeeping (stage write, flow log, gate_advance event) fires
+        # uniformly right after this returns — never duplicated here.
+        self.log("flow", f"gate[{block}] record-stage code-bearing descendant landed "
+                         f"({str(merged)[:7]} -> {str(g['merged_sha'])[:7]}) -> "
+                         f"re-validate on trunk")
+        return "trunk"
 
     def _local_mode(self):
         """No remote declared -> the root checkout IS the authority (local mode, #89)."""
