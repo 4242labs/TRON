@@ -1087,6 +1087,48 @@ class Engine:
             self.log("flow", f"await[{block or '?'}] settled by operator -> {wid or '?'} resumed")
             self._emit("pulse")
             return
+        if case is not None and case.get("kind") == "architect":
+            # T4 (01-20): settling an architect-kind case ACTS — no more silent fall-through
+            # to the bare _close_case below (tron-27's permanent wedge: `approve` matched no
+            # arm here, provably a no-op). Idempotent against T1/T5 (peer MAJOR-6, one
+            # outcome one handler): if the job already advanced — sender-truth (T5) or a
+            # correlated landing (T1) won the race while this case sat parked — job_case no
+            # longer names THIS case, so there is nothing left to act on; close only, never
+            # re-deliver completed work.
+            arch = self._architect()
+            still_live = (arch is not None and arch.get("job_case") is not None
+                          and self.st.pending_cases.get(arch.get("job_case")) is case)
+            if not still_live:
+                self._close_case(m.get("case"), case)
+                self.log("flow", f"architect-case[{m.get('case') or '?'}] -> {decision} "
+                                 f"(job already advanced — close-only, no re-delivery)")
+                self._emit("pulse")
+                return
+            job = arch.get("current_job") or {}
+            if decision in ("resume", "approve"):
+                # Re-arm the ladder exactly like a fresh dispatch: clear the parked case,
+                # pop the idle timers (_architect_advance's own reset, applied here since the
+                # job itself is NOT retiring), re-deliver the SAME order once more.
+                arch.pop("job_case", None)
+                arch.pop("job_idle_since", None)
+                arch.pop("job_nudged_at", None)
+                arch.pop("job_bounces", None)
+                self._close_case(m.get("case"), case)
+                self._emit_arch_job(job, arch.get("id"))
+                self.log("flow", f"architect-case[{block or '?'}] -> {decision}: job "
+                                 f"re-armed, order re-delivered")
+            elif decision == "abandon":
+                # Retire the job WITHOUT recording it reconciled (never _h_reconcile — that
+                # would falsely mark the block's path cleared). _architect_advance owns
+                # clearing job_case/idle timers and closing the case (job_case still names
+                # this exact case here, still_live guarantees it).
+                self._architect_advance()
+                self.log("flow", f"architect-case[{block or '?'}] -> abandon: job retired, "
+                                 f"not reconciled")
+            else:
+                self._close_case(m.get("case"), case)             # unknown reply — drop case, hold
+            self._emit("pulse")
+            return
         if not block:
             # T3 (D-15-3): a settle that resolves NO pending case is never a silent no-op —
             # this is the `resume CASE-007` no-op's exact shape (classify mangled the case
