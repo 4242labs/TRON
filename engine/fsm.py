@@ -1834,11 +1834,28 @@ class Engine:
         """FS-1: land the worker's declared paperwork branches FIFO head-first — a second
         declaration never orphans a parked first. Returns ("ok", detail) when the FIFO is
         empty(ied), ("blocked", detail) when the head won't land — it STAYS queued; the
-        caller paces nudges and caps into a named escalation."""
+        caller paces nudges and caps into a named escalation.
+
+        T1 (01-20, I1 accelerator): for the architect only, a landing correlated to its
+        OWN live job (kind forward|reconcile; the landed branch's diff touches the job's
+        block file — git-only, trunk.branch_touches_path, read BEFORE land_docs deletes
+        the branch) synthesizes the job's completion through the SAME existing handler
+        sender-truth uses (_h_reconcile) the instant the landing lands — an accelerator
+        for the case where the architect's own completion report died, never a second
+        way to write completion. Never FIFO-drain-as-completion (peer MAJOR-5): the job
+        reference is cleared the moment it completes, so a multi-batch FIFO's remaining
+        branches, a `log`-job's landing (no block), and any uncorrelated/residue landing
+        change nothing further this call."""
         fifo = w.setdefault("pending_landings", [])
+        job = w.get("current_job") if role == "architect" and w.get("status") == "busy" else None
         while fifo:
             branch = fifo[0]
             allow, deny, scoped = self._paperwork_rules(role)
+            correlates = bool(
+                job and job.get("kind") in ("forward", "reconcile") and job.get("block")
+                and trunk.branch_touches_path(
+                    self.paths["root"], branch, self._block_relpath(job["block"]),
+                    self.paths.get("main_branch", "main"), self.dry))
             code, detail = trunk.land_docs(self.paths["root"], branch, allow,
                                            self.paths.get("main_branch", "main"),
                                            self.dry, denylist=deny, line_scoped=scoped)
@@ -1849,6 +1866,12 @@ class Engine:
                                       **{"role": role, "branch": branch,
                                          "detail": detail})
                     self.log("flow", f"paperwork[{w.get('id')}] landed {branch}: {detail}")
+                    if correlates:
+                        self.log("flow", f"paperwork[{w.get('id')}] landing correlates to "
+                                         f"its live job '{job.get('kind')}' on "
+                                         f"{job.get('block')} -> completing via _h_reconcile")
+                        self._h_reconcile({"block": job.get("block")})
+                        job = None   # the job just advanced — never complete twice in one batch
                 continue
             return "blocked", f"{branch}: {code}: {detail}"
         return "ok", "nothing pending"
