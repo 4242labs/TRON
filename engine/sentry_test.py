@@ -19,6 +19,12 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 os.environ["TRON_DRY"] = "1"
+# 01-21 T1: jobs.spawn_runner now fails closed without a resolved worker model. Most of
+# the suite stays dry (never reaches it), but several cases deliberately flip
+# `eng.dry = False` for one narrow real-send path and can collaterally trigger a real
+# SWITCHBOARD dispatch in the same tick. This is the same override knob RUNTIME/ADAPTER
+# already have — never a real model (these ticks never reach a real runtime either).
+os.environ.setdefault("TRON_WORKER_MODEL", "test-model")
 
 import util            # noqa: E402
 import reader          # noqa: E402
