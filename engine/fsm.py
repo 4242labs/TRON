@@ -482,6 +482,15 @@ class Engine:
         #    so a drained-to-empty fleet idles awaiting the operator rather than auto-closing.
         if self.st.run_control in ("pause", "drain"):
             return
+        # T3(b) (01-20, impl-review BLOCKER-1): the fleet-refusal hold FREEZES dispatch —
+        # the same class of freeze as PAUSE, engine-raised instead of operator-raised.
+        # Without this gate the hold only silenced the walls while FILL SLOTS refilled
+        # every released slot straight into the dead quota (silent unbounded spawn-burn).
+        # The ONLY spawn allowed while held is the single canary probe, which runs on the
+        # sweep cadence (_sweep_fleet_refusal_canary -> _redispatch(probe=True)), never
+        # through here. Resume (first healthy canary turn) pulses and this gate lifts.
+        if self._dispatch_held():
+            return
         # 1. FILL SLOTS — one dispatch per free worker slot, in priority order.
         while self._free_slots() > 0:
             pick = self._select_work()
@@ -647,10 +656,15 @@ class Engine:
         self.emit("terminal.dispatched", {"worker_id": wid, "block": block})
         self.log("flow", f"build:block:next -> dispatch {wid} on {block}")
 
-    def _redispatch(self, block):
+    def _redispatch(self, block, bypass_gate=False):
         """Recovery: re-spawn an engineer on a block whose prior worker died, even if the
         agent had already moved it to 🔄 on trunk (TRON's worker/PR tracking is the real
-        in-flight authority). Skips if it's done, parked, has a live PR, or deps unmet."""
+        in-flight authority). Skips if it's done, parked, has a live PR, or deps unmet.
+        `bypass_gate` (T3(b) 01-20, MAJOR-2): the ONE caller is the fleet-hold's canary
+        probe (_sweep_fleet_refusal_canary) — a canary whose block already reached a
+        gate stage before its worker's refusal death must still be probeable, or the
+        hold wedges permanently the instant any held block gates (I2). Every OTHER hard
+        stop below still applies unconditionally; only the gate-membership check lifts."""
         row = self.st.row(block)
         if not row or row.get("status") not in OPEN_STATUSES:
             return
@@ -658,7 +672,7 @@ class Engine:
         if not all(idx.get(d) == "done" for d in row.get("depends_on", [])):
             return
         if (block in self.st.blocked or block in self._dropped()
-                or block in self.st.gate
+                or (not bypass_gate and block in self.st.gate)
                 or self._block_branch(block) in (self.st.open_prs or {})
                 or self.st.has_active_worker_for_block(block)):
             return
@@ -1087,6 +1101,49 @@ class Engine:
             self.log("flow", f"await[{block or '?'}] settled by operator -> {wid or '?'} resumed")
             self._emit("pulse")
             return
+        if case is not None and case.get("kind") == "architect":
+            # T4 (01-20): settling an architect-kind case ACTS — no more silent fall-through
+            # to the bare _close_case below (tron-27's permanent wedge: `approve` matched no
+            # arm here, provably a no-op). Idempotent against T1/T5 (peer MAJOR-6, one
+            # outcome one handler): if the job already advanced — sender-truth (T5) or a
+            # correlated landing (T1) won the race while this case sat parked — job_case no
+            # longer names THIS case, so there is nothing left to act on; close only, never
+            # re-deliver completed work.
+            arch = self._architect()
+            still_live = (arch is not None and arch.get("job_case") is not None
+                          and self.st.pending_cases.get(arch.get("job_case")) is case)
+            if not still_live:
+                self._close_case(m.get("case"), case)
+                self.log("flow", f"architect-case[{m.get('case') or '?'}] -> {decision} "
+                                 f"(job already advanced — close-only, no re-delivery)")
+                self._emit("pulse")
+                return
+            job = arch.get("current_job") or {}
+            if decision in ("resume", "approve"):
+                # Re-arm the ladder exactly like a fresh dispatch: clear the parked case,
+                # pop the idle timers (_architect_advance's own reset, applied here since the
+                # job itself is NOT retiring), re-deliver the SAME order once more.
+                arch.pop("job_case", None)
+                arch.pop("job_idle_since", None)
+                arch.pop("job_nudged_at", None)
+                arch.pop("job_bounces", None)
+                self._close_case(m.get("case"), case)
+                self._emit_arch_job(job, arch.get("id"))
+                self._mark_engine_wake(arch)   # T6(b): this re-delivery must not itself pop the anchor
+                self.log("flow", f"architect-case[{block or '?'}] -> {decision}: job "
+                                 f"re-armed, order re-delivered")
+            elif decision == "abandon":
+                # Retire the job WITHOUT recording it reconciled (never _h_reconcile — that
+                # would falsely mark the block's path cleared). _architect_advance owns
+                # clearing job_case/idle timers and closing the case (job_case still names
+                # this exact case here, still_live guarantees it).
+                self._architect_advance()
+                self.log("flow", f"architect-case[{block or '?'}] -> abandon: job retired, "
+                                 f"not reconciled")
+            else:
+                self._close_case(m.get("case"), case)             # unknown reply — drop case, hold
+            self._emit("pulse")
+            return
         if not block:
             # T3 (D-15-3): a settle that resolves NO pending case is never a silent no-op —
             # this is the `resume CASE-007` no-op's exact shape (classify mangled the case
@@ -1343,7 +1400,20 @@ class Engine:
                                   "gate-contradiction",
                                   "audit trunk history; re-validate or reassign")
                 return
-            stage = held
+            # T2 (01-20): the ratchet's ONE deterministic re-merge path — a code-bearing
+            # descendant tip (the worker parked a required fix on its branch AFTER the pin)
+            # re-drives the ordinary merge for the delta; every other shape (paperwork-only
+            # descendants, no descendant at all) holds exactly as before.
+            redrive = self._drive_record_redrive(block, g, wid, branch)
+            if redrive == "gated":
+                return                        # ASK: parked on the operator, hold quietly
+            if redrive:
+                # A genuine re-validation cycle for the landed delta — always (re)send the
+                # trunk-stage order, through the same kind-keyed dedupe every other renudge
+                # uses (the remote CI-red convention, T2 01-19), never a forced spam.
+                stage, msg, renudge = redrive, "gate.trunk", True
+            else:
+                stage = held
         elif not pr:
             if not g.get("pr"):
                 # MG-01: trunk is the only done-truth. Before parking at local, check whether
@@ -1595,6 +1665,71 @@ class Engine:
                 self.events.event("gate_advance", block=block,
                                   **{"from": prev, "to": stage, "detail": reason})
 
+    def _drive_record_redrive(self, block, g, wid, branch):
+        """T2 (01-20): the record-stage monotonic ratchet's one deterministic re-merge path
+        (tron-27/28's most frequent killer: merge approved & pinned at tip X; the worker
+        (correctly) parks a REQUIRED fix Y on its branch after the pin; the ratchet has no
+        re-merge path outside stage=='local'; the worker refuses to record; the operator
+        hand-merges). Git-only, never prose: rev-parse ancestry (`trunk.is_descendant` — a
+        STRICT descendant of the already-landed tip; a divergent/rewritten history is the
+        contradiction arm's job, above) AND the existing land_docs path classifier
+        (`trunk.delta_has_code` — a code-lane path in the delta; a paperwork-only
+        descendant keeps landing via the ordinary paperwork lane, untouched by this path).
+
+        Re-enters the SAME gate path as an ordinary local-mode merge: `_merge_gated` (the
+        existing `merge`-kind case, ask-before-merging still gates it when armed — no new
+        case kind), the same patch-identity discipline (`trunk.patch_id_matches`) for a tip
+        that moves again between park and this re-entry, then `trunk.merge_ff_only`. Every
+        OTHER shape (no descendant, divergent history, paperwork-only delta, non-ff) falls
+        through untouched — the ratchet stays monotonic exactly as before.
+
+        Returns 'trunk' on a landed delta (re-validate the fix), 'gated' when parked on the
+        operator (caller holds quietly), or None (nothing to redrive — caller's `stage`
+        stays at the ratchet's held stage, unchanged)."""
+        merged = g.get("merged_sha")
+        if not merged:
+            return None
+        cur_tip = trunk.tip_sha(self.paths["root"], branch, self.dry)
+        if not cur_tip or cur_tip == merged:
+            return None
+        if not trunk.is_descendant(self.paths["root"], cur_tip, merged, self.dry):
+            return None                      # divergent history — the contradiction arm's job
+        allow, deny, _ = self._paperwork_rules("engineer", block)
+        if not trunk.delta_has_code(self.paths["root"], merged, cur_tip, allow,
+                                    self.dry, denylist=deny):
+            return None                      # paperwork-only descendant -> the paperwork lane owns it
+        if g.get("approved_merge") and g.get("case_tip") and cur_tip != g.get("case_tip"):
+            if trunk.patch_id_matches(self.paths["root"], g["case_tip"], cur_tip,
+                                      self.paths.get("main_branch", "main"), self.dry):
+                self.log("flow", f"gate[{block}] record-redrive: approved tip "
+                                 f"{str(g.get('case_tip'))[:7]} moved to {cur_tip[:7]} -> "
+                                 f"patch-id match, grant carries")
+                g["case_tip"] = cur_tip
+            else:
+                self.log("flow", f"gate[{block}] record-redrive: approved tip "
+                                 f"{str(g.get('case_tip'))[:7]} moved to {cur_tip[:7]} -> "
+                                 f"grant void, re-park")
+                g.pop("approved_merge", None)
+                g.pop("case_merge", None)
+                g.pop("case_tip", None)
+                g.pop("merge_in_flight", None)
+        if self._merge_gated(block, g, wid):
+            return "gated"
+        ok, err = trunk.merge_ff_only(self.paths["root"], branch,
+                                      self.paths.get("main_branch", "main"), self.dry)
+        if not ok:
+            self.log("flow", f"gate[{block}] record-redrive non-ff: {err.strip()}")
+            return None
+        g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
+        g.pop("approved_merge", None)
+        g.pop("merge_in_flight", None)
+        # The caller's own bookkeeping (stage write, flow log, gate_advance event) fires
+        # uniformly right after this returns — never duplicated here.
+        self.log("flow", f"gate[{block}] record-stage code-bearing descendant landed "
+                         f"({str(merged)[:7]} -> {str(g['merged_sha'])[:7]}) -> "
+                         f"re-validate on trunk")
+        return "trunk"
+
     def _local_mode(self):
         """No remote declared -> the root checkout IS the authority (local mode, #89)."""
         return not self.paths.get("remote") or self.paths.get("remote") == "none"
@@ -1834,11 +1969,28 @@ class Engine:
         """FS-1: land the worker's declared paperwork branches FIFO head-first — a second
         declaration never orphans a parked first. Returns ("ok", detail) when the FIFO is
         empty(ied), ("blocked", detail) when the head won't land — it STAYS queued; the
-        caller paces nudges and caps into a named escalation."""
+        caller paces nudges and caps into a named escalation.
+
+        T1 (01-20, I1 accelerator): for the architect only, a landing correlated to its
+        OWN live job (kind forward|reconcile; the landed branch's diff touches the job's
+        block file — git-only, trunk.branch_touches_path, read BEFORE land_docs deletes
+        the branch) synthesizes the job's completion through the SAME existing handler
+        sender-truth uses (_h_reconcile) the instant the landing lands — an accelerator
+        for the case where the architect's own completion report died, never a second
+        way to write completion. Never FIFO-drain-as-completion (peer MAJOR-5): the job
+        reference is cleared the moment it completes, so a multi-batch FIFO's remaining
+        branches, a `log`-job's landing (no block), and any uncorrelated/residue landing
+        change nothing further this call."""
         fifo = w.setdefault("pending_landings", [])
+        job = w.get("current_job") if role == "architect" and w.get("status") == "busy" else None
         while fifo:
             branch = fifo[0]
             allow, deny, scoped = self._paperwork_rules(role)
+            correlates = bool(
+                job and job.get("kind") in ("forward", "reconcile") and job.get("block")
+                and trunk.branch_touches_path(
+                    self.paths["root"], branch, self._block_relpath(job["block"]),
+                    self.paths.get("main_branch", "main"), self.dry))
             code, detail = trunk.land_docs(self.paths["root"], branch, allow,
                                            self.paths.get("main_branch", "main"),
                                            self.dry, denylist=deny, line_scoped=scoped)
@@ -1849,6 +2001,12 @@ class Engine:
                                       **{"role": role, "branch": branch,
                                          "detail": detail})
                     self.log("flow", f"paperwork[{w.get('id')}] landed {branch}: {detail}")
+                    if correlates:
+                        self.log("flow", f"paperwork[{w.get('id')}] landing correlates to "
+                                         f"its live job '{job.get('kind')}' on "
+                                         f"{job.get('block')} -> completing via _h_reconcile")
+                        self._h_reconcile({"block": job.get("block")})
+                        job = None   # the job just advanced — never complete twice in one batch
                 continue
             return "blocked", f"{branch}: {code}: {detail}"
         return "ok", "nothing pending"
@@ -2276,6 +2434,15 @@ class Engine:
         else:                                             # log-review -> remediation blocks
             self.emit("arch.remediation", {"type": job.get("type", "code")}, worker_id=awid)
 
+    def _mark_engine_wake(self, arch):
+        """T6(b) (01-20, MAJOR-4): stamp the EXPLICIT engine-initiated-wake marker — call
+        this at the exact moment (and ONLY the moments) the engine itself re-sends to an
+        already-dispatched architect job: this idle re-nudge, an architect-targeted
+        _bounce, and T4's case-settle re-delivery. Must run AFTER the send so mbox_seq
+        already reflects it. Never called at the original job dispatch — that's genuine
+        new work, not a wake, and must pop the anchor like any other busy turn."""
+        arch["engine_wake_seq"] = int(arch.get("mbox_seq", 0) or 0)
+
     def _drive_architect_liveness(self):
         """01-13 (tron-14 F2/F4): the architect's job queue gets the SAME wall-clock idle
         law as every gate — `busy` on a job while its runner sits idle is a stall, not
@@ -2287,6 +2454,32 @@ class Engine:
         if not arch or arch.get("status") != "busy" or not arch.get("current_job"):
             return
         if not jobs.runner_idle(arch.get("id")):
+            # T6(b) (01-20, MAJOR-4 fix): an ENGINE-initiated wake (bounce, this SAME
+            # idle re-nudge, T4's re-delivery) must never itself restart the idle clock —
+            # the tron-27 livelock: bouncing/nudging flips the runner briefly busy
+            # PROCESSING OUR OWN last-sent message, and wiping job_idle_since on that
+            # blip let a wrongly-replying architect starve the idle-cap forever (evidence
+            # #5). But a GENUINE busy turn must ALWAYS keep resetting it (A-4) — including
+            # one that runs longer than any wake we ever sent. The prior mechanism
+            # compared the architect's GENERIC mbox_seq (bumped by every send, including
+            # the ORIGINAL job dispatch itself) against consumed — since read_hwm only
+            # advances at turn end, that comparison stayed true for the ENTIRE genuine
+            # first turn, false-capping it (MAJOR-4). Discriminate instead by an EXPLICIT
+            # marker the engine stamps ONLY at its own wake sends (the nudge below,
+            # _bounce for an architect sender, T4's re-delivery) — `engine_wake_seq`, the
+            # mbox_seq value AT that send. While the runner hasn't yet consumed up to
+            # THAT specific seq, the observed busy spell is attributable to processing
+            # OUR wake, not the worker's own initiative — leave the anchor alone. Once
+            # consumed catches up the wake is resolved; every later busy tick pops again,
+            # genuine or not, exactly as pre-01-20 (unset by default — ordinary dispatch
+            # never sets it, so a fresh job's own first turn always pops normally).
+            wake_seq = arch.get("engine_wake_seq")
+            if wake_seq:
+                consumed = (jobs.read_hwm(self.ctx.worker_dir(arch.get("id")))
+                           if arch.get("id") else 0)
+                if consumed < wake_seq:
+                    return
+                arch.pop("engine_wake_seq", None)
             arch.pop("job_idle_since", None)
             arch.pop("job_nudged_at", None)
             return
@@ -2297,26 +2490,37 @@ class Engine:
         idle_s = now - since
         job = arch.get("current_job") or {}
         if idle_s >= self._pace("gate_idle_cap", 3):
-            cid = self._open_case(job.get("block"), "architect", arch.get("id"),
-                                  f"architect stalled on job '{job.get('kind')}' "
-                                  f"({job.get('block') or job.get('type') or '?'}) — "
-                                  f"idle {int(idle_s)}s with no completion report")
-            arch["job_case"] = cid
-            self.events.failure("gate-stuck", "architect-idle-cap",
-                                f"complete architect job '{job.get('kind')}'",
-                                f"idle {int(idle_s)}s", actor=arch.get("id"),
-                                block=job.get("block"),
-                                node="architect queue", next_action="escalate")
-            self.emit("escalate.wall", {"worker_id": arch.get("id") or "?",
-                                        "block": job.get("block") or "?",
-                                        "detail": f"architect job '{job.get('kind')}' "
-                                                  f"stalled (idle, no completion report)",
-                                        "case": cid})
+            self._open_architect_stall_case(
+                arch, f"idle {int(idle_s)}s with no completion report")
             return
         if idle_s >= self._pace("gate_nudge_after", 2) and not arch.get("job_nudged_at"):
             arch["job_nudged_at"] = now
             self._emit_arch_job(job, arch.get("id"))
+            self._mark_engine_wake(arch)   # T6(b): this re-delivery must not itself pop the anchor
             self.log("flow", f"architect idle on '{job.get('kind')}' -> re-deliver the order")
+
+    def _open_architect_stall_case(self, arch, reason):
+        """The ONE architect-idle-cap case opener (originally inline in
+        _drive_architect_liveness, ~2300 pre-01-20) — shared by the ordinary idle-cap arm
+        above and T6(a)'s bounce-cap arm (_bounce_gate): the SAME existing escalation kind
+        either way, never a second one. Idempotent — a case already parked on this job is
+        never re-opened."""
+        if arch.get("job_case"):
+            return
+        job = arch.get("current_job") or {}
+        cid = self._open_case(job.get("block"), "architect", arch.get("id"),
+                              f"architect stalled on job '{job.get('kind')}' "
+                              f"({job.get('block') or job.get('type') or '?'}) — {reason}")
+        arch["job_case"] = cid
+        self.events.failure("gate-stuck", "architect-idle-cap",
+                            f"complete architect job '{job.get('kind')}'", reason,
+                            actor=arch.get("id"), block=job.get("block"),
+                            node="architect queue", next_action="escalate")
+        self.emit("escalate.wall", {"worker_id": arch.get("id") or "?",
+                                    "block": job.get("block") or "?",
+                                    "detail": f"architect job '{job.get('kind')}' stalled "
+                                              f"({reason})",
+                                    "case": cid})
 
     def _triage_detail(self, job):
         """Build the TRIAGE {detail} (T4). Prepend `"{sender}, on block {block}: "` ONLY when
@@ -2339,6 +2543,8 @@ class Engine:
                 self._close_case(arch.pop("job_case"), None)
             arch.pop("job_idle_since", None)
             arch.pop("job_nudged_at", None)
+            arch.pop("job_bounces", None)   # T6(a) (01-20): a fresh job gets a fresh bounce budget
+            arch.pop("engine_wake_seq", None)   # T6(b) (01-20): ditto — a fresh wake marker
         self._pump_architect()
 
     # ── worker hold (T2, D-15-2) ──
@@ -2641,7 +2847,7 @@ class Engine:
                              f"{sender.get('id')} -> dropped")
             self.events.unclassified(msg.get("text", "")[:200],
                                      f"unknown structured verb '{verb}'", sender=sender)
-            self._bounce(sender, f"'{verb}' is not a verb I know")
+            self._bounce_gate(sender, f"'{verb}' is not a verb I know")
             return "drop", None
         tag, extra = hit
         slots = {**(msg.get("slots") or {}), **extra}
@@ -2686,7 +2892,7 @@ class Engine:
                 self.log("flow", f"{tag} for unknown block '{ref}' -> refused (no canon row)")
                 self.events.unclassified(f"{tag} block ref: {ref}",
                                          "unknown block id (no canon row)", sender=sender)
-                self._bounce(sender, f"'{tag}' names no block the canon knows"
+                self._bounce_gate(sender, f"'{tag}' names no block the canon knows"
                                      + (f" (ref '{ref}')" if ref else " (no --block)"))
                 return None
             g = self.st.gate.get(block)
@@ -2719,7 +2925,17 @@ class Engine:
         w = next((x for x in self.st.workers if x.get("id") == sid), None) if sid else None
         if w is None:
             return tag, slots
-        if w.get("role") == "architect" and tag in ("worker.done", "worker.recorded"):
+        arch_job_kind = (w.get("current_job") or {}).get("kind") if w.get("role") == "architect" else None
+        if w.get("role") == "architect" and (
+                tag in ("worker.done", "worker.recorded")
+                # T5 (01-20): widen sender-truth for the architect's `--tag review-done` —
+                # required (not redundant with done/recorded), the ONLY message route for a
+                # no-op reconcile when the architect tags the natural verb (context #4:
+                # `review-done` died silently — no architect rtype backfill, the reviewer
+                # arm below gates on role=='reviewer'). Scoped to forward/reconcile jobs
+                # only, exactly as the spec's condition — a log/triage job's review-done
+                # stays unhandled by this widening, unchanged.
+                or (tag == "worker.review_done" and arch_job_kind in ("forward", "reconcile"))):
             job = w.get("current_job") or {}
             kind = job.get("kind")
             if w.get("status") != "busy" or not kind:
@@ -2762,7 +2978,30 @@ class Engine:
                         f"clean) and `--block <your block id>` when the act concerns "
                         f"your block. Say the same thing; carry the tags.",
                         "report.bounce")
+        if w.get("role") == "architect":
+            self._mark_engine_wake(w)   # T6(b): a bounce is an engine-initiated wake too
         self.log("flow", f"bounced {sid}: {why}")
+
+    def _bounce_gate(self, sender, why):
+        """T6(a) (01-20): cap `_bounce` at 2 per architect `current_job` — a 3rd bounce for
+        the SAME stalled job is never sent; the ordinary idle-cap case opens directly
+        instead (_open_architect_stall_case, the SAME existing escalation kind
+        _drive_architect_liveness already uses), so a wrongly-replying architect job
+        resolves exactly like an idle one, never an unbounded bounce loop. `_bounce` itself
+        stays role-agnostic and unchanged — every other sender bounces exactly as before;
+        this wrapper is the ONE place the architect's own counter (keyed to its
+        current_job, reset the moment the job advances — _architect_advance) is engine-
+        internal state, not a knob. Every `_bounce` call site routes through here."""
+        sid = (sender or {}).get("id")
+        arch = self._architect()
+        if arch and sid == arch.get("id") and arch.get("current_job"):
+            n = arch.get("job_bounces", 0)
+            if n >= 2:
+                self._open_architect_stall_case(
+                    arch, f"{n} bounced reports with no usable completion")
+                return
+            arch["job_bounces"] = n + 1
+        self._bounce(sender, why)
 
     def _ingest(self, tag, slots, sender):
         if tag == "drop":                                # A-2: invalid structured line, already recorded
@@ -3060,6 +3299,129 @@ class Engine:
             self.emit("tg.escalate", {"worker_id": wid or "?", "detail": detail})
         self.log("flow", f"sweep: {wid} walled with no case -> reopened ({block or '?'})")
 
+    # ── T3(b) (01-20): fleet-global refusal backoff (quota-blindness's BLOCKER-2) ──
+    def _fleet_refusal_hold(self):
+        """Engine-internal state (not a knob) — created on first use. `deaths`: a rolling
+        window of refusal-death timestamps; `active`: the hold is currently engaged;
+        `canary`/`canary_role`: the block/rtype (and its role) currently probing dispatch."""
+        return self.st.data.setdefault("refusal_hold", {"deaths": [], "active": False})
+
+    def _dispatch_held(self):
+        """T3(b) (01-20, impl-review BLOCKER-1): true while the fleet-refusal hold is
+        engaged — the ONE predicate _switchboard's FILL-SLOTS gates on. Without this,
+        the hold only silenced the per-worker walls while FILL SLOTS kept refilling
+        every released slot straight back into the dead quota (silent unbounded
+        spawn-burn). The single canary probe never goes through here — it's dispatched
+        by _sweep_fleet_refusal_canary directly, on the sweep cadence, never through
+        _select_work/_pulse."""
+        return bool(self._fleet_refusal_hold().get("active"))
+
+    def _refusal_death(self, w, idx):
+        """True iff `w`'s runner died in the `error` state with the adapter's own
+        RunnerRefusal cause — read STRUCTURALLY off the runner's timeline `kind` field
+        (jobs.last_turn_error_kind), never the refusal TEXT (NET-ZERO: the shapes stay
+        worker_runner.py's own adapter knowledge)."""
+        rec = jobs.find(w.get("id"), idx) or {}
+        if rec.get("state") != "error":
+            return False
+        return jobs.last_turn_error_kind(rec.get("dir", "")) == "RunnerRefusal"
+
+    def _fleet_hold_note(self, w):
+        """Record this refusal death in the fleet-hold's rolling window (short: the ladder's
+        own gate_idle_cap pace unit — no new knob); engage the hold on REPEATED deaths
+        (>=2) inside it. Returns True while the hold is (now or already) active — the
+        caller absorbs this tick's stall handling into the hold instead of the ordinary
+        per-worker recover (BLOCKER-2: per-worker recover thrashes when the cause is
+        fleet-wide, e.g. a provider quota, not one worker's problem)."""
+        now = self._now_s()
+        hold = self._fleet_refusal_hold()
+        window = self._pace("gate_idle_cap", 3)
+        hold["deaths"] = [t for t in hold.get("deaths", []) if now - t <= window] + [now]
+        if not hold.get("active"):
+            if len(hold["deaths"]) < 2:
+                return False                     # a lone death — the ordinary recover handles it
+            hold["active"], hold["since"] = True, now
+            hold.pop("canary", None)
+            hold.pop("canary_probed_at", None)
+            detail = (f"fleet dispatch held — {len(hold['deaths'])} refusal-caused runner "
+                     f"deaths within {int(window)}s; probing with a canary re-spawn")
+            self.events.failure("gate-stuck", "fleet-refusal-hold",
+                                "dispatch across the fleet", detail,
+                                node="runner fleet", next_action="canary re-spawn")
+            self.emit("escalate.unclassified", {"detail": detail})
+            self.log("flow", "fleet refusal-hold engaged: dispatch held fleet-wide")
+        return True
+
+    def _drive_fleet_refusal_hold(self, w):
+        """Absorb this dead worker into the active hold: release its slot without touching
+        its block's gate/blocked state — held blocks stay exactly 📋 (no gate mutation,
+        nothing walls, no per-worker stall-count/redispatch). Elects the FIRST absorbed
+        death as the hold's canary candidate if none is elected yet — role-AGNOSTIC
+        (MAJOR-2): an engineer-only election could wedge the hold permanently when the
+        sustaining deaths are all reviewer (the engineer's own lone-first death, before
+        the hold engages, is never absorbed here at all — _fleet_hold_note's <2 guard
+        hands it to the ordinary per-worker recover instead). The actual probe is paced
+        separately (_sweep_fleet_refusal_canary), on the existing sweep cadence."""
+        hold = self._fleet_refusal_hold()
+        if not hold.get("canary"):
+            role = w.get("role")
+            ref = (w.get("block") if role == "engineer"
+                   else w.get("rtype") if role == "reviewer" else None)
+            if ref:
+                hold["canary"], hold["canary_role"] = ref, role
+        self._release_worker(w, notify=False, reason="fleet-refusal-hold")
+
+    def _sweep_fleet_refusal_canary(self, idx):
+        """While the hold is active: probe with exactly ONE canary re-spawn (paced like an
+        idle re-nudge — gate_nudge_after, no new knob) and resume fleet dispatch the
+        instant that canary completes its first healthy turn. A dead canary just re-probes
+        next cadence; held blocks stay 📋 throughout — never a gate mutation, never a wall.
+        MAJOR-2: never park the hold un-probeable — if no canary is elected yet this
+        cadence (the next absorbed death, any role, elects one), just return and try
+        again next sweep."""
+        hold = self._fleet_refusal_hold()
+        if not hold.get("active"):
+            return
+        ref = hold.get("canary")           # the canary reference: a block id (engineer) OR an rtype (reviewer)
+        if not ref:
+            return
+        role = hold.get("canary_role", "engineer")
+        wid = self._worker_id(role, ref)
+        rec = jobs.find(wid, idx)
+        if rec is not None:
+            if jobs.is_alive(wid, idx) and rec.get("turns", 0) >= 1:
+                hold["active"] = False
+                hold["deaths"] = []
+                hold.pop("canary", None)
+                hold.pop("canary_role", None)
+                hold.pop("canary_probed_at", None)
+                self.log("flow", f"fleet refusal-hold cleared: canary {wid} turned "
+                                 f"healthy -> resume dispatch")
+                self._emit("pulse")
+            elif not jobs.is_alive(wid, idx):
+                hold.pop("canary_probed_at", None)   # the canary died too -> re-probe next cadence
+            return
+        now = self._now_s()
+        last = hold.get("canary_probed_at")
+        if last is None or now - last >= self._pace("gate_nudge_after", 2):
+            hold["canary_probed_at"] = now
+            if role == "reviewer":
+                # A reviewer canary needs none of _redispatch's hard-stop guards: the dead
+                # reviewer was already off the roster (_release_worker at election), the
+                # reviewer wid is keyed on rtype so there is no duplicate-slot risk, and
+                # ordinary cadence dispatch cannot race it — _switchboard, the only other
+                # dispatch path, is fully frozen by _dispatch_held() for the hold's lifetime.
+                self._dispatch_reviewer(ref)
+            else:
+                # MAJOR-2: the ONE caller allowed to bypass _redispatch's "already at a
+                # gate stage" no-op — a canary whose block reached the done-gate before
+                # its worker's refusal death must still be probeable (the canary's only
+                # job is proving the RUNTIME is healthy, independent of the block's own
+                # gate progress). Every other hard stop (done/parked/dropped/PR/deps/
+                # active-worker) still applies unconditionally.
+                self._redispatch(ref, bypass_gate=True)
+            self.log("flow", f"fleet refusal-hold: canary re-spawn probe on {role}:{ref}")
+
     # ── liveness sweep (engine side-system, deterministic — no LLM) ──
     def _sweep(self):
         if self.dry:
@@ -3088,6 +3450,16 @@ class Engine:
                     self._spawn_architect()
                 continue
             if not alive:
+                # T3(b) (01-20, BLOCKER-2): a refusal-caused death (the runner's OWN
+                # structural `kind` on its last turn_error — RunnerRefusal, worker_runner.py
+                # — never the refusal text, NET-ZERO) is fleet-global (a provider quota),
+                # not this one worker's problem; a per-worker recover just thrashes
+                # (re-dispatch -> instant death x3 -> wall). Repeated fleet-wide refusal
+                # deaths inside a short window hold dispatch instead of the ordinary
+                # recover — this worker's own stall handling is absorbed into the hold.
+                if self._refusal_death(w, idx) and self._fleet_hold_note(w):
+                    self._drive_fleet_refusal_hold(w)
+                    continue
                 self._emit("worker:stalled", {"worker_id": w.get("id")})
                 continue
             # Deterministic two-step online handshake (01-10 return-path fix): a spawned worker is
@@ -3195,6 +3567,10 @@ class Engine:
             elif delta > ping * 60 and not w.get("pinged_at"):
                 w["pinged_at"] = util.now_iso()
                 self.emit("heartbeat.ping", {"worker_id": w.get("id")}, worker_id=w.get("id"))
+        # T3(b) (01-20): while the fleet-refusal hold is active, probe with exactly one
+        # canary re-spawn (paced like an idle re-nudge) and resume dispatch on its first
+        # healthy turn — every sweep, whether or not THIS tick added a new death.
+        self._sweep_fleet_refusal_canary(idx)
         # T2 (01-16, D-17-1): the gate-orphaned predicate above requires an idle WORKER to
         # exist to fire — a gate whose block has NO live bound worker AT ALL (purged,
         # force-released, or any other path that outlives the roster entry) escapes it
@@ -3417,12 +3793,12 @@ class Engine:
                 inputs={"text": raw[:200], "attempts": len(attempts)},
                 node="§4 classify", attempt=len(attempts), next_action="auto-ack -> unclassified")
             self.events.unclassified(raw, "classify exhausted (invalid-output budget)", sender=sender)  # T3
-            self._bounce(sender, "I could not read it")           # 01-13: never a silent discard
+            self._bounce_gate(sender, "I could not read it")           # 01-13: never a silent discard
             return "unclassified", {"detail": raw[:120]}
         tag = out["tag"]
         if tag == "unclassified":                         # the model itself found no matching tag (T3)
             self.events.unclassified(raw, "model returned unclassified (no tag matched)", sender=sender)
-            self._bounce(sender, "it fits no tag I know")         # 01-13: correct the sender too
+            self._bounce_gate(sender, "it fits no tag I know")         # 01-13: correct the sender too
         return tag, {**out.get("slots", {}), **data_slots}   # W10: data over prose
 
     # ── lifecycle ──
