@@ -2862,7 +2862,17 @@ class Engine:
         w = next((x for x in self.st.workers if x.get("id") == sid), None) if sid else None
         if w is None:
             return tag, slots
-        if w.get("role") == "architect" and tag in ("worker.done", "worker.recorded"):
+        arch_job_kind = (w.get("current_job") or {}).get("kind") if w.get("role") == "architect" else None
+        if w.get("role") == "architect" and (
+                tag in ("worker.done", "worker.recorded")
+                # T5 (01-20): widen sender-truth for the architect's `--tag review-done` —
+                # required (not redundant with done/recorded), the ONLY message route for a
+                # no-op reconcile when the architect tags the natural verb (context #4:
+                # `review-done` died silently — no architect rtype backfill, the reviewer
+                # arm below gates on role=='reviewer'). Scoped to forward/reconcile jobs
+                # only, exactly as the spec's condition — a log/triage job's review-done
+                # stays unhandled by this widening, unchanged.
+                or (tag == "worker.review_done" and arch_job_kind in ("forward", "reconcile"))):
             job = w.get("current_job") or {}
             kind = job.get("kind")
             if w.get("status") != "busy" or not kind:
