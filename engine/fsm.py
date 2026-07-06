@@ -1467,9 +1467,20 @@ class Engine:
         stage, msg = None, None
 
         if on_report and g.get("stage") == "trunk":
-            # 01-11 FX-3: the worker's trunk-stage evidence report is ACCEPTED -> order the
-            # ✅ record. The flip is ordered only after this acceptance — never before.
-            stage, msg = "record", "gate.record"
+            # 01-11 FX-3: the worker's trunk-stage evidence report is the TRIGGER, never the
+            # proof. T2 (01-25, R-03b): the flip to record now requires an ENGINE-OBSERVED
+            # signal — the block's own landed test file(s), run here, not the worker's word
+            # (fixes fsm.py:1372-1375's on-report trust, the F-3 seam). Absent/failing ->
+            # hold at trunk (no advance); the existing no-advance-on-repeat-report counter
+            # (_h_worker_done) escalates on its own if the worker keeps re-reporting a
+            # signal that never goes green — no new cap needed.
+            okv, vdetail = trunk.run_block_tests(
+                self.paths["root"], g.get("merged_sha"), self.dry)
+            if okv:
+                stage, msg = "record", "gate.record"
+            else:
+                stage, msg = "trunk", None
+                self.log("flow", f"gate[{block}] trunk-stage report rejected: {vdetail}")
         elif g.get("stage") in ("trunk", "record"):
             # A-5 (tron-13, generalizes tron-07 W1 + R-3): the DONE ladder is MONOTONIC past
             # the merge. The git predicates below go stale the moment the worker parks
@@ -1969,6 +1980,24 @@ class Engine:
         can't strand the slot forever."""
         if g.get("violation_pending"):
             return           # T6 (01-15): parked on the operator's wall settle; hold quietly
+        # T1 (01-25, R-03a): the block invariant, checked ONCE, ref-agnostically, regardless
+        # of `stage` — this runs on the FIRST call to _drive_close for this gate, including
+        # the ✅-short-circuit path (_drive_gate ~1364) that otherwise never revisits ancestry
+        # again once row.status reads done (the seam that let tron-38 CASE-011 through: an
+        # on-report trust flip, then no further git check, ever). Reads git directly, never
+        # a message; fails CLOSED on a stranded or unresolvable anchor (never a quiet skip —
+        # deleting the branch that carries a stranded commit must not pass close cleanly).
+        if not g.get("block_checked"):
+            okb, bdetail = trunk.block_invariant_ok(
+                self.paths["root"], self._block_branch(block), g.get("merged_sha"),
+                self.paths.get("main_branch", "main"), self.dry)
+            if not okb:
+                self._gate_giveup(block, g, wid,
+                                  f"block invariant violated: {bdetail}",
+                                  "record-bypass",
+                                  "audit trunk history; land the stranded commit or reassign")
+                return
+            g["block_checked"] = True
         # 01-11 FX-3 (R2-1/R2-3): leaving RECORD -> verify the record commit's OWN diff before
         # accepting the ✅ — exactly one file (the block doc), exactly the Status field. Never a
         # trunk range (another block's merge landing in between must not false-positive under

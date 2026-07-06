@@ -511,6 +511,61 @@ def record_commit_ok(repo_root, block_file, dry=False):
     return True, sha[:8]
 
 
+def block_invariant_ok(repo_root, branch, merged_sha, main_branch="main", dry=False):
+    """T1 (01-25, R-03a): the block invariant, checked ONCE at record->close — every
+    code-bearing commit attributable to this block is an ancestor of trunk, ref-agnostically.
+    Unlike the mid-gate anchors above (`is_ancestor`, best-effort, empty-sha reads as a quiet
+    pass), this is the LAST gate and fails CLOSED: an anchor that no longer resolves (a
+    deleted/unregistered ref, seam 5) is NOT a free pass, and no anchor at all resolving is
+    itself a failure — there is nothing left to verify the block ever landed. Checks every
+    anchor that DOES resolve (the live branch tip, if the branch still exists, AND the
+    tracked merged_sha, if set) — a stray commit parked on the branch after the last accepted
+    merge fails via the branch-tip arm even when merged_sha alone would still read clean.
+    Returns (ok, detail)."""
+    if dry or not repo_root:
+        return True, "dry/none"
+    branch_tip = tip_sha(repo_root, branch, dry) if branch else ""
+    checked = False
+    if branch_tip:
+        checked = True
+        if not is_ancestor(repo_root, branch_tip, main_branch, dry):
+            return False, f"branch {branch} tip {branch_tip[:7]} is not on trunk"
+    if merged_sha:
+        checked = True
+        if not is_ancestor(repo_root, merged_sha, main_branch, dry):
+            return False, f"merged sha {str(merged_sha)[:7]} is not on trunk"
+    if not checked:
+        return False, "no resolvable anchor (branch gone, no tracked merge) — cannot verify the block landed"
+    return True, ""
+
+
+def run_block_tests(repo_root, merged_sha, dry=False):
+    """T2 (01-25, R-03b): the engine's OWN observed signal at the trunk-stage trust point —
+    the worker's report is a claim, this runs it. Discovers the block's own test files from
+    the merged commit's OWN diff (record_commit_ok's same single-commit idiom, never a trunk
+    range — a concurrent unrelated merge must never pollute it) and executes each directly —
+    never the worker's worktree, never a say-so. No test file in that diff is a FAIL, same as
+    a failing run: a validated block always ran something observable. Returns (ok, detail)."""
+    if dry:
+        return True, "dry"
+    if not repo_root or not merged_sha:
+        return False, "no merged sha to validate"
+    rc, out, _ = _run(["git", "-C", repo_root, "show", "--name-only", "--format=", merged_sha])
+    if rc != 0:
+        return False, f"merged sha {str(merged_sha)[:7]}: diff unreadable"
+    tests = sorted({f.strip() for f in out.splitlines() if f.strip().endswith("_test.py")})
+    if not tests:
+        return False, "no test file in the merged commit's own diff"
+    for f in tests:
+        path = os.path.join(repo_root, f)
+        if not os.path.exists(path):
+            return False, f"{f}: missing on trunk"
+        rc, _, err = _run(["python3", path], cwd=repo_root, timeout=120)
+        if rc != 0:
+            return False, f"{f}: failed ({err.strip()[:150]})"
+    return True, f"{len(tests)} test file(s) green"
+
+
 def replica_clean(repo_root, branch, main_branch="main", dry=False):
     """CLOSE-gate cleanliness (01-11 FX-9): deterministic git reads — the worker's clean-exit
     claim is verified, never trusted. Scoped to THIS block (review finding: with
