@@ -1475,7 +1475,7 @@ class Engine:
             # (_h_worker_done) escalates on its own if the worker keeps re-reporting a
             # signal that never goes green — no new cap needed.
             okv, vdetail = trunk.run_block_tests(
-                self.paths["root"], g.get("merged_sha"), self.dry)
+                self.paths["root"], g.get("merge_base"), g.get("merged_sha"), self.dry)
             if okv:
                 stage, msg = "record", "gate.record"
             else:
@@ -1547,6 +1547,17 @@ class Engine:
                         return
                     stage, msg = "trunk", "gate.trunk"   # already merged -> skip local, re-validate on trunk
                     g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)  # A-5 predicate anchor
+                    # Best-effort test-discovery base (T2 01-25 review fix): this merge
+                    # already happened out-of-gate, before this tick — there is no "before"
+                    # moment left to capture, so recompute merge-base against the still-live
+                    # branch name. Valid as long as the out-of-gate merge wasn't itself a bare
+                    # ff (branch tip == trunk tip, same collapse run_block_tests falls back
+                    # on) — an accepted residual of an already out-of-band act, not this
+                    # fix's target (the engine's OWN ff paths, above and in the redrive, are
+                    # the ones proven fixed).
+                    g["merge_base"] = trunk.merge_base(
+                        self.paths["root"], self.paths.get("main_branch", "main"),
+                        branch, self.dry)
                     g.pop("merge_in_flight", None)       # T1: landed -> in-flight window closed
                     g.pop("rebase_pending", None)        # T1 (01-19): on trunk -> nothing left to rebase
                 else:
@@ -1565,6 +1576,12 @@ class Engine:
                         if g.get("self_merge"):
                             stage, msg = "trunk", "gate.trunk"        # operator merged it themselves
                             g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
+                            # Best-effort base (T2 01-25 review fix) — same out-of-band
+                            # caveat as the branch_merged arm above: the operator's own merge
+                            # already happened before this tick.
+                            g["merge_base"] = trunk.merge_base(
+                                self.paths["root"], self.paths.get("main_branch", "main"),
+                                branch, self.dry)
                             g.pop("rebase_pending", None)  # T1 (01-19): landed by the operator
                         elif on_report or g.get("approved_merge"):
                             # A-3: the grant binds the exact sha the operator saw at park. A tip
@@ -1600,6 +1617,18 @@ class Engine:
                                     g.pop("merge_in_flight", None)   # T1: the old order's authority ends here
                             if self._merge_gated(block, g, wid):
                                 return                                # ASK: parked on the operator, hold
+                            # T2 (01-25 review fix): capture trunk's PRE-merge HEAD as the
+                            # block's test-discovery base BEFORE the ff — post-merge, branch
+                            # tip and trunk tip collapse onto the identical commit under
+                            # ff-only, so recomputing "merge-base(main, branch)" AFTER this
+                            # point would just return merged_sha itself (a self-ancestor),
+                            # never the block's true fork point (the run_block_tests
+                            # one-commit blind spot this closes). This pre-image stays a
+                            # valid ancestor of whatever merged_sha ends up being (trunk only
+                            # ratchets forward) even through merge_ff_only's own internal
+                            # rebase-retry (T1, trunk.py) — over-inclusive at worst (a
+                            # concurrent block's commits also in range), never under.
+                            pre_merge_base = trunk.head_sha(self.paths["root"], self.dry)
                             ok, err = trunk.merge_ff_only(
                                 self.paths["root"], branch,
                                 self.paths.get("main_branch", "main"), self.dry)
@@ -1620,6 +1649,7 @@ class Engine:
                                 # patch-id/re-pin check) and is never reused for this anchor.
                                 g["merged_sha"] = trunk.tip_sha(
                                     self.paths["root"], branch, self.dry)
+                                g["merge_base"] = pre_merge_base
                                 # tron-07 W2: one approval = one EXECUTED merge. Consume the
                                 # grant here (not on the order) so a non-ff retry — the same
                                 # unexecuted merge — keeps it, but nothing after execution can
@@ -1693,6 +1723,14 @@ class Engine:
                 # A-5: best-effort anchor — a remote-merged branch may be unresolvable locally;
                 # an empty sha just skips the ancestry predicate (quiet hold, R-3 detail at cap).
                 g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
+                # Best-effort test-discovery base (T2 01-25 review fix): a remote PR merge is
+                # typically a distinct merge/squash commit (not a bare ff), so merge-base
+                # against the branch name still resolves the real fork point here; '' (branch
+                # already pruned, or an unresolvable local view) falls back to
+                # run_block_tests' legacy single-commit diff.
+                g["merge_base"] = trunk.merge_base(
+                    self.paths["root"], self.paths.get("main_branch", "main"),
+                    branch, self.dry)
                 g.pop("merge_in_flight", None)   # T1: landed (PR merged/closed) -> flight over
         elif pr.get("checks") == "failing":
             stage, msg = "ci", "gate.merge"              # CI red -> re-nudge the merge step (get CI green)
@@ -1832,6 +1870,13 @@ class Engine:
         if not ok:
             self.log("flow", f"gate[{block}] record-redrive non-ff: {err.strip()}")
             return None
+        # T2 (01-25 review fix): the OLD merged_sha (`merged`, read at entry, before this
+        # overwrite) is exactly the redrive's test-discovery base — the previously-pinned
+        # tip the descendant commit(s) landed on top of. Precise, no merge-base recompute
+        # needed (and none would help post-ff anyway, for the same reason as the primary
+        # merge site above): `merged` is verified an ancestor of `cur_tip` (`is_descendant`,
+        # above), so `merged..new merged_sha` is exactly this redrive's own delta.
+        g["merge_base"] = merged
         g["merged_sha"] = trunk.tip_sha(self.paths["root"], branch, self.dry)
         g.pop("approved_merge", None)
         g.pop("merge_in_flight", None)

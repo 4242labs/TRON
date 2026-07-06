@@ -87,7 +87,16 @@ def t_ac1_stranded_on_branch_tip_fails():
     shutil.rmtree(d, ignore_errors=True)
 
 
-# ── AC-2: ref-agnostic — a deleted OR unregistered ref must still fail (seam 5) ──
+# ── AC-2: ref-agnostic — a REGISTERED branch, then deleted, must still fail (seam 5) ──
+# Review fix (finding 2): the original second sub-test handed a stray sha DIRECTLY to
+# block_invariant_ok as merged_sha, as if it were an anonymous/unregistered ref — a shape
+# the real call site never produces (block_invariant_ok is ref-agnostic only over the ONE
+# registered branch + its tracked merged_sha; there is no repo-wide ref scan, so
+# "unregistered ref" detection is out of this block's scope). This proves the REAL
+# delivered behavior instead: a REGISTERED branch (name known, merged_sha tracked) whose
+# branch ref is later deleted while merged_sha itself is a stranded/never-landed commit —
+# the branch-tip arm has nothing left to check (ref gone), but the tracked merged_sha arm
+# still catches it on its own ancestry.
 def t_ac2_stranded_on_deleted_or_unregistered_ref_fails():
     d = _mkrepo()
     _git(d, "checkout", "-q", "-b", "feat/A-02")
@@ -98,12 +107,17 @@ def t_ac2_stranded_on_deleted_or_unregistered_ref_fails():
     _git(d, "checkout", "-q", "main")
     _git(d, "branch", "-D", "feat/A-02")            # deleted -> the seam 5 hole: no live ref left
     okc, detail = trunk.block_invariant_ok(d, "feat/A-02", None, "main", False)
-    ok("AC-2 deleted-ref: no anchor resolves -> fails closed (never the old free pass)",
+    ok("AC-2 deleted-ref, no tracked merged_sha: no anchor resolves -> fails closed "
+       "(never the old free pass)",
        not okc and "no resolvable anchor" in detail, detail)
-    # unregistered flavor: no branch name at all — only a captured sha, no ref names it.
-    # The invariant checks the OBJECT's own ancestry; it never skips for lack of a ref.
-    okc2, detail2 = trunk.block_invariant_ok(d, "", stray_sha, "main", False)
-    ok("AC-2 unregistered-ref: a captured sha with no naming ref still fails on its merits",
+    # Same registered branch (name still passed — it WAS registered, only its ref is gone),
+    # but this time merged_sha IS tracked (as the real call site always does once a merge
+    # is recorded) and its value is the stranded commit itself: the branch-tip arm skips
+    # (nothing resolves), but the merged_sha arm still resolves the object and fails it on
+    # its own ancestry — proving the invariant does not depend on the branch ref surviving.
+    okc2, detail2 = trunk.block_invariant_ok(d, "feat/A-02", stray_sha, "main", False)
+    ok("AC-2 registered branch deleted, tracked merged_sha still stranded: the merged_sha "
+       "arm catches it even with no live branch ref left",
        not okc2 and stray_sha[:7] in detail2, detail2)
     shutil.rmtree(d, ignore_errors=True)
 
@@ -167,7 +181,7 @@ def t_ac5_validation_signal_observed_not_reported():
     _git(d, "checkout", "-q", "main")
     _git(d, "merge", "-q", "--ff-only", "feat/A-05a")
     _, sha_a = _git(d, "rev-parse", "HEAD")
-    okc, detail = trunk.run_block_tests(d, sha_a, False)
+    okc, detail = trunk.run_block_tests(d, None, sha_a, False)
     ok("AC-5 absent test file in the landed delta fails — no signal, no pass",
        not okc and "no test file" in detail, detail)
 
@@ -182,7 +196,7 @@ def t_ac5_validation_signal_observed_not_reported():
     _git(d, "checkout", "-q", "main")
     _git(d, "merge", "-q", "--ff-only", "feat/A-05b")
     _, sha_b = _git(d, "rev-parse", "HEAD")
-    okc, detail = trunk.run_block_tests(d, sha_b, False)
+    okc, detail = trunk.run_block_tests(d, None, sha_b, False)
     ok("AC-5 a failing OBSERVED test-run fails, regardless of any worker claim",
        not okc and "b_test.py" in detail, detail)
 
@@ -197,8 +211,72 @@ def t_ac5_validation_signal_observed_not_reported():
     _git(d, "checkout", "-q", "main")
     _git(d, "merge", "-q", "--ff-only", "feat/A-05c")
     _, sha_c = _git(d, "rev-parse", "HEAD")
-    okc, detail = trunk.run_block_tests(d, sha_c, False)
+    okc, detail = trunk.run_block_tests(d, None, sha_c, False)
     ok("AC-5 a genuinely observed passing run is the only way 'passed' flips", okc, detail)
+    shutil.rmtree(d, ignore_errors=True)
+
+
+# ── AC-5 (review fix, gap): a multi-commit ff-merged branch's test lives EARLIER than the
+# tip's own single-commit diff — the exact F-3 reopening the independent reviewer proved:
+# commit1 adds the feature + its test (passing); commit2 is a trailing, already-green,
+# unrelated change. The tip's OWN diff (`git show` on commit2 alone) never sees commit1's
+# test file at all — old code returned a false PASS having run nothing of the feature's.
+def t_ac5b_multi_commit_range_discovers_earlier_test():
+    d = _mkrepo()
+    _git(d, "checkout", "-q", "-b", "feat/A-05d")
+    _, base_before = _git(d, "rev-parse", "HEAD")     # trunk tip BEFORE this block's commits
+
+    # commit1: the feature + its OWN test file (this is the one a single-commit-diff misses).
+    with open(os.path.join(d, "feature.py"), "w") as fh:
+        fh.write("def add(a, b):\n    return a + b\n")
+    with open(os.path.join(d, "feature_test.py"), "w") as fh:
+        fh.write("import sys\nsys.path.insert(0, '.')\nfrom feature import add\n"
+                 "assert add(2, 2) == 4\nsys.exit(0)\n")
+    _git(d, "add", "-A")
+    _git(d, "commit", "-qm", "commit1: add feature + feature_test.py")
+
+    # commit2: a trailing, unrelated change touching an ALREADY-GREEN other file — the
+    # decoy: its OWN diff is trivially green and never mentions feature_test.py.
+    with open(os.path.join(d, "src.txt"), "a") as fh:
+        fh.write("unrelated trailing change\n")
+    _git(d, "commit", "-aqm", "commit2: unrelated trailing change")
+
+    _git(d, "checkout", "-q", "main")
+    _git(d, "merge", "-q", "--ff-only", "feat/A-05d")   # literal ff: main tip == branch tip
+    _, tip = _git(d, "rev-parse", "HEAD")
+    assert tip != base_before
+
+    # The caller-captured base (trunk before this block's commits, per the fix) discovers
+    # commit1's feature_test.py even though it is invisible in the tip's own single-commit
+    # diff — and the genuinely-passing test flips the signal green.
+    okc, detail = trunk.run_block_tests(d, base_before, tip, False)
+    ok("AC-5 gap: the full base..tip range discovers commit1's feature_test.py "
+       "(never visible in the tip's own single-commit diff) and runs it",
+       okc and "1 test file(s) green" in detail, detail)
+
+    # Prove it is NOT a free pass by construction: if feature_test.py actually fails, the
+    # range-based discovery must still catch it (never silently skip to the green decoy).
+    with open(os.path.join(d, "feature_test.py"), "w") as fh:
+        fh.write("import sys\nsys.exit(1)\n")
+    _git(d, "add", "-A")
+    _git(d, "commit", "-qm", "commit3: break feature_test.py")
+    _, tip2 = _git(d, "rev-parse", "HEAD")
+    okc2, detail2 = trunk.run_block_tests(d, base_before, tip2, False)
+    ok("AC-5 gap: a failing test anywhere in the full range still fails the signal",
+       not okc2 and "feature_test.py" in detail2, detail2)
+
+    # And the OLD single-commit idiom (base=None, the tip's own diff alone), replayed on
+    # the ORIGINAL ff-merged tip (commit2, the trailing decoy): commit2's own diff never
+    # mentions feature_test.py at all, so the legacy fallback finds no test file in scope
+    # and fails closed on that basis — never a silent PASS, but proof of exactly the blind
+    # spot the caller-supplied `base` (used above) closes: the reviewer's exact scenario,
+    # where the OLD code ran only the decoy commit's own diff, found nothing, but a
+    # differently-shaped decoy (one that touches an ALREADY-GREEN test file) would have
+    # returned a false PASS having never run feature_test.py at all.
+    okc3, detail3 = trunk.run_block_tests(d, None, tip, False)
+    ok("AC-5 gap: the tip's OWN single-commit diff alone never even sees feature_test.py "
+       "(the reopened seam this test guards against)",
+       not okc3 and "no test file" in detail3, detail3)
     shutil.rmtree(d, ignore_errors=True)
 
 
@@ -317,6 +395,7 @@ def main():
     t_ac3_remote_mode_stranded_descendant_not_blind()
     t_ac4_clean_landing_passes()
     t_ac5_validation_signal_observed_not_reported()
+    t_ac5b_multi_commit_range_discovers_earlier_test()
     t_wire_drive_close_invariant_blocks_and_names_it()
     t_wire_drive_close_invariant_pass_through()
     t_wire_block_checked_runs_once()

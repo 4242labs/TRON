@@ -539,23 +539,49 @@ def block_invariant_ok(repo_root, branch, merged_sha, main_branch="main", dry=Fa
     return True, ""
 
 
-def run_block_tests(repo_root, merged_sha, dry=False):
-    """T2 (01-25, R-03b): the engine's OWN observed signal at the trunk-stage trust point —
-    the worker's report is a claim, this runs it. Discovers the block's own test files from
-    the merged commit's OWN diff (record_commit_ok's same single-commit idiom, never a trunk
-    range — a concurrent unrelated merge must never pollute it) and executes each directly —
-    never the worker's worktree, never a say-so. No test file in that diff is a FAIL, same as
-    a failing run: a validated block always ran something observable. Returns (ok, detail)."""
+def merge_base(repo_root, ref_a, ref_b, dry=False):
+    """`git merge-base ref_a ref_b`, or '' on any unresolvable ref / git failure. Best-effort,
+    like every other read here — callers must treat '' as "unknown", never a free pass."""
+    if dry or not repo_root or not ref_a or not ref_b:
+        return ""
+    rc, out, _ = _run(["git", "-C", repo_root, "merge-base", ref_a, ref_b])
+    return out.strip() if rc == 0 else ""
+
+
+def run_block_tests(repo_root, base, merged_sha, dry=False):
+    """T2 (01-25, R-03b) + review fix (F-3 reopened): the engine's OWN observed signal at the
+    trunk-stage trust point — the worker's report is a claim, this runs it. Discovers the
+    block's own test files over the FULL `base..merged_sha` range, never merged_sha's own
+    single-commit diff alone: under `merge_ff_only` a multi-commit branch lands as a literal
+    fast-forward, so merged_sha's OWN diff (`git show` against its immediate parent) is only
+    its LAST commit — an earlier commit in the same landed range that added the block's real
+    feature + test file went unseen, and a trivially-green trailing commit's own diff made the
+    signal flip GREEN having never run the feature's test (the exact F-3 shape this block
+    exists to close). `base` must be captured by the CALLER at merge time (trunk before the
+    ff) — recomputing `merge-base(main, branch)` here, after the fact, cannot recover it: a
+    fast-forward collapses branch and trunk onto the identical commit, so that merge-base
+    would just return merged_sha back (a self-ancestor), the same one-commit blind spot this
+    fixes. base=='' or base==merged_sha (no wider range known/captured) falls back to the
+    legacy single-commit diff — narrower, never a free pass, never worse than before.
+
+    Executes each discovered test file directly — never the worker's worktree, never a
+    say-so. No test file found in the range is a FAIL, same as a failing run: a validated
+    block always ran something observable. Returns (ok, detail)."""
     if dry:
         return True, "dry"
     if not repo_root or not merged_sha:
         return False, "no merged sha to validate"
-    rc, out, _ = _run(["git", "-C", repo_root, "show", "--name-only", "--format=", merged_sha])
+    if base and base != merged_sha:
+        rc, out, _ = _run(["git", "-C", repo_root, "diff", "--name-only", f"{base}..{merged_sha}"])
+        span = f"{str(base)[:7]}..{str(merged_sha)[:7]}"
+    else:
+        rc, out, _ = _run(["git", "-C", repo_root, "show", "--name-only", "--format=", merged_sha])
+        span = str(merged_sha)[:7]
     if rc != 0:
-        return False, f"merged sha {str(merged_sha)[:7]}: diff unreadable"
+        return False, f"{span}: diff unreadable"
     tests = sorted({f.strip() for f in out.splitlines() if f.strip().endswith("_test.py")})
     if not tests:
-        return False, "no test file in the merged commit's own diff"
+        return False, f"no test file in the merged range ({span})"
     for f in tests:
         path = os.path.join(repo_root, f)
         if not os.path.exists(path):
@@ -563,7 +589,7 @@ def run_block_tests(repo_root, merged_sha, dry=False):
         rc, _, err = _run(["python3", path], cwd=repo_root, timeout=120)
         if rc != 0:
             return False, f"{f}: failed ({err.strip()[:150]})"
-    return True, f"{len(tests)} test file(s) green"
+    return True, f"{len(tests)} test file(s) green ({span})"
 
 
 def replica_clean(repo_root, branch, main_branch="main", dry=False):
