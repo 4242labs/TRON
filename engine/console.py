@@ -28,7 +28,7 @@ DIM, RST, BOLD = "\033[2m", "\033[0m", "\033[1m"
 # fail-closed resolution lives at fsm._spawn/knobs.yaml (see fsm.py's _model_for_role),
 # never here. Overridable per project via project.yaml's `agents[].model` (see
 # Console._recommended_model).
-ROLE_MODEL_RECOMMENDED = {"architect": "claude-opus-4-8", "other": "claude-sonnet-4-5"}
+ROLE_MODEL_RECOMMENDED = {"architect": "claude-opus-4-8", "other": "claude-sonnet-5"}
 ROLE_MODEL_LABEL = {"architect": "architect", "other": "engineers/reviewers"}
 
 
