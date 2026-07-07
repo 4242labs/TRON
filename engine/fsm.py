@@ -735,6 +735,22 @@ class Engine:
         self.emit("terminal.review", {"count": thresh})
         self.log("flow", f"cadence:{typ} -> review:{typ}")
 
+    def _model_for_role(self, role):
+        """01-30 T2: per-role model resolution — the single global `worker_model` string
+        01-21 introduced is now a knobs.yaml MAP with two keys: `architect` (the persistent
+        architect only) and `other` (every non-architect role — engineer, reviewer, ...).
+        Each resolves INDEPENDENTLY and FAIL-CLOSED: an unset/blank entry for the resolving
+        role returns None here (never silently borrows the other key's value, never a
+        baked-in fallback) — jobs.spawn_runner then refuses outright
+        (WorkerModelUnconfigured) before any process spawns, exactly the 01-21 credit-drain
+        guard, now scoped per role instead of one global switch. A malformed/legacy shape
+        (e.g. still a bare string) is treated the same as unset, never guessed at."""
+        wm = self.knobs.get("worker_model")
+        if not isinstance(wm, dict):
+            return None
+        key = "architect" if role == "architect" else "other"
+        return wm.get(key) or None
+
     def _spawn(self, wid, template_id, role, block=None, rtype=None):
         """Identity-only spawn (01-07 two-step): fill PMT-SPAWN's slots and bring the worker
         online — no assignment. The persona prompt is delivered as the worker's FIRST mailbox
@@ -755,11 +771,12 @@ class Engine:
             # turn 1: the persona/onboarding, via the mailbox — through emit() (S-4/W4:
             # every worker send goes through the one slot-injecting sender).
             self.emit(template_id, slots, worker_id=wid)
-            # 01-21 T1: the worker model is a declared, project-configured input — read
-            # from knobs.yaml (never the host CLI's own ambient default) and threaded
-            # explicitly. jobs.spawn_runner fails closed if this resolves to nothing.
+            # 01-21 T1 (per-role since 01-30 T2): the worker model is a declared,
+            # project-configured input — read from knobs.yaml (never the host CLI's own
+            # ambient default) and threaded explicitly, resolved for THIS spawn's role.
+            # jobs.spawn_runner fails closed if this resolves to nothing.
             jobs.spawn_runner(wid, self.ctx.worker_dir(wid), session_id, cwd=self.paths["root"],
-                              model=self.knobs.get("worker_model"))
+                              model=self._model_for_role(role))
         except Exception as e:
             self.events.failure(                          # forensic record (AC-2/AC-6)
                 "dispatch-fail", "spawn-failed", "spawn a worker process",

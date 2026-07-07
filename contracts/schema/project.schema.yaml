@@ -28,6 +28,13 @@ archive_dir:   <path>       # REQUIRED. e.g. meta/blocks/archive/
 agents:                     # OPTIONAL (seeder-populated by scanning pointers.agents)
   - role: <name>            # e.g. engineer | architect | reviewer | <custom>
     file: <path>            # e.g. meta/agents/engineer.md
+    model: <str>            # OPTIONAL (block 01-30). A per-role RECOMMENDED default the bootup
+                            # model question (console.py) offers for confirm/override — NEVER
+                            # itself the fail-closed resolution path. That is knobs.yaml's
+                            # per-role `worker_model` map (architect / other), read by
+                            # fsm._spawn — this field only seeds what the prompt suggests.
+                            # Absent -> the engine's own built-in suggestion is shown instead
+                            # (architect: a strong tier; every other role: a fast tier).
 
 # ── Detected repo facts (auto; only matter to workflows that use them) ──
 repo:                       # OPTIONAL block; present when a git workflow is used
