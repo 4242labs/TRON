@@ -18,18 +18,34 @@
 #     from scratch, exactly as if nothing had run.
 #   - crash AFTER the advance but BEFORE consume -> trunk moved, grant still live.
 #     A retry's own "already landed" check (below) finds the branch tip already an
-#     ancestor of trunk and consumes administratively, exiting 0 — a non-event,
-#     never a spurious failure on a successful land. TRON detects the same window
-#     independently (its own patch-id-over-the-observed-range read) and consumes
-#     it itself if this script never gets to retry.
+#     ancestor of trunk AND confirms the grant's own patch-id in the branch's recent
+#     history (F5, review round 1 — never bare ancestry alone, a stale/regressed
+#     branch tip must never read as a false already-landed no-op) before consuming
+#     administratively and exiting 0 — a non-event, never a spurious failure on a
+#     successful land. TRON detects the same window independently (its own
+#     patch-id-over-the-observed-range read) and consumes it itself if this script
+#     never gets to retry.
 #   - an EXPIRED grant refuses outright (ask TRON to re-approve — never a silent
 #     re-mint from inside this script).
 #   - an empty/unresolvable patch-id is fail-closed on BOTH sides (grants.py never
 #     mints one; this script never treats an empty compare as a match).
+#   - CASE_ID is validated against a safe token pattern before any path interpolation
+#     (F6, review round 1) — never trusted raw.
 set -euo pipefail
 
 CASE_ID="${1:?usage: land.sh <case-id> [--main <branch>] [--grants-dir <dir>]}"
 shift || true
+
+# F6 (review round 1): CASE_ID rides straight into path interpolation below
+# ($GRANTS_DIR/${CASE_ID}.grant, consumed/${CASE_ID}.grant) — reject anything that
+# isn't a safe token BEFORE any of that happens (never after — a `../` or embedded
+# path separator must never reach a path construction, even once).
+case "$CASE_ID" in
+  *[!A-Za-z0-9._-]*)
+    echo "land.sh: invalid case id '$CASE_ID' — must match [A-Za-z0-9._-]+, refusing before any path interpolation" >&2
+    exit 2
+    ;;
+esac
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 MAIN_BRANCH="${LAND_MAIN_BRANCH:-main}"
@@ -120,11 +136,43 @@ _consume() {   # _consume <result>
 
 # Already-landed idempotent retry arm (crash-after-advance-before-consume, OR a
 # plain re-run of an already-successful land): the branch tip is ALREADY an
-# ancestor of trunk -> nothing left to advance, consume administratively, exit 0.
+# ancestor of trunk -> nothing left to advance.
+#
+# F5 fix (review round 1, ADR-0002 D2): bare ancestry used to be trusted outright —
+# but a STALE/REGRESSED branch tip (a bad reset that walks the branch back to its own
+# unchanged base, or any ancestor trunk already contains for unrelated reasons) is
+# ALSO trivially "an ancestor of trunk", with NOTHING of the grant's actual content
+# ever delivered. Before trusting ancestry, confirm the grant's own patch-id is
+# actually found in BRANCH_TIP's own history: walk BRANCH_TIP~1, BRANCH_TIP~2, ...
+# (a bounded lookback — a branch carries a handful of commits, never hundreds) and
+# check `diff(BRANCH_TIP~k..BRANCH_TIP)`'s patch-id against the grant — mirroring the
+# engine's own administrative-consume discipline (`patch_id_range` over an observed
+# window) rather than trusting ancestry alone. For the ordinary single-landing-window
+# shape this is exactly the SAME range the grant's patch-id was minted over in the
+# first place (BRANCH_TIP~1 == the branch's own merge-base at mint time, since the
+# worker rebases onto trunk immediately before requesting the grant).
+CONFIRM_LOOKBACK=50
 if git -C "$REPO_ROOT" merge-base --is-ancestor "$BRANCH_TIP" "$OLD_TIP" 2>/dev/null; then
-  _consume "already-landed"
-  echo "land.sh: $BRANCH ($BRANCH_TIP) is already an ancestor of $MAIN_BRANCH — idempotent retry, grant $CASE_ID consumed, exit 0"
-  exit 0
+  LANDED_CONFIRMED=0
+  K=1
+  while [ "$K" -le "$CONFIRM_LOOKBACK" ]; do
+    ANCESTOR="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${BRANCH_TIP}~${K}" 2>/dev/null || true)"
+    [ -n "$ANCESTOR" ] || break     # ran off the root of history — nothing further back to try
+    CAND_PID="$(git -C "$REPO_ROOT" diff "${ANCESTOR}..${BRANCH_TIP}" 2>/dev/null | git -C "$REPO_ROOT" patch-id --stable 2>/dev/null | awk '{print $1}')"
+    if [ -n "$CAND_PID" ] && [ "$CAND_PID" = "$GRANT_PID" ]; then
+      LANDED_CONFIRMED=1
+      break
+    fi
+    K=$((K + 1))
+  done
+  if [ "$LANDED_CONFIRMED" -eq 1 ]; then
+    _consume "already-landed"
+    echo "land.sh: $BRANCH ($BRANCH_TIP) is already an ancestor of $MAIN_BRANCH and the grant's content is confirmed landed — idempotent retry, grant $CASE_ID consumed, exit 0"
+    exit 0
+  else
+    echo "land.sh: $BRANCH ($BRANCH_TIP) is an ancestor of $MAIN_BRANCH, but the grant's patch-id ($GRANT_PID) could not be confirmed anywhere in its recent history (checked $CONFIRM_LOOKBACK commits back) — refusing; ask TRON (a stale/regressed branch tip must never read as a silent already-landed no-op)" >&2
+    exit 1
+  fi
 fi
 
 # Re-derive the patch-id against CURRENT trunk and validate it against the grant —
