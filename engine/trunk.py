@@ -79,14 +79,49 @@ class SealedAllowlistViolation(RuntimeError):
     to surface immediately, not degrade into a best-effort '' read."""
 
 
-def _subcommand_allowed(args):
+def _resolve_under(repo_root, path):
+    """Normalize `path` to an absolute, `..`-collapsed form — relative to `repo_root`
+    if not already absolute (both shapes are valid `git worktree add/remove` targets).
+    F3 (review round 1): `os.path.normpath` collapses a `../` traversal trick BEFORE
+    any prefix comparison, so a path that merely LOOKS like it's under the scratch
+    root on its face can't talk its way past the check by walking back out of it."""
+    if not path:
+        return None
+    p = path if os.path.isabs(path) else os.path.join(repo_root or "", path)
+    return os.path.normpath(p)
+
+
+def _under_scratch_root(repo_root, target, scratch_root):
+    """F3 (review round 1, ADR-0002 D1): is `target` (a worktree add/remove path)
+    resolved-and-collapsed under `scratch_root`? `scratch_root` absent/falsy is the
+    documented pre-01-32 floor (`validate_trunk`'s own "never a hard requirement" —
+    a project that hasn't seated the scratch convention still validates) — every
+    PRODUCTION call site (fsm.py) always supplies `ctx.scratch_dir`, so this fallback
+    is exercised only by direct trunk.py-level unit tests (e.g. block_01_28_test.py)
+    that predate the scratch convention entirely, never by the engine itself."""
+    if not scratch_root:
+        return True
+    resolved = _resolve_under(repo_root, target)
+    root = os.path.normpath(scratch_root)
+    return resolved is not None and (resolved == root or resolved.startswith(root + os.sep))
+
+
+def _subcommand_allowed(args, scratch_root=None):
     """True iff `args` (a full argv, e.g. ['git', '-C', root, 'update-ref', ...]) is
     either not a `git` invocation at all (this wrapper also carries `gh` calls,
     untouched by the allowlist — they never write a git ref) or its subcommand is on
     the sealed list. `worktree remove`/`worktree add --detach` are the only mutating
     shapes ever issued through this module (scratch-scoped by every real call site);
     `worktree add` WITHOUT `--detach` (which would leave a branch checked out
-    somewhere new) is refused even though `worktree` the subcommand is listed."""
+    somewhere new) is refused even though `worktree` the subcommand is listed.
+
+    F3 fix (review round 1, ADR-0002 D1): scoping used to be caller CONVENTION only —
+    `--detach` present was the entire check, with no verification the target path was
+    actually under `meta/agents/tron/scratch/`, so a buggy or rogue caller could add/
+    remove a worktree ANYWHERE and this allowlist would wave it through. Now the
+    resolved target (normalized, `..`-traversal collapsed first) must fall under
+    `scratch_root` before an add/remove is allowed at all — `worktree list` (no path
+    target, a pure read) stays free, per the ADR."""
     if not args or args[0] != "git":
         return True                      # gh/other tools: not this allowlist's job
     # Resolve the subcommand positionally (this module's own, single argv shape:
@@ -95,11 +130,18 @@ def _subcommand_allowed(args):
     if sub not in _ALLOWED_GIT_SUBCOMMANDS:
         return False
     if sub == "worktree":
+        repo_root = args[2] if len(args) > 2 and args[1] == "-C" else None
         rest = args[4:] if args[1] == "-C" else args[2:]
         verb = rest[0] if rest else None
         if verb == "add":
-            return "--detach" in rest    # never a branch checkout via worktree add
-        return verb in ("remove", "list")
+            if "--detach" not in rest:    # never a branch checkout via worktree add
+                return False
+            target = next((a for a in rest[1:] if not a.startswith("-")), None)
+            return _under_scratch_root(repo_root, target, scratch_root)
+        if verb == "remove":
+            target = next((a for a in rest[1:] if not a.startswith("-")), None)
+            return _under_scratch_root(repo_root, target, scratch_root)
+        return verb == "list"
     return True
 
 
@@ -121,7 +163,7 @@ def reset_audit():
     _AUDIT.clear()
 
 
-def _run(args, cwd=None, timeout=_TIMEOUT, input_text=None):
+def _run(args, cwd=None, timeout=_TIMEOUT, input_text=None, scratch_root=None):
     """THE wrapper (T2, 01-32, ADR-0002 D1): every engine git call is a `git` argv through
     HERE — the single seam the write-boundary audit reads. Records the invocation before
     returning (success or failure alike — a refused/failed call is still evidence of what
@@ -132,8 +174,14 @@ def _run(args, cwd=None, timeout=_TIMEOUT, input_text=None):
     swallowed into a best-effort '' read) — "a violation is structurally impossible."
     The refusal itself is still recorded in the audit trail (rc=126, the shell
     convention for "command found but not permitted") — a caller auditing the trail
-    sees the ATTEMPT even though it never touched git at all."""
-    if not _subcommand_allowed(args):
+    sees the ATTEMPT even though it never touched git at all.
+
+    `scratch_root` (F3, review round 1): forwarded to `_subcommand_allowed` — the ONLY
+    thing a `worktree add/remove` call's path is checked against. Callers that carve
+    validation checkouts (`_run_declared_command`) pass the SAME `scratch_root` they
+    derive `tmp` from; every other caller leaves it None (no worktree add/remove ever
+    issued from them)."""
+    if not _subcommand_allowed(args, scratch_root=scratch_root):
         _AUDIT.append((list(args), 126))
         raise SealedAllowlistViolation(
             f"git subcommand refused (not on the sealed T3 allowlist): {args!r}")
@@ -780,7 +828,7 @@ def _run_declared_command(repo_root, sha, command, env=None, scratch_root=None):
     tmp = tempfile.mkdtemp(prefix="tron-trunkval-", dir=scratch_root or None)
     try:
         rc, _, err = _run(["git", "-C", repo_root, "worktree", "add", "--detach", "-q",
-                           tmp, str(sha)], timeout=60)
+                           tmp, str(sha)], timeout=60, scratch_root=scratch_root)
         if rc != 0:
             return "unconfirmed", f"clean checkout of {str(sha)[:7]} failed: {err.strip()[:200]}"
         run_env = os.environ.copy()
@@ -800,7 +848,8 @@ def _run_declared_command(repo_root, sha, command, env=None, scratch_root=None):
     finally:
         # Always tear down — never leave the trust-point's own checkout as residue for the
         # session-end worktree sweep (trunk.list_worktrees) to have to name.
-        _run(["git", "-C", repo_root, "worktree", "remove", "--force", tmp], timeout=30)
+        _run(["git", "-C", repo_root, "worktree", "remove", "--force", tmp], timeout=30,
+            scratch_root=scratch_root)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
