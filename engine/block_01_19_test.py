@@ -429,8 +429,18 @@ def t2_kind_keyed_dedupe_exactly_one_undelivered_rebase_order():
     try:
         for _ in range(4):                            # per-tick retry while the grant holds
             eng._drive_gate("A-01", g)
-        ok("T2 the engine retried the merge per tick while the grant was held",
-           calls["ff"] == 4, f"calls={calls}")
+        # SUPERSEDED (block 01-32, ADR-0002 D1/D2 T1): a held grant alone no longer
+        # re-drives the merge attempt on every bare idle tick once a rebase has been
+        # ORDERED (rebase_pending) — only a fresh on_report (the worker's reported
+        # rebase-then-re-validate) may re-enter it (fsm.py's
+        # `elif on_report or (approved_merge and not rebase_pending):`). The first tick
+        # still attempts the ff once (discovers the non-ff, orders the rebase); the
+        # remaining 3 bare ticks hold quietly rather than blind-retrying against
+        # unreviewed git state. Full behavioral coverage of the new contract lives in
+        # block_01_32_test.py (`clobber_dead`, AC-2).
+        ok("01-32 T1: the engine attempts the ff exactly ONCE, then holds for the "
+           "worker's fresh report — never a per-tick blind retry",
+           calls["ff"] == 1, f"calls={calls}")
         ok("T2 exactly ONE undelivered rebase order after N non-ff ticks (kind-keyed "
            "dedupe vs .mbox-hwm — the tron-26 20-copy backlog class is dead)",
            len(rebase_lines()) == 1, f"mbox={rebase_lines()}")

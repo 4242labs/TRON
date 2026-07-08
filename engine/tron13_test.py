@@ -484,10 +484,15 @@ def t_lander_foreign_pipeline_line():
 
 
 def t_lander_nonff_rebases_and_lands():
-    # SUPERSEDES the pre-01-17 "D1 a moved trunk is non-ff (the engine never rebases)":
-    # T1 (01-17, tron-22/23/24) makes this exact race — a lander branch cut before another
-    # lander moved trunk — the engine's job to resolve, not a wall. A non-conflicting trunk
-    # move (different file) now rebase-retries ONCE, inside merge_ff_only, and lands.
+    # RE-SUPERSEDED (block 01-32, ADR-0002 D1/D2 T1): the 01-17 auto-rebase-and-retry
+    # this test used to prove (a non-conflicting trunk move rebase-retries ONCE inside
+    # merge_ff_only and lands) is RETIRED — TRON never rebases, conflict-free or not (a
+    # write-boundary violation; also the wave-1b stale-branch pipeline clobber's
+    # structural fix, AC-2 `clobber_dead`). This reverts to (and updates the name/detail
+    # of) the ORIGINAL pre-01-17 contract this test itself once superseded: a moved
+    # trunk is non-ff, full stop — the engine never rebases, even a disjoint-file,
+    # conflict-free race. Full behavioral coverage of the new contract (the worker's own
+    # rebase-before-close ritual resolves it) lives in block_01_32_test.py.
     d = _mkrepo()
 
     def w():
@@ -499,11 +504,10 @@ def t_lander_nonff_rebases_and_lands():
     _git(d, "add", "-A")
     _git(d, "commit", "-qm", "trunk moved")
     code, detail = trunk.land_docs(d, "docs/behind", ALLOW, "main", False, denylist=DENY)
-    ok("T1 (01-17) a moved-but-compatible trunk auto-rebases once and lands — the "
-       "dominant wall class is resolved deterministically, never a wall",
-       code == "landed", f"{code}: {detail}")
-    ok("T1 the branch is cleaned up on the retry-landed merge",
-       not trunk.branch_exists(d, "docs/behind"))
+    ok("01-32 T1: a moved trunk is non-ff — the engine never rebases, even a "
+       "conflict-free disjoint-file race", code == "non-ff", f"{code}: {detail}")
+    ok("01-32 T1: the branch survives, untouched, for its owner to rebase",
+       trunk.branch_exists(d, "docs/behind"))
 
 
 def t_lander_nonff_conflict_still_walls():

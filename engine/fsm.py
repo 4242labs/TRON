@@ -1875,7 +1875,19 @@ class Engine:
                             # branch_merged arm above, trunk.validate_trunk runs the
                             # declared command against merged_sha directly.
                             g.pop("rebase_pending", None)  # T1 (01-19): landed by the operator
-                        elif on_report or g.get("approved_merge"):
+                        elif on_report or (g.get("approved_merge") and not g.get("rebase_pending")):
+                            # 01-32 T1 (ADR-0002 D2, worker DONE ritual): once a rebase has been
+                            # ORDERED (rebase_pending, set below on a non-ff), a held approval
+                            # alone must never re-drive the merge attempt on a bare idle tick —
+                            # that would silently retry against unreviewed, worker-in-progress
+                            # git state. The re-validate step is a REPORTED ritual act: the
+                            # worker rebases in its own worktree, re-runs the applicable ACs,
+                            # and reports done again ("report done again with your evidence" —
+                            # _rebase_line) — only that fresh on_report re-enters this branch
+                            # while rebase_pending is set. Between the order and that report the
+                            # gate falls through to the case_merge/else arms below and holds
+                            # quietly (the idle re-nudge, via _send_gate_order's rebase-kind
+                            # line, keeps re-sending the SAME order — never a silent retry).
                             # A-3: the grant binds the exact sha the operator saw at park. A tip
                             # that moved between park and execution voids the grant and re-parks
                             # NAMING the new tip (rider 2) — unseen commits never ride an old yes.
@@ -2205,23 +2217,31 @@ class Engine:
         return slots
 
     def _rebase_line(self, wid, block):
-        """T1 (01-19): the mode-true non-ff remedy — engine-composed via _to_worker (the
-        gate.changes / branch-gap precedent, no new template). In LOCAL mode the engine owns
-        the trunk merge (MG-01, contract §3); trunk moving under the branch means the ONE act
-        the worker can do is rebase its own branch in its own worktree — the engine cannot
-        (git refuses to rebase a branch another worktree holds, the tron-26 standoff's silent
-        half; see trunk.py R1b). Never `gate.merge` here: PMT-DONE-MERGE's "Merge it" is
-        remote-only wording a contract-strict worker correctly REFUSES (§3: you never merge
-        code), which is exactly the ~25-min standoff this block kills. The order names itself
+        """T1 (01-19), re-cast as the worker's DONE-ritual rebase step (01-32 T1, ADR-0002
+        D2): the mode-true non-ff remedy — engine-composed via _to_worker (the gate.changes
+        / branch-gap precedent, no new template). In LOCAL mode the engine still lands the
+        final ff transitionally, but trunk moving under the branch means the ONE act the
+        worker can do — ALWAYS, conflict or not — is rebase its own branch in its own
+        worktree; the engine never rebases on the worker's behalf any more (trunk.py's
+        01-17 auto-rebase arm is retired — a conflict-free rebase is still the worker's
+        content resolution to make, never one TRON substitutes silently). The reply this
+        order asks for is the SAME evidence-gated report DONE-LOCAL already requires
+        (re-validate before you report) — the gate re-attempts the merge only on that fresh
+        report, never on a bare idle tick (the re-validate step is observed, not assumed).
+        Never `gate.merge` here: PMT-DONE-MERGE's "Merge it" is remote-only wording a
+        contract-strict worker correctly REFUSES (§3: you never merge code), which is
+        exactly the ~25-min standoff this block kills. The order names itself
         gate-authorized-not-a-merge so a strict worker complies instead of walling (contract
         §3 rider)."""
         branch = self._block_branch(block)
         main = self.paths.get("main_branch", "main")
         return (f"[TRON]  {wid} — {block}: trunk moved under your branch; my ff-merge can't "
-                f"land it as-is. Rebase {branch} onto {main} in your worktree — do not "
+                f"land it as-is. Rebase {branch} onto {main} in your own worktree — do not "
                 f"merge; I land it. This ordered rebase is gate-authorized and is not a "
-                f"merge (the never-merge rule stands). When it's rebased, report done "
-                f"again with your evidence.")
+                f"merge (the never-merge rule stands). Resolve it yourself, re-run the "
+                f"applicable acceptance criteria against the rebased branch (re-validate — "
+                f"a bare rebase with no re-check doesn't count), then report done again with "
+                f"that evidence; I only retry the merge on your fresh report, never before.")
 
     def _send_gate_order(self, block, g, stage, wid, force=False):
         """T2 (01-19, R2-1): the ONE stage-order composer — gate state + stage + wid + block

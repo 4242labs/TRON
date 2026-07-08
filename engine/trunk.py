@@ -199,27 +199,38 @@ def remove_worktree_for_branch(repo_root, branch, dry=False):
 
 def merge_ff_only(repo_root, branch, main_branch="main", dry=False):
     """Fast-forward trunk to an already-validated block branch — the local/no-remote merge.
-    The engine owns the trunk merge (MG-01): with no remote there is no PR to land, so the
-    engine advances trunk itself, but ONLY as a fast-forward — never a merge commit, never a
-    force.
+    The engine owns the trunk merge transitionally (ADR-0002 D1/D2, 01-32 T1): with no
+    remote there is no PR to land, so the engine advances trunk itself, but ONLY as a
+    fast-forward — never a merge commit, never a force, and — as of 01-32 T1 — never a
+    rebase either.
 
-    T1 (01-17, tron-22/23/24): the dominant wall class across the campaign — a lander branch
-    cut before another lander moved trunk fails this ff-only, every time, on pure timing.
-    Every caller (`land_docs`, `land_ordered_merge`, the DONE-gate's own direct call) shares
-    this one primitive, so the fix lives here ONCE: on a first ff-refusal, rebase `branch`
-    onto the CURRENT trunk tip ONE time and retry the ff-only merge. `git rebase <upstream>
-    <branch>` leaves `branch` itself checked out (an implicit `switch`) — re-checkout
-    `main_branch` before the retry, exactly like the top of this function. A conflicted
-    rebase aborts cleanly (never leaves the repo mid-rebase) and a second refusal after a
-    clean rebase both fall through to the ORIGINAL non-ff error text — today's wall detail,
-    unchanged; only the deterministic, bounded, no-knob retry is new.
+    ADR-0002 Decision 1 (01-32 T1): the 01-17 rebase-retry arm that used to live HERE
+    (on a first ff-refusal, silently `git rebase <branch> onto <trunk>` and retry) is
+    RETIRED — a git rebase is a write TRON performs on the worker's own branch content,
+    exactly the class of act the strict/folder-absolute write boundary forbids (P3): TRON
+    may verify, never resolve. Retiring it is also the structural fix for the wave-1b
+    stale-branch pipeline clobber (AC-2, `clobber_dead`) — every rebase, including a
+    conflict-free one, is now the WORKER's ritual act (its DONE-flow rebase-before-close
+    step, engine-observed, never silently substituted by an engine-side auto-rebase whose
+    resolution nobody reviewed). A first ff-refusal now returns the plain non-ff detail,
+    unconditionally — the caller (fsm._drive_gate) already routes this to the worker's own
+    rebase order (`_rebase_line`) and re-attempts only once the worker reports back with
+    fresh evidence (a fresh `on_report`, never a bare idle tick) that it rebased AND
+    re-validated. Historical note: this collapses the two outcomes 01-17 T1 used to name
+    ("first-refusal auto-rebase-and-land" vs. "conflicted rebase still walls") into one —
+    every non-ff refusal, conflict or not, is now the worker's rebase to perform.
 
     T5 (01-15, tron-16 boot-1 residue): verifies `main_branch` itself exists BEFORE acting —
     a missing trunk branch (an env fault) used to fall through the checkout silently (git
     swallowed as a belt-and-suspenders no-op) and merge the block branch onto whatever HEAD
     happened to be, action and verification going out of sync. Now a missing trunk branch,
     or a checkout that fails for any other reason, is an `error`-shaped (ok=False) return —
-    never a silent merge onto HEAD. Returns (ok, err)."""
+    never a silent merge onto HEAD. Returns (ok, err).
+
+    Transitional (01-32 T2 note): this still `git checkout`s the root onto `main_branch`
+    before merging — the checkout-attach hazard ADR-0002 Decision 1 names ("today's
+    merge_ff_only re-attaches the root at trunk.py:227") is T2's read-path refactor to
+    replace with a checkout-free `update-ref` CAS advance; out of scope for T1."""
     if dry or not repo_root or not branch:
         return (dry, "")
     if not branch_exists(repo_root, main_branch, dry):
@@ -230,31 +241,7 @@ def merge_ff_only(repo_root, branch, main_branch="main", dry=False):
     rc, _, err = _run(["git", "-C", repo_root, "merge", "--ff-only", branch])
     if rc == 0:
         return True, err
-    non_ff_detail = err          # T1: today's detail — preserved through the retry either way
-    rrc, _, rebase_err = _run(["git", "-C", repo_root, "rebase", main_branch, branch])
-    if rrc != 0:
-        _run(["git", "-C", repo_root, "rebase", "--abort"])
-        _run(["git", "-C", repo_root, "checkout", main_branch])
-        # R1b (01-19, impl-review I-3): the RETURNED detail is CHANGED here — the original
-        # ff error is preserved verbatim as the prefix, with the rebase-retry's own failure
-        # reason appended (200-char capped). Without it a worktree-refused rebase (git
-        # refuses to rebase a branch another worktree holds — the tron-26 standoff's silent
-        # half) is indistinguishable from a genuine conflict; both fell through to the
-        # identical original ff error. Readers of this return, all intended: the DONE
-        # gate's non-ff flow line (fsm._drive_gate), AND — a deliberate surface change,
-        # adjudged useful by the impl review — land_docs / land_ordered_merge propagate it
-        # into operator/worker-facing failure text (the landing nudge, paperwork-wall case
-        # details): exactly the surfaces that were starved of the refusal-vs-conflict
-        # distinction.
-        return False, (f"{non_ff_detail} (rebase-retry: {rebase_err.strip()[:200]})"
-                       if rebase_err.strip() else non_ff_detail)
-    rc2, _, err2 = _run(["git", "-C", repo_root, "checkout", main_branch])
-    if rc2 != 0:
-        return False, non_ff_detail
-    rc3, _, _ = _run(["git", "-C", repo_root, "merge", "--ff-only", branch])
-    if rc3 != 0:
-        return False, non_ff_detail
-    return True, ""
+    return False, err
 
 
 def land_ordered_merge(repo_root, branch, main_branch="main", dry=False):
