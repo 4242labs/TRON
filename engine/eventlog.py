@@ -37,10 +37,16 @@ import util
 #                   dropped (never strands the tick) but never silently, now.
 #   mailbox-send-failed — an engine->worker mailbox write failed (OSError) after retry
 #                   (01-31, AC-5 HIGH): queued durable for at-least-once redelivery.
+#   sealed-allowlist-violation — a handler tripped the git wrapper's sealed subcommand
+#                   allowlist (review round 1, F4, ADR-0002 D1): a distinct class from
+#                   `handler-raised` on purpose — this is the write-boundary audit's
+#                   own tripwire, never an ordinary handler bug, and routes to the
+#                   architect as a VIOLATION case rather than a dropped trigger.
 FAILURE_CLASSES = {
     "refresh-fail", "classify-fail", "ingest-drop", "gate-stuck",
     "dispatch-fail", "session-residue", "crash",
     "content-missing", "handler-raised", "mailbox-send-failed",
+    "sealed-allowlist-violation",
 }
 
 # The closed vocabulary of `type` values an `event` record carries — the engine's own
