@@ -9,31 +9,64 @@ Covers the block's own acceptance criteria (01-33-fleet-as-config.md):
        (with no engine edit) still dispatches/pools/closes/paperworks correctly —
        proof nothing in fsm.py/roles.py keys off the literal strings "engineer",
        "reviewer", or "architect" for FLEET DISPATCH. The `cmd:` half is a real
-       grep over the engine's dispatch-facing modules, with a closed, individually
-       justified allowlist for the two things that legitimately still spell those
-       words: (a) fsm.py's `_worker_id` cosmetic ID-prefix table (a display nicety
-       with a graceful `role.upper()` fallback for anything not listed — it never
-       gates BUILD/REVIEW/TRIAGE/CLOSE dispatch, pool membership, or paperwork); and
-       (b) the `_open_case`/log "architect" CASE-KIND tag (an internal escalation
-       taxonomy value — "this case concerns the persistent TRIAGE/spec_owner
-       worker's own job queue" — never compared against `w.get("role")` or any
-       roles.yaml value, so renaming the project's TRIAGE role doesn't touch it).
-       Comments/docstrings are excluded per the block's own scoping note. Both
-       exceptions are pre-existing, narrow, and would touch a wide, unrelated
-       blast radius (every worker-id fixture across the whole suite) for zero
-       behavioral gain if dissolved — left as-is, flagged here and in the PR body.
+       grep over the engine's dispatch-facing modules — post review-round-1 (F2)
+       this now includes lint.py and roles.py too — with a closed, individually
+       justified allowlist (visible below, ALLOWED_HITS, one reason string per
+       entry) for what legitimately still spells those words: (a) fsm.py's
+       `_worker_id` cosmetic ID-prefix table (a display nicety with a graceful
+       `role.upper()` fallback for anything not listed — it never gates
+       BUILD/REVIEW/TRIAGE/CLOSE dispatch, pool membership, or paperwork); (b) the
+       `_open_case`/log "architect" CASE-KIND tag (an internal escalation taxonomy
+       value — "this case concerns the persistent TRIAGE/spec_owner worker's own
+       job queue" — never compared against `w.get("role")` or any roles.yaml
+       value); and (c) lint.py's L13, a DIFFERENT pre-existing config surface
+       (project.yaml's optional `agents:` roster) that mirrors the retired naming
+       convention for its own backward compat only. roles.py itself now
+       contributes ZERO hits — F1 removed the shadowing "reviewer" literal from
+       `select_review_role` entirely rather than allowlisting it. Comments/
+       docstrings are excluded per the block's own scoping note.
   AC-2 test:<injected_role_builds> — an injected 4th role (designer,
        selector: {block_tag: design}, binds BUILD) builds a design-tagged block
        with ZERO engine edits (this test only adds config + a fixture block file).
   AC-3 test:<boot_fail_closed_matrix> — every named boot-fatal arm, individually.
   AC-4 test:<close_affinity> — CLOSE resolves to the building role when it binds
-       CLOSE; else deterministically to the unique close_fallback.
+       CLOSE; else deterministically to the CLOSE fallback (the sole CLOSE-binding
+       role when there's only one — the ADR's own worked example, undecorated, no
+       flag — else the unique close_fallback:true-flagged role when several bind
+       CLOSE — B1, review round 1).
   AC-5 test:<paperwork_config_parity> — per-role roles.yaml `paperwork:` produces
        the same allow/deny/line_scoped verdict shape as the retired hardcoded
        engineer/architect special-cases (and the plain default for any other role).
 
 AC-6 (P2/P5/P8 premise regression) is `manual_by:engineer` — covered in the PR
 body's checklist, not here.
+
+Review-fixes-round-1 notes (see the PR body's own "## Review fixes (round 1)"
+section for the full per-finding writeup):
+B1: close_role_for/close_fallback now treat a SOLE CLOSE-binding role as the
+    implicit fallback (flag irrelevant, per the ADR's own worked example);
+    several-roles-bind-CLOSE still requires the boot-enforced unique flag. Boot
+    validation additionally rejects any BUILD-bound role with no resolvable CLOSE
+    path at all — total by construction.
+B2: fsm._worker_id's eager `role.upper()` default-arg bug fixed (lazy now); every
+    selector-resolution call site (`_build_role_for`, `_close_role`, REVIEW/BUILD
+    dispatch, gate-giveup/tick, fleet-refusal canary) raises a named, loud
+    roles.RolesError via a shared `_require_role` guard if it ever receives None —
+    defense in depth even though B1/B3 make it unreachable through real dispatch.
+B3: roles.select_review_role is total by construction — boot validation (given
+    the project's real cadence types, passed by Engine) requires either a
+    selector-less default REVIEW role or explicit reviewer-<type>/
+    selector.reviewer_class coverage of every declared type; at runtime an
+    unmatched type resolves deterministically to the default when one exists.
+F1: select_review_role's selector TABLE now runs before any name-based fallback;
+    the hardcoded `binds("reviewer", "REVIEW") -> "reviewer"` literal is REMOVED
+    entirely (it was pure redundancy with the plain-default arm whenever it wasn't
+    the shadowing bug).
+F2: ENGINE_FILES now includes lint.py + roles.py; ALLOWED_HITS is a closed list of
+    (pattern, reason) pairs, one reason string per entry, asserted non-empty.
+F3: `_close_affinity_doc` now exercises the UNDECORATED ADR-example shape (single
+    CLOSE role, no flag) through the real B1 fix; a several-CLOSE-roles +
+    explicit-flag variant is kept alongside it (`_multi_close_roles_doc`).
 
 Run: python3 engine/block_01_33_test.py   (exit 0 = pass).
 """
@@ -162,17 +195,40 @@ def t1_fully_renamed_fleet_dispatches_identically_with_zero_engine_edits():
 
 ENGINE_FILES = ["fsm.py", "console.py", "engine.py", "jobs.py", "ctx.py", "state.py",
                 "reader.py", "render.py", "trunk.py", "grants.py", "judge.py",
-                "eventlog.py", "util.py", "wake.py"]
+                "eventlog.py", "util.py", "wake.py",
+                # F2 (review round 1): the grep gate previously excluded these two —
+                # lint.py carried an unaudited hit (L13, below), and roles.py is where
+                # F1's fix actually removed the shadowing "reviewer" literal from
+                # `select_review_role`. Both now in scope; roles.py contributes zero
+                # hits post-fix (nothing to allowlist there any more).
+                "lint.py", "roles.py"]
 
 # Every remaining hit of a bare fleet-role literal in the files above, individually
-# justified in this file's module docstring (AC-1). Anything NOT matching one of these
-# substrings is a genuine regression — a NEW hardcoded role slot the grep must catch.
+# justified with a visible reason (F2) — (pattern, reason). Anything NOT matching one
+# of these substrings is a genuine regression — a NEW hardcoded role slot the grep
+# must catch.
 ALLOWED_HITS = [
-    'case.get("kind") == "architect"',
-    'self.log("architect", f"dispatch {job}")',
-    '_open_case(job.get("block"), "architect", arch.get("id")',
-    '{"engineer": "ENG", "architect": "ARCH", "reviewer": "REV"}',
-    'D4 dissolves the old "engineer"/"reviewer" literal here too.',   # docstring prose
+    ('case.get("kind") == "architect"',
+     "an internal escalation CASE-KIND tag (fsm.py) — 'this case concerns the "
+     "persistent TRIAGE/spec_owner worker's own job queue', never compared against "
+     "w.get('role') or any roles.yaml value"),
+    ('self.log("architect", f"dispatch {job}")',
+     "a log channel name (fsm.py), not a role comparison — cosmetic"),
+    ('_open_case(job.get("block"), "architect", arch.get("id")',
+     "same CASE-KIND tag as above, at the open-case call site (fsm.py)"),
+    ('{"engineer": "ENG", "architect": "ARCH", "reviewer": "REV"}',
+     "fsm.py _worker_id's cosmetic ID-prefix table — a display nicety with a "
+     "graceful role.upper() fallback (lazy, post-B2) for anything not listed; never "
+     "gates BUILD/REVIEW/TRIAGE/CLOSE dispatch, pool membership, or paperwork"),
+    ('D4 dissolves the old "engineer"/"reviewer" literal here too.',
+     "docstring prose (fsm.py), not code — describes this very block's own history"),
+    ('"reviewer" not in roles)',
+     "lint.py L13: a DIFFERENT, pre-existing config surface (project.yaml's optional "
+     "`agents:` roster, not roles.yaml) — skipped entirely whenever `agents:` is "
+     "absent (every current scaffold/project has no such key); mirrors the OLD "
+     "reviewer/reviewer-<lens> naming convention for THAT surface's own backward "
+     "compat only, and is never consulted by fleet dispatch (roles.select_review_role, "
+     "post-F1, has no such literal at all)"),
 ]
 
 
@@ -181,6 +237,11 @@ def cmd_ac1_grep_engine_for_role_literals():
     the fleet role-name literals; every hit must match the closed, justified allowlist
     above (comments/docstrings excluded — a `#`-led line, or this file's own docstring
     text, never counts)."""
+    ok("AC-1/F2 the allowlist itself is closed and every entry carries a non-empty "
+       "reason string (visible, in-test — F2)",
+       all(isinstance(pat, str) and isinstance(reason, str) and reason.strip()
+           for pat, reason in ALLOWED_HITS))
+    patterns = [pat for pat, _reason in ALLOWED_HITS]
     pattern = r'"engineer"\|"reviewer"\|"architect"'
     hits = []
     for fname in ENGINE_FILES:
@@ -195,9 +256,10 @@ def cmd_ac1_grep_engine_for_role_literals():
                 continue                       # a plain comment never counts (block scope note)
             hits.append((fname, lineno, content))
     unjustified = [(f, n, c) for f, n, c in hits
-                   if not any(pat in c for pat in ALLOWED_HITS)]
+                   if not any(pat in c for pat in patterns)]
     ok("AC-1 cmd: grep engine for role literals = 0 (beyond the closed, justified "
-       "allowlist — comments excluded)", not unjustified, f"unjustified={unjustified}")
+       "allowlist — comments excluded; F2: lint.py + roles.py now in scope)",
+       not unjustified, f"unjustified={unjustified}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -341,6 +403,144 @@ def t3_ambiguous_close_fallback_is_boot_fatal():
        "close_fallback", _raises(doc2, repo) is None)
 
 
+def t3_sole_close_role_needs_no_flag_the_flag_is_optional_not_ambiguous():
+    """B1 (review round 1): the ADR-0002 D4 worked example itself — engineer binds
+    [BUILD, CLOSE], designer binds [BUILD] only, NO close_fallback flag anywhere. A
+    single CLOSE-binding role is never ambiguous; the flag is documented irrelevant in
+    that case, not required. This boots clean with zero errors (the bug this
+    regresses: the OLD close_fallback property required an explicit flag even when
+    there was only one candidate, so this exact undecorated shape used to silently
+    fail at CLOSE time — see t4_adr_worked_example_closes_end_to_end below)."""
+    repo = _fixture_root()
+    doc = copy.deepcopy(TRIVIAL_ROLES)
+    doc["roles"]["designer"] = {
+        "persona": "meta/agents/designer.md", "model": "test-model", "binds": ["BUILD"],
+        "selector": {"block_tag": "design"},
+    }
+    _personas(repo, doc)
+    err = _raises(doc, repo)
+    ok("B1 the undecorated ADR-example shape (sole CLOSE role, no flag) boots with "
+       "zero errors", err is None, f"err={err}")
+    rc = roles_mod.RolesConfig(doc["roles"], repo)
+    ok("B1 ...and close_fallback resolves to the sole CLOSE role directly, flag or no "
+       "flag", rc.close_fallback == "engineer")
+
+
+def t3_build_role_lacking_close_path_and_no_fallback_is_boot_fatal():
+    """B1 (review round 1): the close path is total BY CONSTRUCTION — a BUILD-bound
+    role with no resolvable CLOSE path (doesn't bind CLOSE itself, and no fallback is
+    resolvable) is boot-fatal, named. Constructed here alongside the pre-existing
+    ambiguous-multi-CLOSE-role shape (the only way to make `close_fallback` resolve to
+    None while CLOSE still has bound roles at all) so the NEW check's own wording is
+    directly exercised, not just implied by the ambiguity error."""
+    repo = _fixture_root()
+    doc = copy.deepcopy(TRIVIAL_ROLES)
+    doc["roles"]["designer"] = {          # binds BUILD only -- no path of its own to CLOSE
+        "persona": "meta/agents/designer.md", "model": "test-model", "binds": ["BUILD"],
+        "selector": {"block_tag": "design"},
+    }
+    doc["roles"]["reviewer-code"]["binds"] = ["REVIEW", "CLOSE"]   # now 2 roles bind CLOSE, neither flagged
+    _personas(repo, doc)
+    err = _raises(doc, repo)
+    ok("AC-3/B1 designer (binds BUILD only) has no resolvable CLOSE path while CLOSE "
+       "is ambiguous — boot-fatal, named, with the NEW total-by-construction wording",
+       err is not None and "designer" in err and "no resolvable CLOSE path" in err,
+       f"err={err}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# B3 (review round 1): REVIEW total by construction — boot requires either a
+# selector-less default role or explicit per-declared-type coverage; at runtime an
+# unmatched type resolves deterministically (never None).
+# ══════════════════════════════════════════════════════════════════════════
+
+def t3_review_missing_default_and_incomplete_selector_coverage_is_boot_fatal():
+    repo = _fixture_root()
+    doc = copy.deepcopy(TRIVIAL_ROLES)
+    doc["roles"]["reviewer-code"]["selector"] = {"reviewer_class": "code"}  # no longer a default
+    _personas(repo, doc)
+    err = None
+    try:
+        roles_mod.RolesConfig(doc["roles"], repo, cadence_types=["code", "docs"])
+    except roles_mod.RolesError as e:
+        err = str(e)
+    ok("AC-3/B3 an uncovered declared cadence type ('docs') with no default REVIEW "
+       "role is boot-fatal, named", err is not None and "docs" in err, f"err={err}")
+    # The same roles doc boots clean once the project only declares the covered type.
+    ok("AC-3/B3 ...but boots clean when cadence_types only contains what's covered",
+       _boots_clean(doc, repo, cadence_types=["code"]))
+    # And boots clean regardless of coverage when cadence_types isn't passed at all
+    # (opt-out — every bespoke RolesConfig(...) construction elsewhere in this suite).
+    ok("AC-3/B3 ...and boots clean with no cadence_types argument at all (opt-out)",
+       _boots_clean(doc, repo))
+
+
+def _boots_clean(doc, repo, cadence_types=None):
+    try:
+        roles_mod.RolesConfig(doc["roles"], repo, cadence_types=cadence_types)
+        return True
+    except roles_mod.RolesError:
+        return False
+
+
+def t3_review_explicit_selector_coverage_of_every_declared_type_boots_clean():
+    """The 'or explicit coverage' branch: NO selector-less default REVIEW role, but
+    every declared cadence type has its own selector.reviewer_class — boots clean."""
+    repo = _fixture_root()
+    doc = copy.deepcopy(TRIVIAL_ROLES)
+    doc["roles"]["reviewer-code"]["selector"] = {"reviewer_class": "code"}
+    doc["roles"]["reviewer-docs"] = {
+        "persona": "meta/agents/reviewer-docs.md", "model": "test-model",
+        "binds": ["REVIEW"], "selector": {"reviewer_class": "docs"},
+    }
+    _personas(repo, doc)
+    ok("AC-3/B3 explicit selector coverage of every declared cadence type boots clean "
+       "with no default REVIEW role required",
+       _boots_clean(doc, repo, cadence_types=["code", "docs"]))
+
+
+def t3_review_unmatched_type_resolves_deterministically_via_default_never_none():
+    """B3 runtime half: WITH a selector-less default REVIEW role in play (the trivial
+    fixture — reviewer-code has no selector at all), an unmatched/unknown cadence type
+    still resolves deterministically to that default — never None."""
+    repo = _fixture_root()
+    doc = copy.deepcopy(TRIVIAL_ROLES)
+    _personas(repo, doc)
+    rc = roles_mod.RolesConfig(doc["roles"], repo)
+    ok("AC-3/B3 an unmatched cadence type resolves to the selector-less default "
+       "role, never None",
+       rc.select_review_role("some-unlisted-type") == "reviewer-code")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# F1 (review round 1): the selector table beats the bare "reviewer" name shortcut —
+# regression for the precedence bug (the shortcut used to run FIRST).
+# ══════════════════════════════════════════════════════════════════════════
+
+def t3_selector_table_beats_the_bare_reviewer_name_shortcut():
+    repo = _fixture_root()
+    doc = {"roles": {
+        "reviewer": {"persona": "meta/agents/reviewer.md", "model": "test-model",
+                     "binds": ["REVIEW"]},                       # bare name, NO selector
+        "specialist": {"persona": "meta/agents/specialist.md", "model": "test-model",
+                       "binds": ["REVIEW"], "selector": {"reviewer_class": "design"}},
+        "builder": {"persona": "meta/agents/builder.md", "model": "test-model",
+                    "binds": ["BUILD", "CLOSE"]},
+        "owner": {"persona": "meta/agents/owner.md", "model": "test-model",
+                  "binds": ["TRIAGE"], "spec_owner": True},
+    }}
+    _personas(repo, doc)
+    rc = roles_mod.RolesConfig(doc["roles"], repo)
+    ok("F1 typ='design' resolves via the SELECTOR TABLE to 'specialist', NOT the "
+       "bare 'reviewer' name (the precedence/shadowing bug this regresses)",
+       rc.select_review_role("design") == "specialist",
+       f"got={rc.select_review_role('design')!r}")
+    ok("F1 an unmatched type still falls through to 'reviewer' via the plain-default "
+       "arm (no selector at all on it) — the naming SHORTCUT is gone, the ordinary "
+       "default rule still covers a bare-named role that happens to qualify for it",
+       rc.select_review_role("something-else") == "reviewer")
+
+
 def t3_missing_persona_file_is_boot_fatal():
     repo = _fixture_root()
     doc = copy.deepcopy(TRIVIAL_ROLES)
@@ -395,13 +595,32 @@ def t3_missing_roles_yaml_file_is_boot_fatal():
 # ══════════════════════════════════════════════════════════════════════════
 
 def _close_affinity_doc():
+    """F3 (review round 1): the UNDECORATED ADR-0002 D4 worked example shape — a
+    SINGLE role binds CLOSE (engineer, via TRIVIAL_ROLES' own [BUILD, CLOSE]), no
+    close_fallback flag anywhere at all. This must pass through the REAL B1 fix (the
+    sole CLOSE-binding role is the implicit fallback) instead of the test hand-
+    patching the flag onto the fixture to dodge the bug it's meant to catch."""
     doc = copy.deepcopy(TRIVIAL_ROLES)
     # "designer" binds BUILD only (no CLOSE) -> must fall through at close time.
     doc["roles"]["designer"] = {
         "persona": "meta/agents/designer.md", "model": "test-model", "binds": ["BUILD"],
         "selector": {"block_tag": "design"},
     }
-    doc["roles"]["engineer"]["close_fallback"] = True   # the only OTHER CLOSE-binding role
+    return doc
+
+
+def _multi_close_roles_doc():
+    """F3's companion variant: SEVERAL roles bind CLOSE (not the ADR's single-role
+    worked example) — here close_fallback genuinely matters and stays boot-enforced
+    unique. Kept alongside the undecorated single-CLOSE-role case above so both shapes
+    stay covered after F3's fix."""
+    doc = copy.deepcopy(TRIVIAL_ROLES)
+    doc["roles"]["designer"] = {
+        "persona": "meta/agents/designer.md", "model": "test-model", "binds": ["BUILD"],
+        "selector": {"block_tag": "design"},
+    }
+    doc["roles"]["reviewer-code"]["binds"] = ["REVIEW", "CLOSE"]   # now 2 roles bind CLOSE
+    doc["roles"]["engineer"]["close_fallback"] = True              # explicit, required now
     return doc
 
 
@@ -448,6 +667,107 @@ def t4_roles_config_close_role_for_is_deterministic_and_total():
     ok("AC-4 close_role_for(None) (no recorded builder, e.g. a workerless gate) still "
        "resolves totally to the fallback whenever CLOSE has any bound role at all",
        rc.close_role_for(None) == "engineer")
+
+
+def t4_several_close_roles_resolve_via_the_explicit_flag():
+    """F3's companion variant: with SEVERAL CLOSE-binding roles in play, resolution
+    still goes through the explicit close_fallback flag (not the single-role-implicit
+    rule, which only applies when there's exactly one)."""
+    repo = _fixture_root()
+    doc = _multi_close_roles_doc()
+    _personas(repo, doc)
+    rc = roles_mod.RolesConfig(doc["roles"], repo)
+    ok("AC-4/F3 several CLOSE-binding roles resolve the fallback via the explicit "
+       "close_fallback: true flag", rc.close_role_for("designer") == "engineer")
+    ok("AC-4/F3 a role that itself binds CLOSE (reviewer-code here) still continues "
+       "unchanged, even with several CLOSE roles in play",
+       rc.close_role_for("reviewer-code") == "reviewer-code")
+
+
+def t4_adr_worked_example_closes_end_to_end_for_the_designer_built_block():
+    """B1 (review round 1), end to end: the ADR-0002 D4 worked example, driven through
+    REAL dispatch + CLOSE-affinity resolution + worker-id assignment (not just a bare
+    close_role_for() call) for a block actually BUILT by the non-CLOSE-binding role
+    (designer). This is the exact scenario B1 was filed against: the OLD
+    close_fallback property returned None here (a single CLOSE role, no flag —
+    treated as "ambiguous" instead of "obviously that one"), which would have crashed
+    _worker_id downstream (B2) the moment CLOSE was reached."""
+    ctx, repo = build(blocks=[("A-01", "\U0001F4CB", "none")])
+    seed_trivial_roles(repo, _close_affinity_doc())
+    util.atomic_write(os.path.join(repo, "meta", "blocks", "A-01.md"),
+                      _block_md_tagged("A-01", tags=["design"]))
+    eng = Engine(ctx); started(eng)
+    row = eng.st.row("A-01")
+    ok("B1 the design-tagged block resolves BUILD to designer (binds BUILD only, no "
+       "CLOSE)", eng._build_role_for(row) == "designer")
+    eng._dispatch_engineer("A-01")     # dispatch is role-agnostic; resolves via _build_role_for
+    w = next(x for x in eng.st.workers if x.get("block") == "A-01")
+    ok("B1 designer actually dispatched to build it, durably recorded",
+       w["role"] == "designer" and eng.st.block_roles.get("A-01") == "designer")
+    ok("B1 CLOSE affinity for the designer-built block resolves to engineer — the "
+       "SOLE CLOSE-binding role, with NO close_fallback flag set anywhere in this "
+       "undecorated ADR-example roles.yaml", eng._close_role("A-01") == "engineer")
+    wid = eng._worker_id(eng._close_role("A-01"), "A-01")
+    ok("B1 CLOSE's worker id resolves cleanly through the real fix end to end — no "
+       "AttributeError, no None ever reaching worker-id assignment",
+       wid == "ENG-A-01", f"wid={wid!r}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# B2 (review round 1): defense in depth — a None role must never reach _worker_id
+# (or the fsm.py wrapper methods around the selector-resolution functions) without a
+# named, loud RolesError; never a bare AttributeError.
+# ══════════════════════════════════════════════════════════════════════════
+
+def t2_worker_id_raises_named_rolerror_on_none_role_never_attributeerror():
+    """The original bug: `{...}.get(role, role.upper())` evaluates `role.upper()`
+    EAGERLY as dict.get's default argument, unconditionally — so role=None crashed
+    with a bare AttributeError mid-CLOSE. Fixed AND defended: _worker_id now raises a
+    named RolesError immediately if ever handed None (unreachable via real dispatch
+    post B1/B3, but must fail loud, not weird, if that invariant is ever violated)."""
+    ctx, repo = build(blocks=[("A-01", "\U0001F4CB", "none")])
+    eng = Engine(ctx); started(eng)
+    try:
+        eng._worker_id(None, "A-01")
+        ok("B2 _worker_id(None, ...) raises", False, "did not raise at all")
+    except AttributeError as e:
+        ok("B2 _worker_id(None, ...) raises RolesError, never AttributeError",
+           False, f"AttributeError leaked: {e}")
+    except roles_mod.RolesError as e:
+        ok("B2 _worker_id(None, ...) raises a named, loud RolesError",
+           "role" in str(e).lower(), f"err={e}")
+
+
+def t2_close_role_and_build_role_for_call_sites_never_hand_none_downstream():
+    """B2 defense in depth: even if roles.RolesConfig.close_role_for/select_build_role
+    somehow returned None (contrived here directly, bypassing boot validation — proof
+    the fsm.py WRAPPER is the guard, not just a luckily-valid config), the call sites
+    (_close_role/_build_role_for) raise a named RolesError rather than propagating
+    None to a caller that would otherwise crash bare."""
+    ctx, repo = build(blocks=[("A-01", "\U0001F4CB", "none")])
+    eng = Engine(ctx); started(eng)
+    eng.st.block_roles["A-01"] = "engineer"
+    orig_close = eng.roles.close_role_for
+    eng.roles.close_role_for = lambda build_role: None
+    try:
+        eng._close_role("A-01")
+        ok("B2 _close_role raises when close_role_for returns None", False, "did not raise")
+    except roles_mod.RolesError as e:
+        ok("B2 _close_role raises a named RolesError when close_role_for returns None",
+           True, f"err={e}")
+    finally:
+        eng.roles.close_role_for = orig_close
+
+    orig_build = eng.roles.select_build_role
+    eng.roles.select_build_role = lambda *a, **k: None
+    try:
+        eng._build_role_for(eng.st.row("A-01"))
+        ok("B2 _build_role_for raises when select_build_role returns None", False, "did not raise")
+    except roles_mod.RolesError as e:
+        ok("B2 _build_role_for raises a named RolesError when select_build_role "
+           "returns None", True, f"err={e}")
+    finally:
+        eng.roles.select_build_role = orig_build
 
 
 # ══════════════════════════════════════════════════════════════════════════

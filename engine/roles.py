@@ -21,8 +21,16 @@ Schema (ADR-0002 D4), per role entry under `roles:`:
               the worker_count pool
   cardinality optional int (informational; only spec_owner's singularity and
               close_fallback's uniqueness are boot-enforced today)
-  close_fallback  bool — the designated CLOSE role when several roles bind CLOSE
-              (boot-validated unique in that case)
+  close_fallback  bool — the designated CLOSE role when SEVERAL roles bind CLOSE
+              (boot-validated unique in that case). Irrelevant/optional when only ONE
+              role binds CLOSE at all — that sole role IS the implicit fallback, flag
+              or no flag (the ADR's own worked example: engineer binds [BUILD, CLOSE],
+              designer binds [BUILD] only, no close_fallback flag anywhere — a
+              design-tagged block's CLOSE still resolves to engineer). Boot validation
+              additionally rejects any roles.yaml where a BUILD-bound role has no
+              resolvable CLOSE path at all (doesn't bind CLOSE itself and no fallback
+              is resolvable) — the close path is total by construction, never a None
+              reaching dispatch.
 """
 import os
 
@@ -54,14 +62,21 @@ class RolesConfig:
     raised here is meant to propagate uncaught (loud, named), exactly like the
     engine's other fail-closed guards (e.g. jobs.WorkerModelUnconfigured)."""
 
-    def __init__(self, roles, root):
+    def __init__(self, roles, root, cadence_types=None):
         self.roles = roles          # name -> raw dict, as authored
         self.root = root
+        # B3 (review round 1): the closed set of cadence lenses the PROJECT actually
+        # declares (project.yaml's `cadence:` map, passed in by the caller — RolesConfig
+        # itself owns no cadence config). Used only to make REVIEW's selector total by
+        # construction at boot when there's no selector-less default role; None/omitted
+        # (every direct RolesConfig(...) test construction) skips that extra coverage
+        # check, matching prior behavior.
+        self.cadence_types = list(cadence_types) if cadence_types else []
         self._validate()
 
     @classmethod
-    def load(cls, path, root):
-        return cls(_load_roles_doc(path), root)
+    def load(cls, path, root, cadence_types=None):
+        return cls(_load_roles_doc(path), root, cadence_types=cadence_types)
 
     # ── class binding ──
     def binds(self, role, cls):
@@ -79,8 +94,18 @@ class RolesConfig:
 
     @property
     def close_fallback(self):
-        cf = [name for name, r in self.roles.items() if r.get("close_fallback")]
-        return cf[0] if len(cf) == 1 else None
+        """The role CLOSE falls through to when the builder doesn't bind CLOSE itself
+        (B1, review round 1). When exactly ONE role binds CLOSE, that role IS the
+        implicit fallback — the `close_fallback` flag is documented irrelevant/optional
+        in that case (the ADR's own worked example never sets it). Only when SEVERAL
+        roles bind CLOSE does the flag matter: exactly one of them must be marked
+        `close_fallback: true` (boot-enforced — `_validate`), and that one is returned.
+        None if CLOSE has no bound role, or several bind it with no unique flag."""
+        close_roles = self.roles_binding("CLOSE")
+        if len(close_roles) == 1:
+            return close_roles[0]
+        flagged = [name for name in close_roles if self.roles[name].get("close_fallback")]
+        return flagged[0] if len(flagged) == 1 else None
 
     def persistent_roles(self):
         return [name for name, r in self.roles.items() if r.get("persistent")]
@@ -128,18 +153,24 @@ class RolesConfig:
     # ── selector: cadence type -> REVIEW role (T2) ──
     def select_review_role(self, typ):
         """Deterministic review-type -> role match: the established `reviewer-<lens>`
-        naming convention (pre-dating this block — lint.py's own L13 documented it: "a
+        NAMING CONVENTION (pre-dating this block — lint.py's own L13 documented it: "a
         reviewer persona the engine can resolve (reviewer-<lens> OR a generic
         reviewer)") is now the REVIEW class's selector, over roles.yaml bindings
         instead of a project.yaml persona scan. `reviewer-<typ>` wins if it exists and
-        binds REVIEW; else a role literally named `reviewer` if it binds REVIEW; else
-        the REVIEW-bound role with no `selector.reviewer_class` at all (the plain
-        default). No model call (P2)."""
+        binds REVIEW; ELSE the selector table (`selector.reviewer_class == typ`) over
+        every REVIEW-bound role; else the REVIEW-bound role with no
+        `selector.reviewer_class` at all (the plain default). No model call (P2).
+
+        F1 (review round 1): the selector TABLE runs before any name-based fallback —
+        a bare role literally named `reviewer` must never shadow a selector match for a
+        DIFFERENT type just because it happens to exist. There is in fact no hardcoded
+        bare-name-literal branch left here at all: a role named `reviewer` with no
+        `selector.reviewer_class` already resolves via the plain-default arm below like
+        any other selector-less REVIEW role — the naming SHORTCUT was pure redundancy
+        with that arm (and, when it wasn't redundant, was exactly the shadowing bug)."""
         named = f"reviewer-{typ}" if typ else None
         if named and self.binds(named, "REVIEW"):
             return named
-        if self.binds("reviewer", "REVIEW"):
-            return "reviewer"
         for name in self.roles_binding("REVIEW"):
             lens = (self.roles[name].get("selector") or {}).get("reviewer_class")
             if lens and lens == typ:
@@ -148,11 +179,17 @@ class RolesConfig:
                     if not (self.roles[n].get("selector") or {}).get("reviewer_class")]
         return defaults[0] if defaults else None
 
-    # ── CLOSE affinity (T2/AC-4): same role that built it; else the unique fallback ──
+    # ── CLOSE affinity (T2/AC-4): same role that built it; else the fallback ──
     def close_role_for(self, build_role):
+        """B1 (review round 1): total by construction whenever CLOSE has any bound role
+        at all — a single CLOSE-binding role is always resolvable (the implicit
+        fallback), several require the boot-enforced unique flag. Boot validation
+        additionally requires every BUILD-bound role to have a resolvable path here
+        (`_validate`), so a live roles.yaml never hands this method a `build_role`
+        for which it returns None."""
         if build_role and self.binds(build_role, "CLOSE"):
             return build_role
-        return self.close_fallback if self.roles_binding("CLOSE") else None
+        return self.close_fallback
 
     # ── fail-closed boot validation (T3/AC-3) ──
     def _validate(self):
@@ -170,6 +207,39 @@ class RolesConfig:
                 errors.append(
                     f"{len(close_roles)} roles bind CLOSE ({close_roles}) — exactly one "
                     f"must be marked close_fallback: true, found {len(fallbacks)}: {fallbacks}")
+        # B1 (review round 1): the close path must be TOTAL by construction — every
+        # BUILD-bound role must resolve somewhere at CLOSE time, either because it binds
+        # CLOSE itself or because a fallback is resolvable. `self.close_fallback` folds
+        # in the single-role-implicit / several-roles-explicit-flag rule validated above.
+        fallback = self.close_fallback
+        for name in self.roles_binding("BUILD"):
+            if not self.binds(name, "CLOSE") and fallback is None:
+                errors.append(
+                    f"role '{name}' binds BUILD but has no resolvable CLOSE path — it "
+                    f"doesn't bind CLOSE itself and no close_fallback role is resolvable "
+                    f"(bind CLOSE on '{name}', or mark exactly one CLOSE-binding role "
+                    f"close_fallback: true)")
+        # B3 (review round 1): REVIEW must be total by construction too — either a
+        # selector-less default REVIEW role exists (catches any type the naming
+        # convention/selector table misses), or every cadence type this project actually
+        # declares (cadence_types, supplied by the caller — Engine passes its real
+        # cadence map) has EXPLICIT coverage via `reviewer-<type>` naming or
+        # `selector.reviewer_class`. Skipped when cadence_types is empty (opt-out for
+        # direct RolesConfig(...) construction that doesn't pass it, matching prior
+        # behavior for this suite's many bespoke-fixture tests).
+        review_roles = self.roles_binding("REVIEW")
+        review_defaults = [n for n in review_roles
+                            if not (self.roles[n].get("selector") or {}).get("reviewer_class")]
+        if review_roles and not review_defaults and self.cadence_types:
+            covered = {(self.roles[n].get("selector") or {}).get("reviewer_class")
+                       for n in review_roles}
+            covered |= {n[len("reviewer-"):] for n in review_roles if n.startswith("reviewer-")}
+            missing = sorted(t for t in self.cadence_types if t not in covered)
+            if missing:
+                errors.append(
+                    f"REVIEW has no selector-less default role and cadence type(s) "
+                    f"{missing} have no reviewer-<type> naming or selector.reviewer_class "
+                    f"coverage — would resolve to None at review-dispatch time")
         for name, r in self.roles.items():
             persona = r.get("persona")
             if not persona:
