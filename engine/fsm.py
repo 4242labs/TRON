@@ -139,6 +139,16 @@ GATE_GIVEUP_SPLIT_CODES = ("gate-contradiction", "gate-bypass", "gate-idle-cap",
                            "record-bypass", "gate-close-idle-cap")
 WALL_KINDS = frozenset(("wall",) + GATE_GIVEUP_SPLIT_CODES)
 
+# F2 (review round 1, ADR-0002 D2): every GATE_GIVEUP_SPLIT_CODES member is a case the
+# engine itself raised because its OWN git-evidence read contradicted the record (a
+# bypass, a regressed ancestor, a non-conforming record commit/invariant, a stuck-dirty
+# or orphaned gate) — never a worker's own unconfirmed claim. `_auto_settle_walls_for_block`
+# must never supersede one of these merely because the SAME (or a later) commit also
+# flipped the block's row to done — that is exactly the laundering shape a bypass would
+# exploit, not evidence the violation didn't happen. Auto-settle's F-1 target stays
+# narrowly the plain, undecided `"wall"` kind (WALL_KINDS minus this set).
+VIOLATION_KINDS = frozenset(GATE_GIVEUP_SPLIT_CODES)
+
 # ── Content integrity (block 01-31, ADR-0002 Decision 5; P8) ──
 # "Content-bearing slots are schema-required; missing content is a loud protocol error;
 # no substitution, no truncation, no silent discard." require_content is the ONE ingest
@@ -183,6 +193,13 @@ class Engine:
         self.table = TABLE
         self.paths = ctx.repo_paths(self.project)
         self._trunk_sha = ""                          # last-known trunk HEAD (forensic state context)
+        self._trunk_sha_prev = ""                     # F1 (review round 1): the sha BEFORE the most
+                                                       # recent refresh's advance — kept around past
+                                                       # `_sweep_grant_consume`'s own call so the
+                                                       # per-block bypass check (_drive_gate) can
+                                                       # independently re-derive "the patch-id of the
+                                                       # landed range" over the SAME observed window,
+                                                       # never just trusting a grant's bare existence.
         self._snapshot_hash = ""                      # hash of the rebuilt trunk-read snapshot (per-tick provenance)
         self._trunk_fault = False                     # T3 (01-16): this tick's trunk read came back blank
         self.events = eventlog.EventLog(ctx, self._log_env)
@@ -392,6 +409,11 @@ class Engine:
             # position once the branch advances by ref alone (update-ref CAS, no checkout).
             prev = self._trunk_sha
             self._trunk_sha = trunk.truth_sha(self.paths["root"], self._truth_ref(), self.dry)
+            # F1 (review round 1): persist the PRE-advance sha past this call — the
+            # per-block bypass check in `_drive_gate` (later THIS SAME tick) needs the
+            # identical (old, new) window to independently verify a grant's content,
+            # not just `_sweep_grant_consume`'s own pass over it.
+            self._trunk_sha_prev = prev
             # T3 (01-32, ADR-0002 D2 crash window): trunk advanced since the last
             # observation while grants are live -> the land.sh-crashed-before-consume
             # window. Consume administratively (a write in TRON's own grants folder)
@@ -483,14 +505,31 @@ class Engine:
         so clear the gate directly."""
         for typ in self.cadence_cfg:
             self.st.cadence[typ] = self.st.cadence.get(typ, 0) + 1
-        if block in self.st.blocked:
-            self.st.blocked.remove(block)
         # T4 (01-31, ADR-0002 D3/D5, F-1 self-healing): the evidence-ratchet observing ✅
         # on trunk for THIS block supersedes any wall claim still parked on it (P6) — a
         # mis-tagged wall from a worker that is actually done settles here, through the
         # SAME _close_case/_release_case_hold seam every other settle uses, never the
         # retired sweep and never a second teardown mechanism.
+        #
+        # F2 fix (review round 1, ADR-0002 D2): auto-settle FIRST, then decide the
+        # hold-release off the POST-settle case state — never the reverse. Auto-settle
+        # itself now only ever closes a plain undecided `"wall"` case (VIOLATION_KINDS is
+        # exempt, see `_auto_settle_walls_for_block`); if a VIOLATION_KINDS case for this
+        # block is STILL undecided after that call, the observed ✅ does not release the
+        # hold — a bypassed/contradicted/non-conforming landing that also flips the row
+        # to done must never launder itself closed this way. The case's own settle
+        # (approve/resume/abandon) is the only door back in, same as any other
+        # adjudicated case.
         self._auto_settle_walls_for_block(block)
+        violated = any(c.get("block") == block and c.get("kind") in VIOLATION_KINDS
+                       and c.get("decision") is None
+                       for c in self.st.pending_cases.values())
+        if block in self.st.blocked:
+            if violated:
+                self.log("flow", f"{block}: ✅ observed on trunk but a VIOLATION case is "
+                                 f"still undecided — hold NOT released (ADR-0002 D2, F2)")
+            else:
+                self.st.blocked.remove(block)
         self.events.event("block_done", block=block)
         self.emit("terminal.block_done", {"block": block})
         if self._worker_id_for_block(block):
@@ -571,6 +610,28 @@ class Engine:
             # just above, the trunk-refresh guard in _refresh_from_trunk).
             try:
                 self._route(trig, slots)
+            except trunk.SealedAllowlistViolation as e:
+                # F4 fix (review round 1, ADR-0002 D1): a tripped seal is NEVER an
+                # ordinary handler bug — it is the write-boundary audit's own tripwire
+                # ("a violation is structurally impossible; any future loosening is an
+                # ADR-visible diff"). Swallowing it into the same generic
+                # `handler-raised`/`handler-exception` bucket as routine forensic-continue
+                # noise would bury the one event that proves a caller tried to write
+                # outside the sealed allowlist. Escalate loudly instead: a DISTINCT
+                # forensic event kind (never `handler-exception`) + an architect-routed
+                # VIOLATION case, content-carrying, never silent.
+                detail = (f"sealed git allowlist tripped in handler for '{trig}': "
+                         f"{type(e).__name__}: {e}")
+                self.log("flow", detail)
+                self.events.failure(
+                    "sealed-allowlist-violation", "sealed-allowlist-tripped",
+                    f"route trigger '{trig}' through the sealed git wrapper", detail,
+                    node="_drain_triggers", block=slots.get("block"),
+                    inputs={"trigger": trig, "slots": {k: str(v)[:200] for k, v in slots.items()}},
+                    next_action="architect: audit the caller that attempted the "
+                                "off-allowlist git subcommand")
+                cid = self._open_case(slots.get("block"), "sealed-allowlist-tripped", None, detail)
+                self._triage_to_architect(detail, block=slots.get("block"), case=cid)
             except Exception as e:
                 self.log("flow", f"handler for '{trig}' raised: {e}")
                 self.events.failure(
@@ -1623,15 +1684,26 @@ class Engine:
 
     def _auto_settle_walls_for_block(self, block):
         """F-1 self-healing (ADR-0002 D3/D5), called from `_on_block_done` the instant the
-        evidence-ratchet observes ✅ for `block` on trunk: any WALL_KINDS case still parked
-        on this block — undecided, no explicit operator/architect decision ever written —
+        evidence-ratchet observes ✅ for `block` on trunk: a plain, undecided `"wall"` case
+        still parked on this block — no explicit operator/architect decision ever written —
         auto-settles through the ordinary `_close_case`/`_release_case_hold` seam, exactly
         like an internal `resume` with no explicit decision at all (never the retired
         `_sweep_wall_invariant`, never a second teardown mechanism). Loud, not silent: a
         forensic event records the auto-settle before the close so a mis-tagged wall from a
-        worker that was actually done is visible in the record, not just quietly gone."""
+        worker that was actually done is visible in the record, not just quietly gone.
+
+        F2 fix (review round 1, ADR-0002 D2): scoped to PLAIN `"wall"` cases ONLY — the
+        F-1 false-wall shape this was built for (01-31). A VIOLATION_KINDS case
+        (gate-bypass, gate-contradiction, record-bypass, and every other
+        GATE_GIVEUP_SPLIT_CODES member) is exempt: it names a git-evidence-observed
+        problem the engine itself raised, and a later done-observation on the SAME block
+        must never silently launder it closed — that would defeat "the violating block
+        stays held" (ADR-0002 D2) using the exact done-flip the violation might itself
+        carry. A violation case is adjudicated (architect/operator settle) or nothing at
+        all; `_on_block_done` withholds its hold-release while one survives here."""
         for cid, case in list(self.st.pending_cases.items()):
             if (case.get("block") == block and case.get("kind") in WALL_KINDS
+                    and case.get("kind") not in VIOLATION_KINDS
                     and case.get("decision") is None):
                 self.events.event("wall_auto_settled", block=block, cid=cid,
                                   **{"detail": case.get("detail"), "via": "observed-done"})
@@ -1882,20 +1954,47 @@ class Engine:
                     # crashed before its own consume — the engine consumes it
                     # administratively here (a write strictly inside its own grants
                     # folder, never a project write).
+                    #
+                    # F1 fix (review round 1, ADR-0002 D2): a grant's bare EXISTENCE is
+                    # never authorization — the old code here treated ANY live/consumed
+                    # grant record for this case_id as proof, without ever comparing the
+                    # grant's own patch-id against the patch-id of what actually landed.
+                    # That is the gate-bypass shape wearing a stolen grant's clothes: a
+                    # substituted-content advance (a raw `update-ref` that lands DIFFERENT
+                    # content than the grant priced) would read as authorized so long as
+                    # some live/consumed grant happened to exist for the case_id.
+                    #   - A `consumed` receipt is trustworthy AS PRESENCE: every consumer
+                    #     of `grants.consume()` (land.sh's own re-derive+validate, and
+                    #     `_sweep_grant_consume`'s administrative consume) only ever
+                    #     consumes AFTER a `grants.matches()` content hit — never bare.
+                    #   - A `live` grant is NOT enough by itself: it means nothing
+                    #     matched it yet (this tick's own `_sweep_grant_consume`, run at
+                    #     refresh, would already have consumed it had its content
+                    #     appeared in the observed advance window). Re-verify HERE, same
+                    #     discipline `_sweep_grant_consume` uses (first-parent walk,
+                    #     `patch_id_range` per step, `grants.matches`) — independent of
+                    #     whether the sweep's own pass already ran/matched, so a
+                    #     grant-exists-but-content-mismatch advance is caught even if the
+                    #     sweep's window somehow missed it. A live grant that FAILS this
+                    #     check is the violation case (gate-bypass shape): it falls
+                    #     through to the giveup below exactly like no grant at all.
                     case_id = g.get("landing_case") or g.get("case_merge")
                     grant_matches = False
                     if case_id:
                         live = grants.read_live(self.ctx.grants_dir, case_id)
                         consumed = grants.read_consumed(self.ctx.grants_dir, case_id)
-                        if live or consumed:
+                        if consumed:
                             grant_matches = True
-                            if live:
-                                self._consume_grant_administratively(case_id)
+                        elif live and self._grant_matches_landed_range(live):
+                            grant_matches = True
+                            self._consume_grant_administratively(case_id)
                     if not grant_matches and not (g.get("approved_merge") or g.get("self_merge")
                                                    or g.get("merge_in_flight")):
                         self._gate_giveup(block, g, wid,
-                                          "merged to trunk outside the gate (no matching grant — "
-                                          "ADR-0002 D2 violation: bypassed a pending merge hold)",
+                                          "merged to trunk outside the gate (no matching grant, "
+                                          "or an existing grant whose content does not match what "
+                                          "landed — ADR-0002 D2 violation: bypassed a pending "
+                                          "merge hold)",
                                           "gate-bypass", "audit the out-of-gate merge; re-validate on trunk")
                         return
                     stage, msg = "trunk", "gate.trunk"   # already merged -> skip local, re-validate on trunk
@@ -2293,6 +2392,28 @@ class Engine:
     # four seams — one mechanism, reused, never re-invented per call site. ──
     def _grant_ttl(self):
         return float(self.knobs.get("grant_ttl", 60))
+
+    def _grant_matches_landed_range(self, grant):
+        """F1 (review round 1, ADR-0002 D2): does `grant`'s bound patch-id actually
+        match the content of ANY step within this tick's own observed trunk-advance
+        window (`self._trunk_sha_prev` -> `self._trunk_sha`) — the SAME first-parent-walk
+        discipline `_sweep_grant_consume` uses, just invoked as a read (never a consume)
+        from the per-block bypass-detection arm in `_drive_gate`. A grant that merely
+        EXISTS is never enough (that was the F1 bug); recomputing the branch's diff
+        against the CURRENT trunk (`trunk.patch_id`) doesn't work post-landing either —
+        the branch is now an ancestor of trunk, so that recompute always collapses to an
+        empty range (the same ff-collapse defect 01-28 closed elsewhere) and would read
+        as a permanent false mismatch. Walking the observed window's own first-parent
+        steps is the one computation that still sees the real diff post-landing.
+        Fail-closed: no window (old/new absent or equal) -> False, never a free pass."""
+        old, new = self._trunk_sha_prev, self._trunk_sha
+        if not grant or not old or not new or old == new:
+            return False
+        for c in trunk.first_parent_commits(self.paths["root"], old, new, self.dry):
+            pid = trunk.patch_id_range(self.paths["root"], old, c, self.dry)
+            if grants.matches(grant, pid):
+                return True
+        return False
 
     def _sweep_grant_consume(self, old, new):
         """T3 (01-32, ADR-0002 D2): the ADMINISTRATIVE consume — trunk advanced between
