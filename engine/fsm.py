@@ -198,7 +198,12 @@ class Engine:
         # + fail-closed validated on EVERY construction (roles.RolesError propagates
         # uncaught — loud, named — exactly like jobs.WorkerModelUnconfigured). The engine
         # ships no personas and hardcodes no role name; this is the one and only source.
-        self.roles = roles_mod.RolesConfig.load(self.paths["roles_path"], self.paths["root"])
+        # B3 (review round 1): pass the project's real cadence lenses so REVIEW's boot
+        # validation can require total coverage (a selector-less default role, or
+        # explicit reviewer-<type>/selector.reviewer_class coverage of every declared
+        # type) when there's no default.
+        self.roles = roles_mod.RolesConfig.load(self.paths["roles_path"], self.paths["root"],
+                                                cadence_types=list(self.cadence_cfg.keys()))
         self._trunk_sha = ""                          # last-known trunk HEAD (forensic state context)
         self._trunk_sha_prev = ""                     # F1 (review round 1): the sha BEFORE the most
                                                        # recent refresh's advance — kept around past
@@ -905,7 +910,9 @@ class Engine:
         match against a role's `selector.block_tag`, else the project's default BUILD
         role (today's behavior when both headers are absent)."""
         row = row or {}
-        return self.roles.select_build_role(row.get("role_hdr"), row.get("tags"))
+        role = self.roles.select_build_role(row.get("role_hdr"), row.get("tags"))
+        return self._require_role(
+            role, f"BUILD dispatch (role_hdr={row.get('role_hdr')!r}, tags={row.get('tags')!r})")
 
     def _dispatch_engineer(self, block):
         # No status write — TRON owns no pipeline. The active worker record IS the in-flight
@@ -977,7 +984,7 @@ class Engine:
 
     def _dispatch_reviewer(self, typ):
         self.st.cadence[typ] = 0                       # consume the counter on dispatch
-        role = self.roles.select_review_role(typ)
+        role = self._require_role(self.roles.select_review_role(typ), f"REVIEW dispatch (type={typ!r})")
         wid = self._worker_id(role, typ)
         thresh = self.cadence_cfg.get(typ, 0)
         assignment = self._reviewer_assignment(typ)    # since-last-review range, then reset the marker (T6)
@@ -1167,7 +1174,8 @@ class Engine:
             n = g.get("stall_attempts", 0) + 1
             g["stall_attempts"] = n
             if n > int(self.knobs.get("gate_step_cap", 2)):
-                build_role = self.st.block_roles.get(block) or self.roles.select_build_role()
+                build_role = self.st.block_roles.get(block) or self._require_role(
+                    self.roles.select_build_role(), f"gate giveup default BUILD role for block {block!r}")
                 self._gate_giveup(block, g, self._worker_id(build_role, block),
                                   f"stuck at {before} after {n} attempts",
                                   "gate-step-cap", f"advance DONE gate stage '{before}'")
@@ -1932,7 +1940,8 @@ class Engine:
         # against the role that actually BUILT this block; the CLOSE transition resolves
         # separately via CLOSE affinity (same role/worker if it binds CLOSE, else the
         # project's close_fallback — T2/AC-4), which usually IS the same role but need not be.
-        build_role = self.st.block_roles.get(block) or self.roles.select_build_role()
+        build_role = self.st.block_roles.get(block) or self._require_role(
+            self.roles.select_build_role(), f"gate tick default BUILD role for block {block!r}")
         wid = self._worker_id(build_role, block)
         if row and row.get("status") == "done":          # ✅ on trunk -> CLOSE (slot held, T7)
             self._drive_close(block, g, self._worker_id(self._close_role(block), block))
@@ -3468,7 +3477,8 @@ class Engine:
         if not build_role:
             w = next((w for w in self.st.workers if w.get("block") == block), None)
             build_role = w.get("role") if w else None
-        return self.roles.close_role_for(build_role)
+        role = self.roles.close_role_for(build_role)
+        return self._require_role(role, f"CLOSE affinity for block {block!r} (build_role={build_role!r})")
 
     def _resolve_workerless_gate(self, block, g):
         """T2 (01-16, D-17-1): a workerless gate is never a wait state. Every path that
@@ -4708,7 +4718,8 @@ class Engine:
         ref = hold.get("canary")           # the canary reference: a block id (BUILD) OR an rtype (REVIEW)
         if not ref:
             return
-        role = hold.get("canary_role") or self.roles.select_build_role()
+        role = hold.get("canary_role") or self._require_role(
+            self.roles.select_build_role(), f"fleet-refusal canary default BUILD role (ref={ref!r})")
         wid = self._worker_id(role, ref)
         rec = jobs.find(wid, idx)
         if rec is not None:
@@ -5493,9 +5504,30 @@ class Engine:
         return alive, purged
 
     # ── small helpers ──
+    def _require_role(self, role, context):
+        """B2 (review round 1): defense in depth for every selector-resolution call
+        site (roles.select_build_role/select_review_role/close_role_for) — B1/B3's
+        boot validation is meant to make a None role unreachable, but if one ever
+        surfaces anyway this raises loud and named (RolesError, routed like the
+        engine's other fail-closed guards) instead of silently propagating None into
+        worker-id assignment or dispatch, where it would otherwise crash bare (the
+        original bug: `_worker_id`'s eager `role.upper()` default)."""
+        if role is None:
+            raise roles_mod.RolesError(
+                f"unresolvable role for {context} — expected roles.yaml boot validation "
+                f"to make this unreachable (see roles.RolesConfig._validate); never a "
+                f"silent None reaching dispatch/worker-id assignment")
+        return role
+
     def _worker_id(self, role, ref):
+        role = self._require_role(role, f"worker id (ref={ref!r})")
         ref = (ref or "").replace("block-", "")
-        pfx = {"engineer": "ENG", "architect": "ARCH", "reviewer": "REV"}.get(role, role.upper())
+        # B2: lazy default — role.upper() is only ever computed when `role` isn't one of
+        # the cosmetic prefixes below (the original bug called it EAGERLY as dict.get's
+        # default arg, unconditionally, which crashed with AttributeError the moment
+        # `role` was None; now unreachable here too, since _require_role above already
+        # raised, but kept lazy on principle — never evaluate a fallback you don't need).
+        pfx = {"engineer": "ENG", "architect": "ARCH", "reviewer": "REV"}.get(role) or role.upper()
         return f"{pfx}-{ref}" if ref else f"{pfx}-PERSIST"
 
     def _branch(self, block):

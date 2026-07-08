@@ -22,8 +22,11 @@
 #   persistent     bool — spawned once at boot, alive for the whole session, excluded
 #                  from the worker_count pool
 #   cardinality    optional int (informational)
-#   close_fallback bool — the designated CLOSE role when several roles bind CLOSE
-#                  (boot-validated unique in that case)
+#   close_fallback bool — the designated CLOSE role when SEVERAL roles bind CLOSE
+#                  (boot-validated unique in that case). Irrelevant/optional when only
+#                  ONE role binds CLOSE at all — that sole role is the implicit
+#                  fallback, flag or no flag (see below: this scaffold's own engineer
+#                  role never sets it).
 #
 # This is the trivial scaffold default (engineer / reviewer-code / architect) — the
 # fleet AC-1 proves runs unchanged from this file alone. Add roles (e.g. a designer
