@@ -97,13 +97,14 @@ scope/session labels together, or you'll drop the ones you omit.
 
 `save_issue` (no `id` = create). Required: `title`, `team`. Set, at minimum:
 
-- `team: <LINEAR_TEAM>` · `project: <LINEAR_PROJECT>` (omit if `none`)
+- `team: <LINEAR_TEAM>` · **`project: <LINEAR_PROJECT>` — MANDATORY. Never create a project-less card** (unless the project is explicitly configured `<LINEAR_PROJECT> = none`).
 - `state: <DEFAULT_STATE>` · `assignee: <DEFAULT_ASSIGNEE>` · `priority: <DEFAULT_PRIORITY>`
 - `labels`: the resolved §4 set (universal + project + scope/session)
 - `description`: Markdown — real newlines, **not** `\n`. **End with the signature (§6).**
 
 **Multi-step work** → create the parent, then each sub-issue with `parentId: <parent identifier>`.
 Order sub-issues with `blockedBy` where a real dependency exists. Progress rolls up to the parent.
+**⚠ Sub-issues do NOT inherit the parent's project — pass `project` explicitly on every sub-issue**, or they land project-less.
 
 Optional per-card fields as they apply: `dueDate`, `estimate` (only if the team has estimates
 on), `links` (append-only URL attachments), `blocks`/`relatedTo`, `milestone`/`cycle` (only if
@@ -160,6 +161,9 @@ can attribute cards to that agent user; until then, label + signature are the me
 - **Discover, don't assume.** States and labels are workspace-custom; resolve them live (§2b)
   every run. A guessed state/label name silently fails or mislabels.
 - **No duplicate cards.** Search before creating (§2b).
+- **Every card MUST have a project.** A project-less card is never acceptable. Sub-issues do
+  NOT inherit the parent's project — set it explicitly on each (§5). The only exception is a
+  project explicitly configured `<LINEAR_PROJECT> = none`.
 - **Universal label + signature are non-negotiable** — they are what make an agent-authored
   card identifiable and traceable. A card missing either is malformed.
 - **Description Markdown uses literal newlines**, never `\n` escape sequences.
