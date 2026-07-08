@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # replay_lock_test.py's A/B differential reads a NAMED historical commit
+          # (`git show 28224cb:engine/fsm.py`) out of this repo's own history — a
+          # shallow clone (actions/checkout's default) doesn't carry that object.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,6 +40,23 @@ jobs:
         # environment had it installed globally). PyYAML is the engine's one third-party
         # import (util.py); everything else it imports is stdlib or a local module.
         run: pip install pyyaml
+
+      - name: Stub the `claude` runtime (judge.py's TRON_RUNTIME, no CLI on this runner)
+        # judge.py's judgment-tool tests (eventlog_complete_test.py's t_model_call) stub
+        # the CLASSIFIER OUTPUT via TRON_JUDGE_STUB, but every dev machine this suite was
+        # ever written against had the real `claude` CLI on PATH as a fallback if a stub
+        # path is ever missed — a bare CI runner doesn't, and a genuinely-missed stub then
+        # raises FileNotFoundError instead of degrading to an ordinary invalid-output
+        # retry/exhaustion (the shape the suite already handles). A no-op stand-in closes
+        # that gap without touching test logic.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/claude" <<'SCRIPT'
+          #!/usr/bin/env bash
+          exit 1
+          SCRIPT
+          chmod +x "$HOME/.local/bin/claude"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run the full engine test suite
         run: |
