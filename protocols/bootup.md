@@ -24,6 +24,16 @@ Ask the **worker_count**: the size of the worker pool (engineers + reviewers sha
 detected default, take a number. The **architect is excluded** from this count — it is always one
 dedicated, persistent agent on top of the pool (`architect_count`, default 1).
 
+## 2.5 Worker model, per role — AIDE-recommended *(console; ADR-0003 D-D)*
+Before scoping, AIDE prints a best-effort recommendation of which block looks ready to pick up next
+(deps satisfied, still open) — advisory only, never itself sets scope. After ask-before-merging, ask
+the **model** for every role `meta/tron/roles.yaml` declares, one question each, defaulting to that
+role's own declared `model:` (or a built-in suggestion when it declares none) — Enter accepts the
+default, anything else overrides it for this session only. The answer is written into this instance's
+own session store (`meta/agents/tron/`, never `roles.yaml`); `role.model` still resolves as before
+when the operator supplies no answer. Absent BOTH a session answer and a config model for any role,
+boot refuses (fail-closed, no default, ever).
+
 ## 3. Spawn the architect *(engine)*
 Spawn the persistent architect (out of the worker pool) and leave it idle, ready to drain its queue.
 
