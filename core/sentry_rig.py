@@ -290,6 +290,7 @@ class MiniEng:
         self.orders = []
         self.workers = {}
         self.spawn_calls = []            # non-interference proof — must stay empty
+        self.pages = []                  # wave 8 (core/casestate.py): eng._page_operator calls
 
     def log(self, channel, msg):
         self.log_lines.append((channel, msg))
@@ -308,6 +309,12 @@ class MiniEng:
 
     def _spawn_worker(self, agent_id, block):
         self.spawn_calls.append((agent_id, block))
+
+    def _page_operator(self, case_id, block, detail, worker_id=None):
+        """Wave 8 (core/casestate.py): the STUBBED operator-page hook a cap
+        escalation now also fires (`sentry.py::_escalate` -> `casestate.
+        open_case`) — no real transport, exactly like `_to_worker` above."""
+        self.pages.append((case_id, block, detail, worker_id))
 
 
 LOCAL_PASS_REPORT = {"verdict": "pass",
@@ -476,23 +483,40 @@ def main():
        f"tick_before_nudge={tick_before_nudge['i'] if tick_before_nudge else None}")
 
     escalate_record = None
+    stuck_case = None
     if escalate_tick is not None:
         escalate_record = dict(escalate_tick["escalated"]).get(BLOCK_S)
         # the STRUCTURED manifest["escalations"] record, not just the
         # (block, detail) tuple `tick.tick`'s own result surfaces
         manifest_records = [r for r in (final_manifest.get("escalations") or [])
                             if r.get("block") == BLOCK_S]
+        # wave 8 (core/casestate.py): the SAME escalation ALSO opens a
+        # parked operator case — re-pointed here (never weakened: the
+        # `manifest["escalations"]` record above is asserted UNCHANGED,
+        # this is an ADDITIONAL, stricter requirement) per the brick's own
+        # "keep the honest record" + "one path for needs-the-operator" design.
+        stuck_case = next((c for c in (final_manifest.get("cases") or {}).values()
+                           if c.get("block") == BLOCK_S), None)
     ok("S4 (ESCALATE KILLER — must be GREEN): stuck-01 ESCALATED exactly "
        "once — `gate_state['stage'] == gate.STAGE_ESCALATED`, a structured "
        "record landed in `manifest['escalations']` (durable, re-read fresh "
-       "off disk) — after, and only after, the one re-nudge above",
+       "off disk) — after, and only after, the one re-nudge above — AND "
+       "(wave 8, core/casestate.py) the SAME cap escalation opened a parked "
+       "operator CASE for stuck-01 (source `sentry.cap`, `decision=None`, "
+       "never resumed across this whole rig — the operator page fired via "
+       "the stubbed `eng._page_operator` hook, never a bare record alone)",
        escalate_tick is not None and nudge_tick is not None
        and escalate_tick["i"] > nudge_tick["i"]
        and escalate_record is not None
-       and len(manifest_records) == 1,
+       and len(manifest_records) == 1
+       and stuck_case is not None
+       and stuck_case.get("source") == "sentry.cap"
+       and stuck_case.get("decision") is None
+       and any(p[1] == BLOCK_S for p in eng.pages),
        f"escalate_tick={escalate_tick['i'] if escalate_tick else None} "
        f"nudge_tick={nudge_tick['i'] if nudge_tick else None} "
-       f"manifest_records={manifest_records if escalate_tick else None}")
+       f"manifest_records={manifest_records if escalate_tick else None} "
+       f"stuck_case={stuck_case} pages={eng.pages}")
 
     tick_before_escalate = (tick_history[tick_history.index(escalate_tick) - 1]
                             if escalate_tick else None)

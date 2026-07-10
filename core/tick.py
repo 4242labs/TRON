@@ -59,7 +59,17 @@ from a message this process merely remembers sending.
             (`core/pipeline.py`'s own in-flight read) — a block already
             in-flight (a live worker awaiting ASSIGN, or an open gate) is
             never re-picked, so a block is dispatched exactly once, whether
-            across ticks or within this same call.
+            across ticks or within this same call. Wave 8: `fill` is handed
+            a FILTERED view (`casestate.dispatch_excluded_blocks` dropped —
+            every block with a still-OPEN parked case or an abandoned flag)
+            rather than the raw `pipeline.read_view` result — a walled
+            block's doc status on trunk is untouched (TRON never writes
+            project git outside `land.sh`), so once its gate frees the slot
+            (`core/casestate.py::open_case`) it would otherwise read as
+            genuinely dispatchable again before the operator ever settles
+            it; `core/session.py::check` below still reads the UNFILTERED
+            view (an open case must still count as "pending", never
+            silently drop out of scope).
 
   persist   `core.state.save` — atomic, and ONLY after the whole pass above
             has run to completion. Then, and only then, the drained inbox
@@ -98,6 +108,7 @@ import switchboard  # noqa: E402 — core/switchboard.py, wave 5's SPAWN
 import pipeline     # noqa: E402 — core/pipeline.py, wave 6's ONE pipeline-view read per tick
 import session       # noqa: E402 — core/session.py, wave 6's clean SESSION-END terminal
 import sentry        # noqa: E402 — core/sentry.py, wave 7's ONE pacing ladder (nudge/cap)
+import casestate      # noqa: E402 — core/casestate.py, wave 8's parked-case FSM
 
 _TERMINAL_STAGES = (gate.STAGE_CLOSED, gate.STAGE_ESCALATED)
 
@@ -177,7 +188,9 @@ def tick(eng):
     #     (wave 6) — threaded through `switchboard.fill`'s dispatch pick AND
     #     `session.check` below, never fetched twice ──
     view, _trunk_sha = pipeline.read_view(eng)
-    result["spawned"] = switchboard.fill(eng, snap, view=view)
+    excluded = casestate.dispatch_excluded_blocks(snap.manifest)
+    dispatch_view = [row for row in view if row.get("id") not in excluded] if excluded else view
+    result["spawned"] = switchboard.fill(eng, snap, view=dispatch_view)
 
     # ── persist (atomic, AFTER the whole pass) ──
     state.save(eng.ctx, snap.manifest)

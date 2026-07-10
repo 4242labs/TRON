@@ -23,11 +23,32 @@ or naming a block that already has an open gate — is dropped (logged, never
 raised); a duplicate/late-arriving `worker.online` after ASSIGN already fired
 is therefore a correct no-op, never a second gate for the same block.
 
+Wave 8 (`core/casestate.py`) adds TWO more structured tags this SAME pass
+drains, each acted on exactly like `worker.online` above — no LLM/classify,
+same discipline:
+
+  `worker.wall` — a worker's structured wall report (`block`, `agent_id`,
+  `slots.detail`). FAIL-LOUD on malformed (a `worker.wall` naming no block or
+  carrying no detail RAISES — never a silent drop; a wall is exactly the
+  kind of signal this whole brick exists to make sure never vanishes). A
+  well-formed one opens a parked case via `core.casestate.open_case` — the
+  raise-and-defer half of the design.
+
+  `operator.decision` — the operator's reply to a parked case (`slots.
+  case_id`, `slots.verb` ∈ resume|amend|abandon, optional `slots.note`).
+  Malformed (no case_id, or an unrecognized verb) is LOGGED, never raised,
+  never guessed at — `core.casestate.settle` itself handles an unknown/
+  duplicate case_id the same forgiving way (a settle attempt is a REPLY, not
+  a structural claim the router can validate up front the way a wall's own
+  content can).
+
 No git/subprocess of any kind here; the ONE mutation is a manifest write
 (`core/gate.py::new_state_full`, the SAME full-ladder constructor
-`core/gate_full_rig.py`/`core/tick_rig.py` already use) — no raw git, no
-`core.gitobs` call of its own (the gate's own OWN stage machinery does all
-git observation from here on, via `core.gate.advance`).
+`core/gate_full_rig.py`/`core/tick_rig.py` already use, for ASSIGN — PLUS,
+wave 8, whatever `core.casestate.open_case`/`.settle` themselves mutate, both
+equally git-free plain-manifest writes) — no raw git, no `core.gitobs` call
+of its own (the gate's own OWN stage machinery does all git observation from
+here on, via `core.gate.advance`).
 """
 import os
 import sys
@@ -36,50 +57,99 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-import gate   # noqa: E402 — core/gate.py, the DONE-ladder constructor this ASSIGN opens
+import gate        # noqa: E402 — core/gate.py, the DONE-ladder constructor this ASSIGN opens
+import casestate    # noqa: E402 — core/casestate.py, wave 8's parked-case FSM
 
 
 def route(eng, manifest, worker_reports):
     """One observe-phase pass over this tick's drained worker reports: act on
-    every well-formed `worker.online` line; anything else (local-pass
-    `worker.done` reports included) is `core/snapshot.py`'s own concern, fed
-    to `core.gate.advance` separately by `core/tick.py` — never double-handled
-    here."""
+    every well-formed `worker.online` (ASSIGN), `worker.wall` (open a
+    parked case), and `operator.decision` (settle a parked case) line;
+    anything else (local-pass `worker.done` reports included) is `core/
+    snapshot.py`'s own concern, fed to `core.gate.advance` separately by
+    `core/tick.py` — never double-handled here."""
     workers = manifest.setdefault("workers", {})
     gates = manifest.setdefault("gates", {})
 
     for rep in worker_reports:
-        if rep.get("tag") != "worker.online":
-            continue
-        agent_id = rep.get("agent_id")
-        slots = rep.get("slots") or {}
-        branch = slots.get("branch")
-        if not agent_id or not branch:
-            eng.log("flow", f"router: dropped a malformed worker.online report "
-                            f"(agent_id={agent_id!r} branch={branch!r})")
-            continue
+        tag = rep.get("tag")
+        if tag == "worker.online":
+            _route_online(eng, manifest, workers, gates, rep)
+        elif tag == "worker.wall":
+            _route_wall(eng, manifest, rep)
+        elif tag == "operator.decision":
+            _route_decision(eng, manifest, rep)
+        # else: worker.done and anything else — not this module's concern.
 
-        worker = workers.get(agent_id)
-        if not worker:
-            eng.log("flow", f"router: worker.online from unrecorded agent "
-                            f"{agent_id!r} — no matching spawn, dropped")
-            continue
-        if worker.get("status") != "spawning":
-            # Already assigned (or released) — a duplicate/late report;
-            # never a second ASSIGN for the same worker.
-            continue
 
-        block = worker.get("block")
-        block_file = worker.get("block_file")
-        if block in gates:
-            # Defensive: a gate already open for this block under a
-            # different path — never overwrite an in-flight gate.
-            eng.log("flow", f"router: block {block!r} already has an open "
-                            f"gate — worker.online from {agent_id!r} ignored")
-            continue
+def _route_online(eng, manifest, workers, gates, rep):
+    agent_id = rep.get("agent_id")
+    slots = rep.get("slots") or {}
+    branch = slots.get("branch")
+    if not agent_id or not branch:
+        eng.log("flow", f"router: dropped a malformed worker.online report "
+                        f"(agent_id={agent_id!r} branch={branch!r})")
+        return
 
-        gates[block] = gate.new_state_full(eng, block, block_file, branch, agent_id)
-        worker["status"] = "busy"
-        worker["branch"] = branch
-        eng.log("flow", f"router: ASSIGN {agent_id!r} -> block {block!r} on "
-                        f"its own reported branch {branch!r} (gate.local opened)")
+    worker = workers.get(agent_id)
+    if not worker:
+        eng.log("flow", f"router: worker.online from unrecorded agent "
+                        f"{agent_id!r} — no matching spawn, dropped")
+        return
+    if worker.get("status") != "spawning":
+        # Already assigned (or released) — a duplicate/late report;
+        # never a second ASSIGN for the same worker.
+        return
+
+    block = worker.get("block")
+    block_file = worker.get("block_file")
+    if block in gates:
+        # Defensive: a gate already open for this block under a
+        # different path — never overwrite an in-flight gate.
+        eng.log("flow", f"router: block {block!r} already has an open "
+                        f"gate — worker.online from {agent_id!r} ignored")
+        return
+
+    gates[block] = gate.new_state_full(eng, block, block_file, branch, agent_id)
+    worker["status"] = "busy"
+    worker["branch"] = branch
+    eng.log("flow", f"router: ASSIGN {agent_id!r} -> block {block!r} on "
+                    f"its own reported branch {branch!r} (gate.local opened)")
+
+
+def _route_wall(eng, manifest, rep):
+    """`worker.wall` — B7's raise-and-defer trigger. FAIL-LOUD on malformed
+    (no block, or no detail): a wall must NEVER silently vanish into a log
+    line the way an unknown `worker.online` sender safely can — there is no
+    safe "drop" for a genuine in-flight problem report."""
+    block = rep.get("block")
+    worker_id = rep.get("agent_id") or rep.get("worker_id")
+    slots = rep.get("slots") or {}
+    detail = slots.get("detail")
+    if not block:
+        raise ValueError(f"router: worker.wall report carries no block — "
+                         f"fail-loud, a wall is never silently dropped: {rep!r}")
+    if not detail:
+        raise ValueError(f"router: worker.wall for block {block!r} carries "
+                         f"no detail — fail-loud, a wall is never silently "
+                         f"dropped: {rep!r}")
+    casestate.open_case(eng, manifest, block, "worker.wall", detail,
+                        worker_id=worker_id, kind="wall")
+
+
+def _route_decision(eng, manifest, rep):
+    """`operator.decision` — F6/B7's Settle trigger. Malformed (no case_id,
+    or an unrecognized verb) is logged and dropped, never raised — an
+    operator reply is not a structural contract the way a worker's own wall
+    report is; `core.casestate.settle` itself handles an unknown/duplicate
+    case_id the same forgiving way."""
+    slots = rep.get("slots") or {}
+    case_id = rep.get("case_id") or slots.get("case_id")
+    verb = rep.get("verb") or slots.get("verb")
+    note = rep.get("note") or slots.get("note")
+    if not case_id or verb not in casestate.VERBS:
+        eng.log("flow", f"router: dropped a malformed operator.decision report "
+                        f"(case_id={case_id!r} verb={verb!r}) — logged, no-op, "
+                        f"never crashes, never guesses a case")
+        return
+    casestate.settle(eng, manifest, case_id, verb, note=note)
