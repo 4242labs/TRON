@@ -124,6 +124,11 @@ _REPORT_VERB_TAG = {
     "branch": "worker.branch",
     "online": "worker.online",
     "clean": "worker.done",
+    # the ARCHITECT's own completion verb (`report.sh architect --tag
+    # reconciled --block <id>`) — the reconcile-gate (M-05) clears only on a
+    # canonical `architect.reconciled`, and without this a real architect
+    # could never emit it, gating the next block forever (forward-wall #4).
+    "reconciled": "architect.reconciled",
 }
 
 
