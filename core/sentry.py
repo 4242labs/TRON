@@ -74,6 +74,14 @@ never wired to `eng._now()` themselves. Either way the unit is opaque to
 this module: only relative deltas (`now - holding_since`) are ever compared
 against the two knobs above.
 
+Wave 17 (GAP-A, `core/casestate.py::reping`): the SAME clock reading this
+call mints is also handed, once per call, to `casestate.reping` — a
+SEPARATE ladder (THE operator-page FLOOR: an unanswered case is re-paged
+forever on its own bounded backoff, never closed/dropped) that this module
+only *calls*, never implements; see that function's own docstring. Its
+activity is deliberately NOT folded into this function's own `nudged`/
+`escalated` return (a gate/reviewer-stage-outcome shape only).
+
 Duck-typed `eng` contract: everything `core/gate.py` already needs
 (`eng._to_worker`, `eng.dry`, `eng.log`) PLUS the OPTIONAL `eng._now()`
 above — no new REQUIRED surface, so every existing `core/*_rig.py` eng
@@ -264,5 +272,16 @@ def pace(eng, snapshot):
     r_nudged, r_escalated = _pace_reviewers(eng, manifest, now)
     nudged.extend(r_nudged)
     escalated.extend(r_escalated)
+
+    # ── wave 17 (GAP-A, core/casestate.py): THE FLOOR — re-ping every
+    #     still-OPEN operator case (any source: worker.wall/sentry.cap/
+    #     worker.stalled/block-less) forever, on its OWN bounded backoff,
+    #     off the SAME clock reading this call already minted. Deliberately
+    #     NOT folded into `nudged`/`escalated` above — a DIFFERENT ladder,
+    #     paging receipts, never a gate/reviewer stage outcome — so this
+    #     ladder's own re-ping activity stays invisible to (never breaks)
+    #     `core/tick.py`, which only ever reads those two keys off this
+    #     dict, or any existing caller/rig already asserting on them. ──
+    casestate.reping(eng, manifest, now)
 
     return {"nudged": nudged, "escalated": escalated}

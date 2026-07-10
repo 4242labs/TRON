@@ -239,17 +239,52 @@ class Engine:
         jobs.release(worker_id)
         self.log("flow", f"engine: released {worker_id} ({reason})")
 
-    # ── duck-typed surface: operator paging (real — a durable, structured trace) ──
-    def _page_operator(self, case_id, block, detail, worker_id=None):
-        """Real, non-stubbed: records the page as a structured event
-        (`operator_page` — the SAME type `engine/eventlog.py`'s own closed
-        vocabulary already names for this exact hand-off) plus a home-log
-        line. No live transport (TG/console) is wired in this brick — the
-        durable record is real; delivery is a later wave's concern."""
-        self.events.event("operator_page", case=case_id, block=block,
-                          detail=detail, worker_id=worker_id)
-        self.log("operator", f"PAGE case={case_id} block={block!r} "
-                              f"worker={worker_id!r}: {detail}")
+    # ── duck-typed surface: operator paging (real — a durable, structured
+    #     trace + THE FLOOR, wave 17/GAP-A) ──
+    def _page_operator(self, case_id, block, detail, worker_id=None,
+                       manifest=None, page_kind="operator_page"):
+        """Real, non-stubbed: RECORDS the page durably —
+        `manifest["operator_pages"][page_id]` (when a `manifest` is
+        supplied; every real call site in this stack — `core/casestate.py
+        ::open_case`/`reping`, wave 17 — already holds the live manifest in
+        scope and passes one; an omitted manifest, never a real call site,
+        still gets the event+log trace below, the SAME defensive-but-never-
+        silent shape every other duck-typed hook already has) — as a
+        structured event (`operator_page`, the SAME type `engine/
+        eventlog.py`'s own closed vocabulary already names for this hand-
+        off) plus a home-log line, THEN reads a delivery RECEIPT off the
+        injected `eng._deliver_page` hook (stubbed like `_to_worker` — no
+        real transport wired this wave; `core/opfloor_rig.py` is what
+        actually exercises delivered vs failed on a real, deterministic
+        clock). An ABSENT hook (production, this wave — a real transport is
+        a LATER wave's concern) or a return value that isn't literally
+        `"delivered"`/`"failed"` reads as `None` (absent) — the SAME "not
+        yet confirmed, keep re-pinging" floor outcome a `"failed"` receipt
+        gets; there is NO default-delivered assumption anywhere in this
+        stack (GAP-A's own bug, made structurally impossible). Returns the
+        receipt so the caller (`core/casestate.py`) can drive THE FLOOR."""
+        page_id = None
+        pages = None
+        if manifest is not None:
+            pages = manifest.setdefault("operator_pages", {})
+            page_id = f"{case_id}-p{len(pages) + 1}"
+
+        deliver = getattr(self, "_deliver_page", None)
+        receipt = None
+        if callable(deliver):
+            r = deliver(case_id, block, detail, worker_id=worker_id, page_id=page_id)
+            receipt = r if r in ("delivered", "failed") else None
+
+        if pages is not None:
+            pages[page_id] = {"page_id": page_id, "case_id": case_id, "block": block,
+                              "detail": detail, "worker_id": worker_id, "kind": page_kind,
+                              "receipt": receipt, "at": util.now_iso()}
+
+        self.events.event("operator_page", case=case_id, block=block, detail=detail,
+                          worker_id=worker_id, kind=page_kind, receipt=receipt, page_id=page_id)
+        self.log("operator", f"PAGE[{page_kind}] case={case_id} block={block!r} "
+                              f"worker={worker_id!r} receipt={receipt!r}: {detail}")
+        return receipt
 
     # ── role/model resolution (engine/roles.py, ADR-0002 D4 respected as-is) ──
     def _roles_config(self):

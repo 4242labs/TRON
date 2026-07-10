@@ -295,7 +295,13 @@ class MiniEng:
         self.spawn_calls.append((agent_id, block))
         self.workers[agent_id] = {"block": block, "status": "spawned"}
 
-    def _page_operator(self, case_id, block, detail, worker_id=None):
+    def _page_operator(self, case_id, block, detail, worker_id=None, **_kwargs):
+        # **_kwargs: wave 17 (GAP-A) widened the real `eng._page_operator`
+        # call surface (`manifest=`/`page_kind=`, `core/casestate.py`'s own
+        # THE-FLOOR re-ping ladder) — tolerated and ignored here; every
+        # case this rig opens is resumed/abandoned promptly, so the ladder
+        # never gets far enough to change any assertion this rig makes
+        # (all of which use `any(...)`, never an exact `eng.pages` count).
         self.pages.append((case_id, block, detail, worker_id))
 
 
