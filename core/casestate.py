@@ -81,9 +81,19 @@ of scope here):
 
 Duck-typed `eng` contract — everything `core/gate.py`/`core/sentry.py`
 already need PLUS: `eng._page_operator(case_id, block, detail,
-worker_id=None)` — the ONE new stubbed hook this brick adds, no real
+worker_id=None, manifest=None, page_kind="operator_page")` — no real
 transport, exactly the same shape `eng._to_worker`/`eng._release_worker`
-already are.
+already are; `core/engine.py`'s real implementation returns the delivery
+RECEIPT (`"delivered" | "failed" | None`), which is what `reping` (below,
+wave 17/GAP-A) drives THE FLOOR off of.
+
+Wave 17 (GAP-A, the #2 historical failure, 13x `operator-page-failed::
+page-receipt-permanent-fail`): `open_case` (above) mints the case and sends
+the FIRST page; `reping` (below), called once per `core/sentry.py::pace()`
+call, re-pages every still-OPEN case forever on a bounded backoff until
+EITHER a `delivered` receipt is on file OR the operator answers — there is
+NO code path anywhere in this module that closes, drops, or permanently-
+fails an unanswered case. See `reping`'s own docstring for the full ladder.
 
 No git/subprocess of any kind in this module — a plain manifest mutation
 only (the SAME "gates is a direct alias onto the manifest" idiom every
@@ -102,6 +112,16 @@ if _HERE not in sys.path:
 import gate   # noqa: E402 — core/gate.py, STAGE_ESCALATED/STAGE_CLOSED terminal vocabulary (read-only)
 
 VERBS = ("resume", "amend", "abandon")
+
+# ── THE FLOOR (GAP-A, wave 17) — page re-ping ladder, `reping` below.
+#     Mirrors `core/sentry.py`'s `GATE_NUDGE_AFTER`/`GATE_IDLE_CAP` shape,
+#     off the SAME shared clock, but the cap here NEVER turns a CASE
+#     terminal the way a sentry cap turns a GATE terminal — it only ever
+#     escalates the paging CHANNEL (a louder `page_kind` + a forensic,
+#     WARNING-and-retry `manifest["escalations"]` record); the case itself
+#     stays open, forever, exactly like before the cap. ──
+PAGE_REPING_AFTER = 1             # pace units an un-delivered page holds before a forced re-ping (bounded — at most once per pace() call, never a busy-loop)
+PAGE_CHANNEL_ESCALATE_AFTER = 3   # consecutive failed/absent deliveries -> escalate the CHANNEL — never terminal, never stops the ladder
 
 
 def _now_iso():
@@ -220,10 +240,121 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
     if worker_id and not eng.dry:
         eng._release_worker(worker_id, reason=f"case {case_id} ({source})")
 
-    eng._page_operator(case_id, block, detail, worker_id=worker_id)
+    # Wave 17 (GAP-A): the FIRST page — durable (manifest-recorded) + a real
+    # delivery RECEIPT read via `eng._deliver_page` (see `core/engine.py::
+    # _page_operator`). `reping` (below) is what keeps THE FLOOR alive past
+    # this one call — a `failed`/absent receipt here is never itself a
+    # crash or a drop, just the ladder's own starting point.
+    receipt = eng._page_operator(case_id, block, detail, worker_id=worker_id, manifest=manifest)
+    cases[case_id]["paging"] = {
+        "attempts": 1,
+        "consecutive_fail": 0 if receipt == "delivered" else 1,
+        "last_receipt": receipt,
+        "holding_since": None,   # anchored by reping()'s own first sighting — never double-pinged the tick it opens
+        "channel_escalated": False,
+    }
     eng.log("flow", f"casestate: opened case {case_id!r} for block={block!r} "
-                    f"source={source!r}: {detail}")
+                    f"source={source!r} (paged, receipt={receipt!r}): {detail}")
     return case_id
+
+
+def reping(eng, manifest, now):
+    """THE FLOOR (GAP-A, wave 17) — the #2 historical failure
+    (`operator-page-failed::page-receipt-permanent-fail`, 13x) made
+    structurally impossible: every still-OPEN case (`decision is None`) is
+    re-paged forever on a bounded backoff until EITHER a `delivered`
+    receipt is on file OR the operator answers (`settle`, above). There is
+    NO code path in this function — or anywhere else in this module — that
+    closes, drops, or permanently-fails an unanswered case.
+
+    Shape mirrors `core/sentry.py`'s own holding-clock ladder
+    (`PAGE_REPING_AFTER`/`PAGE_CHANNEL_ESCALATE_AFTER` standing in for that
+    module's `GATE_NUDGE_AFTER`/`GATE_IDLE_CAP`) but the cap here NEVER
+    turns the CASE terminal the way a sentry cap turns a GATE terminal:
+    capping a page only ever escalates the CHANNEL — a louder `page_kind`
+    on every subsequent page PLUS a forensic, WARNING-and-retry `manifest
+    ["escalations"]` record (keyed `target_block`/`case`, deliberately NOT
+    `block` — so it can never be mistaken for, or accidentally counted
+    alongside, a gate-driven or sentry-cap escalation record by a reader
+    filtering on that field) — the case itself stays open, forever, exactly
+    as it did before the cap tripped.
+
+    A `delivered` receipt on file satisfies the ladder outright — no
+    further re-ping, ever, for that case ("no more pings than the backoff
+    dictates"). A `failed` receipt and an ABSENT one (no `eng._deliver_page`
+    hook wired — production, this wave) are treated identically: the SAME
+    floor outcome, forced onward the next tick this case's holding clock
+    qualifies — never a silently-dropped failure.
+
+    Called once per `core/sentry.py::pace()` call, off the SAME clock
+    reading that call already minted (one shared clock for every ladder in
+    this stack — gate, reviewer, and page pacing alike). Deliberately NOT
+    folded into `pace()`'s own `nudged`/`escalated` return — a DIFFERENT
+    ladder, paging receipts, never a gate/reviewer stage outcome; `core/
+    tick.py` only ever reads those two keys off `pace()`'s result, so this
+    ladder's own activity is invisible to (never breaks) any existing
+    caller/rig that already asserts on them.
+
+    Returns the list of case_ids re-pinged THIS call — a non-durable
+    convenience for a caller/rig; `manifest["cases"][cid]["paging"]` +
+    `manifest["operator_pages"]` are the durable record."""
+    cases = manifest.get("cases") or {}
+    repinged = []
+    for case_id, case in cases.items():
+        if case.get("decision") is not None:
+            continue   # settled — pinging stops, exactly like sentry skips a terminal gate
+
+        paging = case.setdefault("paging", {
+            "attempts": 0, "consecutive_fail": 0, "last_receipt": None,
+            "holding_since": None, "channel_escalated": False,
+        })
+
+        if paging.get("last_receipt") == "delivered":
+            continue   # satisfied — no more pings than the backoff dictates
+
+        if paging.get("holding_since") is None:
+            # First sighting of this ladder for this case (the same tick it
+            # opened, or the first pace() call after) — mirrors sentry's own
+            # "just advanced" episode start: anchor the clock, no re-ping
+            # counted yet (open_case's own call already sent attempt #1).
+            paging["holding_since"] = now
+            continue
+
+        holding = now - paging["holding_since"]
+        if holding < PAGE_REPING_AFTER:
+            continue
+
+        # ── THE FLOOR: force the re-ping — a failed/absent receipt is
+        #     NEVER silently dropped, NEVER a reason to close/abandon ──
+        page_kind = "operator_page_failed" if paging["channel_escalated"] else "operator_page"
+        receipt = eng._page_operator(case_id, case.get("block"), case.get("detail"),
+                                     worker_id=case.get("worker_id"), manifest=manifest,
+                                     page_kind=page_kind)
+        paging["attempts"] += 1
+        paging["last_receipt"] = receipt
+        paging["holding_since"] = now   # reset the anchor — bounded backoff, never a busy-loop
+        repinged.append(case_id)
+
+        if receipt == "delivered":
+            paging["consecutive_fail"] = 0
+            continue
+
+        paging["consecutive_fail"] += 1
+        if paging["consecutive_fail"] >= PAGE_CHANNEL_ESCALATE_AFTER and not paging["channel_escalated"]:
+            paging["channel_escalated"] = True
+            detail = (f"case {case_id!r} (target_block={case.get('block')!r}) — "
+                     f"{paging['consecutive_fail']} consecutive failed/absent operator-page "
+                     f"deliveries (>= PAGE_CHANNEL_ESCALATE_AFTER={PAGE_CHANNEL_ESCALATE_AFTER}) "
+                     f"— CHANNEL escalated (louder paging kind going forward); the case itself "
+                     f"stays OPEN, never closed, never marked permanent-fail — WARNING-and-retry, "
+                     f"never terminal")
+            manifest.setdefault("escalations", []).append({
+                "target_block": case.get("block"), "case": case_id,
+                "kind": "operator-page-failed", "level": "warning",
+                "consecutive_fail": paging["consecutive_fail"], "detail": detail, "at": now})
+            eng.log("operator", f"casestate: CHANNEL ESCALATED for case {case_id!r} — {detail}")
+
+    return repinged
 
 
 def settle(eng, manifest, case_id, verb, note=None):

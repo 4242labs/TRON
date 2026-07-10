@@ -238,7 +238,12 @@ class MiniEng:
     def _spawn_architect(self):
         pass
 
-    def _page_operator(self, case_id, block, detail, worker_id=None):
+    def _page_operator(self, case_id, block, detail, worker_id=None, **_kwargs):
+        # **_kwargs: wave 17 (GAP-A) widened the real `eng._page_operator`
+        # call surface (`manifest=`/`page_kind=`, `core/casestate.py`'s own
+        # THE-FLOOR re-ping ladder) — this rig's own stub never needed
+        # either, so it just tolerates and ignores them (never weakens any
+        # assertion this rig already makes).
         self.log_lines.append(("operator_page", f"{case_id} {block} {detail}"))
 
 

@@ -371,7 +371,13 @@ class MiniEng:
     def _spawn_architect(self):
         self.architect_spawns.append(True)
 
-    def _page_operator(self, case_id, block, detail, worker_id=None):
+    def _page_operator(self, case_id, block, detail, worker_id=None, **_kwargs):
+        # **_kwargs: wave 17 (GAP-A) widened the real `eng._page_operator`
+        # call surface (`manifest=`/`page_kind=`, `core/casestate.py`'s own
+        # THE-FLOOR re-ping ladder) — tolerated and ignored here, never
+        # weakening C-K5's own exact-count assertion (this scenario's own
+        # `drive()` stops the SAME tick the case opens, before any re-ping
+        # ladder ever gets a second chance to fire).
         self.pages.append((case_id, block, detail, worker_id))
 
 

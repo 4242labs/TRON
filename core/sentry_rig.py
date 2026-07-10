@@ -310,10 +310,18 @@ class MiniEng:
     def _spawn_worker(self, agent_id, block):
         self.spawn_calls.append((agent_id, block))
 
-    def _page_operator(self, case_id, block, detail, worker_id=None):
+    def _page_operator(self, case_id, block, detail, worker_id=None, **_kwargs):
         """Wave 8 (core/casestate.py): the STUBBED operator-page hook a cap
         escalation now also fires (`sentry.py::_escalate` -> `casestate.
-        open_case`) — no real transport, exactly like `_to_worker` above."""
+        open_case`) — no real transport, exactly like `_to_worker` above.
+        `**_kwargs`: wave 17 (GAP-A) widened the real `eng._page_operator`
+        call surface (`manifest=`/`page_kind=`, `core/casestate.py`'s own
+        THE-FLOOR re-ping ladder) — tolerated and ignored here; this rig's
+        own S8 (QUIESCENT-AFTER) asserts on `pace()`'s `nudged`/`escalated`
+        RETURN value only, which the floor ladder never feeds (see `core/
+        sentry.py::pace`'s own docstring), so a re-pinged stuck-01 keeps
+        appearing in `eng.pages` after its cap without disturbing S8 at
+        all."""
         self.pages.append((case_id, block, detail, worker_id))
 
 
