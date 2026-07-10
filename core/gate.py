@@ -84,15 +84,23 @@ stages:
             (`gitobs.replica_clean` — this block's branch gone, no worktree
             checked out on it) and releases the slot ONLY once that
             predicate is true — never on a confirmation message alone. An
-            unclean replica never force-releases here: it holds and re-nudges
-            up to `CLOSE_ATTEMPT_CAP` checks, then escalates (never a silent
-            trust-release, never an infinite silent hang either).
+            unclean replica never force-releases here: this module holds
+            (`close_holding`) FOREVER on its own — it never counts attempts,
+            never caps itself. Capping is `core/sentry.py`'s job now, the ONE
+            pacing ladder wrapping every stage of this gate (never a
+            silent trust-release, never an infinite silent hang either —
+            sentry nudges then escalates, off the SAME law every other
+            stage's idle time is judged by).
 
 Substrate calls (learned by READING, never copying, `engine/fsm.py`'s
 `_drive_gate` / `_test_stage_verdict` / `_drive_close` / `_confirm_close` /
-`_drive_record_paperwork_landing` — re-expressed here without their pacing
-ladders, wall-kind taxonomy, role/PR machinery, or violation-repair
-machinery, which stay out of scope for this module). ALL git/test
+`_drive_record_paperwork_landing` — re-expressed here without their wall-kind
+taxonomy, role/PR machinery, or violation-repair machinery, which stay out of
+scope for this module; the ONE piece of `fsm.py`'s pacing ladder this stack
+DOES carry forward — re-expressed clean, never copied — is `core/sentry.py`,
+wave 7, which wraps every stage of THIS module from the outside; this module
+itself stays a pure predicate-driven state machine, never self-capping). ALL
+git/test
 observation comes from `core.gitobs` — the single seam, never a raw `git`
 call or `import trunk` in this module:
   - `gitobs.validate_trunk`     — the gate.trunk declared-test verdict.
@@ -152,7 +160,17 @@ if _HERE not in sys.path:
 import gitobs   # noqa: E402 — core/gitobs.py, the ONE git-observation seam
 import landing  # noqa: E402 — core/landing.py, Wave-1's ONE landing primitive
 
-CLOSE_ATTEMPT_CAP = 5   # real-git close checks before an unclean replica escalates
+# NOTE (wave 7 consolidation): there is deliberately NO per-stage attempt cap
+# in this module — not here, not anywhere below. This gate is a PURE
+# predicate-driven state machine: every stage either advances on an observed
+# predicate or HOLDS, forever, on its own. Capping (nudge -> escalate, off
+# ONE shared wall-clock-agnostic law, identical for every stage) lives
+# exclusively in `core/sentry.py`, which wraps this module from the outside
+# (`core/tick.py` calls `sentry.pace` right after driving gates, before
+# persist). The close stage used to be the one exception (`CLOSE_ATTEMPT_CAP`,
+# a private per-stage counter) — removed; `_advance_close` below now returns
+# `close_holding` unconditionally while the replica isn't clean, exactly like
+# every other holding outcome in this module.
 
 STAGE_LOCAL = "local"
 STAGE_MERGE = "merge"
@@ -184,7 +202,6 @@ def new_state(eng, block, block_file, branch, wid):
         "record_case_id": None,
         "record_landed_sha": None,
         "close_ordered": False,
-        "close_attempts": 0,
         "escalation": None,
     }
 
@@ -408,7 +425,11 @@ def _advance_close(eng, block, gate_state):
     every call re-checks the REAL replica. Releasing the slot is gated on
     `gitobs.replica_clean` alone, never on a worker's confirmation message —
     belt-and-suspenders: even an unsolicited/early confirm can't force a
-    release the git state doesn't back."""
+    release the git state doesn't back. An unclean replica HOLDS
+    (`close_holding`) — this function never counts attempts and never
+    escalates itself; `core/sentry.py` is the ONE place that caps ANY
+    stage's idle time, close included (wave 7 consolidation — this stage
+    used to self-cap via `CLOSE_ATTEMPT_CAP`, removed)."""
     branch = gate_state["branch"]
     wid = gate_state.get("wid")
 
@@ -426,11 +447,9 @@ def _advance_close(eng, block, gate_state):
     main_branch = eng.paths.get("main_branch", "main")
     clean, detail = gitobs.replica_clean(eng.paths["root"], branch, main_branch, eng.dry)
     if not clean:
-        gate_state["close_attempts"] += 1
-        if gate_state["close_attempts"] >= CLOSE_ATTEMPT_CAP:
-            return _escalate(gate_state,
-                             f"replica not clean after {gate_state['close_attempts']} "
-                             f"checks: {detail}")
+        # HOLDS, unconditionally, forever — no attempt count, no self-cap.
+        # `core/sentry.py` is the ONE place an idle close (like an idle ANY
+        # other stage) gets nudged then escalated.
         return "close_holding", detail or "replica not yet clean"
 
     if wid:
