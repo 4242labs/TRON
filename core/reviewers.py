@@ -285,12 +285,14 @@ def on_review_done(eng, manifest, rep):
         w.pop("holding_since", None)   # fresh pacing episode (core/sentry.py)
         w.pop("nudged_at", None)
         if not eng.dry:
-            eng._to_worker(
-                agent_id,
+            eng.emit(
+                "gate.review",
                 f"[TRON]  {agent_id} — gate.review: attest FULL coverage since "
                 f"the last {typ} review before I release you (a second "
                 f"worker.review_done confirms).",
-                "gate.review")
+                slots={},
+                worker_id=agent_id,
+                kind="gate.review")
         eng.log("flow", f"reviewers: review:{typ}:done (1st, from {agent_id}) -> "
                         f"DONE-REVIEW gate held (attest coverage)")
         return

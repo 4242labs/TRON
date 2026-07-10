@@ -328,15 +328,17 @@ def enqueue_triage(eng, manifest, case_id, source, block, detail, worker_id=None
 
 def _order_triage(eng, job):
     if not eng.dry:
-        eng._to_worker(
-            ARCHITECT_WID,
+        eng.emit(
+            "arch.triage",
             f"[TRON]  architect — TRIAGE (triage_id={job['triage_id']!r}, "
             f"case_id={job.get('case_id')!r}, source={job.get('source')!r}, "
             f"block={job.get('block')!r}): {job.get('detail')}\nReply with a "
             f"structured architect.triage_verdict (triage_id="
             f"{job['triage_id']!r}, verdict in "
             f"scope_forward|answer|operator[, note]).",
-            "arch.triage")
+            slots={"detail": job.get("detail"), "sender": job.get("source")},
+            worker_id=ARCHITECT_WID,
+            kind="arch.triage")
     job["ordered"] = True
     eng.log("flow", f"architect[triage:{job['triage_id']}]: ordered triage "
                     f"(source={job.get('source')!r})")
@@ -460,12 +462,14 @@ def _advance_forward(eng, manifest, job):
 
     if not job.get("ordered"):
         if not eng.dry:
-            eng._to_worker(
-                ARCHITECT_WID,
+            eng.emit(
+                "arch.forward",
                 f"[TRON]  architect — block {block!r} is missing its block file. "
                 f"Author it on {branch} (meta/blocks/{block}.md, Status: 📋 To do) "
                 f"and push — I land it once it resolves.",
-                "arch.forward")
+                slots={"block": block},
+                worker_id=ARCHITECT_WID,
+                kind="arch.forward")
         job["ordered"] = True
         eng.log("flow", f"architect[forward:{block}]: ordered authoring on {branch}")
         return
@@ -596,12 +600,14 @@ def _order_reconcile(eng, job):
     `architect.reconciled` report `core/router.py` routes into `manifest
     ["reconciled"]`; this function never mutates that itself."""
     if not eng.dry:
-        eng._to_worker(
-            ARCHITECT_WID,
+        eng.emit(
+            "arch.reconcile",
             f"[TRON]  architect — reconcile {job['block']!r} against "
             f"{job.get('after')!r}'s just-landed drift and report "
             f"architect.reconciled once clear.",
-            "arch.reconcile")
+            slots={"block": job["block"], "after": job.get("after")},
+            worker_id=ARCHITECT_WID,
+            kind="arch.reconcile")
     job["ordered"] = True
 
 

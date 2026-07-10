@@ -74,6 +74,7 @@ import gitobs                       # noqa: E402 — core/gitobs.py, the ONE git
 import real_tier                    # noqa: E402 — core/sim/real_tier.py, the real host-cli spawn wiring
 # the real-scaffold copy + live-instance seed, reused verbatim (never re-derived)
 from boot_real_scaffold_rig import copy_real_scaffold, seed_live_instance   # noqa: E402
+from seed_canon import install_canon   # noqa: E402 — installs the instance canon a real run needs
 
 MAIN = "main"
 DEFAULT_POLL_SEC = 20.0
@@ -154,6 +155,8 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
 
     root = copy_real_scaffold()                 # fresh real-git COPY (source untouched)
     inst, _project, _knobs_path = seed_live_instance(root)
+    canon = install_canon(inst)                 # messages.yaml/prompts/report.sh/... a real run needs
+    print(f"live: canon installed -> {canon}")
     ctx = Ctx(inst)
 
     eng = Engine(ctx)

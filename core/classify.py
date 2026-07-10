@@ -106,16 +106,53 @@ _VERB_RE = re.compile(
     re.IGNORECASE)
 
 
+# report.sh's own verb vocabulary (worker-contract.md §2 "Verbs") -> this
+# stack's canonical `worker.*` tags. `scripts/report.sh` writes the RAW verb
+# a real worker types (`--tag done`/`recorded`/`wall`/`review-done`/`clean`);
+# the engine reads the namespaced tag (`worker.done`, ...). The legacy engine
+# resolved this in `fsm._structured` (`block:next:done` -> `_h_worker_done`);
+# ported here so a REAL report.sh line resolves deterministically, no model.
+# `clean` is the close clean-confirmation (legacy `_h_worker_done`, T7: a
+# `done`/`clean` report on an already-✅ block is the close confirmation, the
+# gate's own git-observed `replica_clean` is what actually advances).
+_REPORT_VERB_TAG = {
+    "done": "worker.done",
+    "recorded": "worker.recorded",
+    "wall": "worker.wall",
+    "review-done": "worker.review_done",
+    "review_done": "worker.review_done",
+    "branch": "worker.branch",
+    "online": "worker.online",
+    "clean": "worker.done",
+}
+
+
+def _canonical_tag(tag):
+    """A tag that is ALREADY namespaced (`worker.done`, `architect.reconciled`,
+    `operator.decision` — everything `core/*_rig.py` and `core/sim/worker.py`
+    write directly, and every structured line the engine mints internally)
+    contains a `.` and passes through UNCHANGED — so no rig is re-pointed. A
+    BARE verb (a real `scripts/report.sh --tag <verb>` line) is mapped to its
+    canonical `worker.*` tag; an unknown bare token is left as-is (it will
+    fail routing.yaml's closed-enum check downstream -> architect triage,
+    never silently mis-advance a gate)."""
+    if not tag or "." in tag:
+        return tag
+    return _REPORT_VERB_TAG.get(tag.strip().lower(), tag)
+
+
 def _structured(msg):
     """A report that already carries its own `tag` resolves without the
     model — the SAME discipline `core/snapshot.py`'s own `local_reports`
     drain already keeps for `worker.done`. Returns `(tag, slots)` or
     `(None, None)` when `msg` carries no `tag` at all (the free-text path,
-    this module's own real job, below)."""
+    this module's own real job, below). A raw `report.sh` verb (`done`, ...)
+    is mapped to its canonical `worker.*` tag here (`_canonical_tag`); an
+    already-namespaced tag passes through untouched."""
     tag = msg.get("tag")
     if not tag:
         return None, None
-    return tag, dict(msg.get("slots") or {})
+    return _canonical_tag(tag), dict(msg.get("slots") or {})
 
 
 def _settle_from_text(manifest, text):
