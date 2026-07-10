@@ -282,6 +282,17 @@ class MiniEng:
     def _to_worker(self, wid, msg, kind):
         self.orders.append((wid, msg, kind))
 
+    def emit(self, template_id, fallback_text, slots=None, worker_id=None, kind=None):
+        # Rig fixture: no canon shipped (no messages.yaml/prompts/ on this
+        # scaffold), so this mirrors core.engine.Engine.emit's FALLBACK arm
+        # unconditionally — fallback_text verbatim, delivered the same way
+        # _to_worker always was, so every existing rig assertion on
+        # self.orders stays byte-for-byte identical.
+        line = fallback_text
+        if worker_id and not self.dry:
+            self._to_worker(worker_id, line, kind or template_id)
+        return line
+
     def _grant_ttl(self):
         return 60
 

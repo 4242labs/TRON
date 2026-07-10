@@ -172,6 +172,7 @@ class Engine:
         self._mailbox_seq = {}   # wid -> next engine->worker mailbox seq (engine/jobs.py::send)
         self._models = {}        # role -> model, the session override start(models=...) layers
         self._roles = None       # engine/roles.py::RolesConfig, resolved lazily on first spawn
+        self._renderer = None    # engine/render.py::Renderer, resolved lazily on first emit
         project = ctx.load_project()
         self.paths = ctx.repo_paths(project)
         self.paths["worker_count"] = 1   # floor 1 (core/switchboard.py's own floor) until start()
@@ -250,6 +251,51 @@ class Engine:
         seq = self._mailbox_seq.get(worker_id, 0) + 1
         self._mailbox_seq[worker_id] = seq
         jobs.send(self.ctx.worker_dir(worker_id), seq, kind, text)
+
+    # ── the ONE emit choke-point every worker-facing message goes through
+    #     (mirrors `engine/fsm.py::emit`, read for shape — see that
+    #     method's own docstring) ──
+    def emit(self, template_id, fallback_text, slots=None, worker_id=None, kind=None):
+        """Fill the shared slots every reply-expecting template needs
+        (`worker_id`, `report`, `contract` — `engine/fsm.py::emit`'s own
+        "inject both here so every send can carry the channel instruction"
+        note; `str.format` ignores a slot a template doesn't use, so this is
+        safe to inject unconditionally) then try to render the REAL canon
+        (`engine/render.py::Renderer` -> `engine/prompts.py::Prompts`,
+        UNMODIFIED — the reply-channel instruction lives there, once, never
+        hand-rolled per call site here).
+
+        CRITICAL FALLBACK: a project that ships no canon (every `core/
+        *_rig.py` instance — no `messages.yaml`/`prompts/` on disk, the
+        scaffold every rig copies from) can't build a `Renderer` or render a
+        template at all — building it, or `render()` itself, raises
+        (`FileNotFoundError` off a missing `messages.yaml`, `KeyError` off
+        an unknown template id, `UnknownPrompt`, anything). THAT exception
+        is the signal this brick's canon-less rigs are running fallback:
+        `fallback_text` (the SAME inline text every call site emitted
+        before this method existed) is used VERBATIM, no reply-line, no
+        canon lookup — so every `core/*_rig.py` stays byte-for-byte
+        behaviorally identical. Delivery is IDENTICAL either way — the
+        fallback is a copy-source substitution only, never a second
+        delivery path. Never calls the model, never touches git — pure
+        text + mailbox."""
+        slots = dict(slots or {})
+        if worker_id:
+            slots.setdefault("worker_id", worker_id)
+        slots.setdefault("report", self.ctx.p("scripts", "report.sh"))
+        slots.setdefault("contract", self.ctx.worker_contract)
+
+        try:
+            if self._renderer is None:
+                from render import Renderer   # engine/render.py — respected contract, unmodified
+                self._renderer = Renderer(self.ctx)
+            line = self._renderer.render(template_id, slots)
+        except Exception:
+            line = fallback_text
+
+        if worker_id and not self.dry:
+            self._to_worker(worker_id, line, kind or template_id)
+        return line
 
     def _release_worker(self, worker_id, reason="released"):
         """Real, non-stubbed: writes the `.stop` sentinel + SIGTERMs the

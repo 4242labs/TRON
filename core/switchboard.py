@@ -257,13 +257,28 @@ def fill(eng, snapshot, view=None):
                 break
             continue
         _record_fleet_progress(manifest)
-        eng._to_worker(
-            agent_id,
+        # PMT-SPAWN needs role + persona slots to render (the worker's first
+        # contact — it carries the report-channel + contract + persona the
+        # agent reads). Resolve the REAL role/persona off roles.yaml when the
+        # engine exposes it (a real `Engine`); a rig `MiniEng` has no roles
+        # config, falls back to role="engineer"/persona="" and, shipping no
+        # canon, renders the fallback text anyway (unchanged).
+        _role, _persona = "engineer", ""
+        if callable(getattr(eng, "_roles_config", None)):
+            try:
+                _role = eng._resolve_role_for_block(block["id"]) or "engineer"
+                _persona = eng._roles_config().persona_for(_role) or ""
+            except Exception:   # noqa: BLE001 — never let role resolution block a spawn
+                _role, _persona = "engineer", ""
+        eng.emit(
+            "spawn.worker",
             f"[TRON]  {agent_id} — you're spawned for block {block['id']}. "
             f"Report online with your OWN feature branch name (a structured "
             f"`worker.online` report carrying `worker.branch`) — I assign "
             f"the work the moment you do.",
-            "PMT-SPAWN")
+            slots={"role": _role, "persona": _persona},
+            worker_id=agent_id,
+            kind="PMT-SPAWN")
         eng.log("flow", f"switchboard: spawned {agent_id} for block "
                         f"{block['id']!r} (identity-only; ASSIGN awaits "
                         f"worker.online)")

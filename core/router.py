@@ -174,6 +174,25 @@ def _route_online(eng, manifest, workers, gates, rep):
     gates[block] = gate.new_state_full(eng, block, block_file, branch, agent_id)
     worker["status"] = "busy"
     worker["branch"] = branch
+
+    # ASSIGN (D3 gap fix): the worker has a branch and an open gate.local,
+    # but was never actually told WHAT to build — send it once here, guarded
+    # by a manifest flag on the worker record so a re-tick (or a late/dup
+    # worker.online this same tick, already unreachable via the `status !=
+    # "spawning"` guard above, but defensive regardless) never re-sends.
+    if not worker.get("assigned") and not eng.dry:
+        assignment = (f"[TRON]  {agent_id} — you own block {block}. Read its "
+                      f"spec at {block_file} and build it end to end; report "
+                      f"progress and a structured `worker.done` when the "
+                      f"local acceptance suite passes.")
+        eng.emit(
+            "assign.worker",
+            assignment,
+            slots={"assignment": assignment, "merge_path": ""},
+            worker_id=agent_id,
+            kind="PMT-ASSIGN")
+    worker["assigned"] = True
+
     eng.log("flow", f"router: ASSIGN {agent_id!r} -> block {block!r} on "
                     f"its own reported branch {branch!r} (gate.local opened)")
 

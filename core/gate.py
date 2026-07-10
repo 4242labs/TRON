@@ -275,12 +275,14 @@ def _advance_local(eng, block, gate_state, local_report):
 
     if not gate_state["local_ordered"]:
         if wid and not eng.dry:
-            eng._to_worker(
-                wid,
+            eng.emit(
+                "gate.local",
                 f"[TRON]  {wid} — gate.local: run the block's acceptance "
                 f"suite locally on {branch} and report a structured "
                 f"local-pass verdict (evidence, not a bare 'done').",
-                "gate.local")
+                slots={"block": block},
+                worker_id=wid,
+                kind="gate.local")
         gate_state["local_ordered"] = True
         eng.log("flow", f"gate[{block}] local: ordered local validation on {branch}")
 
@@ -383,12 +385,14 @@ def _advance_record(eng, block, gate_state):
 
     if not gate_state["record_ordered"]:
         if wid and not eng.dry:
-            eng._to_worker(
-                wid,
+            eng.emit(
+                "gate.record",
                 f"[TRON]  {wid} — gate.record: commit the ✅ Status flip on "
                 f"{branch} now — exactly one file ({block_file}), exactly the "
                 f"`**Status:**` field. Nothing else in that commit.",
-                "gate.record")
+                slots={"block": block, "record_path": block_file},
+                worker_id=wid,
+                kind="gate.record")
         gate_state["record_ordered"] = True
         eng.log("flow", f"gate[{block}] record: ordered ✅ status-flip on {branch}")
 
@@ -435,11 +439,13 @@ def _advance_close(eng, block, gate_state):
 
     if not gate_state["close_ordered"]:
         if wid and not eng.dry:
-            eng._to_worker(
-                wid,
+            eng.emit(
+                "close.worker",
                 f"[TRON]  {wid} — ✅ is on trunk. Wrap up: delete {branch}, "
                 f"remove any worktree on it, sync local, then confirm clean.",
-                "close.worker")
+                slots={},
+                worker_id=wid,
+                kind="close.worker")
         gate_state["close_ordered"] = True
         eng.log("flow", f"gate[{block}] -> close (slot held)")
         return "close_ordered", f"ordered {wid or '(no worker)'} to close out"
