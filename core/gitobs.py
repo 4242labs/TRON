@@ -65,6 +65,26 @@ def replica_clean(root, branch, main_branch="main", dry=False):
     return trunk.replica_clean(root, branch, main_branch, dry)
 
 
+def validate_trunk(root, merged_sha, test_command, test_env=None, ci_check_name=None,
+                    dry=False, scratch_root=None):
+    """Delegates to `trunk.validate_trunk` — the DONE-ladder wave-3 addition: the
+    trunk-stage TRUSTED-VERDICT read `core.gate`'s `gate.trunk` stage needs (re-run the
+    project's declared test command once, in a clean detached `git worktree` at
+    `merged_sha`, never the worker's own checkout/say-so; or read a named CI check's
+    verdict when `ci_check_name` is given). Returns `(status, detail)` with status one
+    of `"pass"` / `"fail"` / `"unconfirmed"` — see `trunk.validate_trunk`'s own
+    docstring for the full contract (T3: a real failure is never the same thing as
+    "can't confirm"; neither is ever a silent free pass).
+
+    `scratch_root` is forwarded as-is — `trunk.py`'s own sealed git-subcommand
+    allowlist refuses a `worktree add`/`remove` outside it (fail-closed on a missing
+    scratch_root in production; a caller here that needs a real validation run must
+    supply one, exactly like `engine/fsm.py`'s own `ctx.scratch_dir` call site)."""
+    return trunk.validate_trunk(root, merged_sha, test_command, test_env=test_env,
+                                ci_check_name=ci_check_name, dry=dry,
+                                scratch_root=scratch_root)
+
+
 def last_touching_sha(root, ref, path):
     """Last commit sha touching `path` on `ref`, or '' if none/unresolvable.
     A tiny read-only read (mirrors the first half of `trunk.record_commit_ok`'s
