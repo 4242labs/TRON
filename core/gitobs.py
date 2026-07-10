@@ -43,6 +43,17 @@ import trunk    # noqa: E402 — respected contract, imported as-is (never forke
 import reader   # noqa: E402 — respected contract (engine/reader.py), the canon pipeline parser
 
 
+def refresh(root, main_branch="main", dry=False, remote=None):
+    """Delegates to `trunk.refresh` — wave 12 (`core/engine.py`'s bootup A1/
+    A2): a best-effort `git fetch origin <main_branch>` in remote mode (reads
+    key to `origin/<main>` afterward, never a local ff-advance — ADR-0002
+    D1), or a genuine no-op read in local mode (`remote` absent/`"none"` —
+    "the root IS the authority, nothing to fetch"). Returns `(ok, detail)`;
+    `ok=False` is the ONLY case `core/engine.py`'s bootup treats as A2's
+    "stale trunk — halt loud" gateway, never silently swallowed."""
+    return trunk.refresh(root, main_branch, dry, remote)
+
+
 def tip_sha(root, branch, dry=False):
     """Delegates to `trunk.tip_sha` — the branch's current tip sha, or ''."""
     return trunk.tip_sha(root, branch, dry)
