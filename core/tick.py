@@ -97,19 +97,26 @@ import router       # noqa: E402 — core/router.py, wave 5's structured ASSIGN
 import switchboard  # noqa: E402 — core/switchboard.py, wave 5's SPAWN
 import pipeline     # noqa: E402 — core/pipeline.py, wave 6's ONE pipeline-view read per tick
 import session       # noqa: E402 — core/session.py, wave 6's clean SESSION-END terminal
+import sentry        # noqa: E402 — core/sentry.py, wave 7's ONE pacing ladder (nudge/cap)
 
 _TERMINAL_STAGES = (gate.STAGE_CLOSED, gate.STAGE_ESCALATED)
 
 
 def tick(eng):
     """One bounded, crash-safe tick: observe -> route -> decide -> act ->
-    fill -> persist -> exit (-> session-end, wave 6). Returns a compact,
-    NON-durable result dict for the rig/log — `{"advanced": [block, ...],
-      "closed": [block, ...], "escalated": [(block, detail), ...],
-      "outcomes": {block: (outcome, detail)}, "spawned": [agent_id, ...],
-      "session_end": {"ended_at", "reason"} | None}` — the manifest (via
-    `core.state`) is the only durable record of what happened; this return
-    value is discarded by the caller like everything else in the `Snapshot`.
+    sentry (pace) -> fill -> persist -> exit (-> session-end, wave 6).
+    Returns a compact, NON-durable result dict for the rig/log —
+    `{"advanced": [block, ...], "closed": [block, ...], "escalated":
+      [(block, detail), ...], "nudged": [block, ...], "outcomes":
+      {block: (outcome, detail)}, "spawned": [agent_id, ...], "session_end":
+      {"ended_at", "reason"} | None}` — the manifest (via `core.state`) is
+    the only durable record of what happened; this return value is
+    discarded by the caller like everything else in the `Snapshot`.
+    `"escalated"` carries BOTH a gate-driven escalate this tick's `act` pass
+    observed (e.g. an out-of-gate record commit) AND any sentry-driven
+    escalate `pace` below produces (an idle gate capped) — same
+    `(block, detail)` shape either way, never distinguishable by a caller
+    that just wants "what escalated this tick".
 
     Wave 6 idempotent terminal: if `manifest["session"]["ended_at"]` is
     already on file (`core.session.already_ended`), this call is a TRUE
@@ -121,8 +128,8 @@ def tick(eng):
         eng.log("flow", f"tick: session already ended at "
                         f"{manifest0['session']['ended_at']} — no-op re-tick "
                         f"(idempotent terminal, no observe/route/act/fill)")
-        return {"advanced": [], "closed": [], "escalated": [], "outcomes": {},
-                "spawned": [], "session_end": manifest0.get("session")}
+        return {"advanced": [], "closed": [], "escalated": [], "nudged": [],
+                "outcomes": {}, "spawned": [], "session_end": manifest0.get("session")}
 
     # ── observe ──
     snap = snapshot.build(eng)
@@ -138,7 +145,8 @@ def tick(eng):
             if gate_state.get("stage") not in _TERMINAL_STAGES]
 
     # ── act (idempotent) ──
-    result = {"advanced": [], "closed": [], "escalated": [], "outcomes": {}, "spawned": []}
+    result = {"advanced": [], "closed": [], "escalated": [], "nudged": [],
+              "outcomes": {}, "spawned": []}
     for block, gate_state, local_report in plan:
         stage_before = gate_state.get("stage")
         outcome, detail = gate.advance(eng, block, gate_state, local_report=local_report)
@@ -149,6 +157,18 @@ def tick(eng):
             result["closed"].append(block)
         elif outcome == "escalate":
             result["escalated"].append((block, detail))
+
+    # ── sentry (T1, wave 7): the ONE pacing ladder — nudge/cap any gate
+    #     still holding too long at its stage, run AFTER driving gates
+    #     above (so a gate that just advanced never gets paced against the
+    #     stage it left) and STRICTLY BEFORE persist (so a fresh escalation
+    #     is durable the same tick it fires, never lost to a crash between
+    #     here and `state.save` below). `core/gate.py` itself never caps —
+    #     this is the ONE place any stage's idle time turns into a nudge or
+    #     an escalation ──
+    pace_result = sentry.pace(eng, snap)
+    result["nudged"].extend(pace_result["nudged"])
+    result["escalated"].extend(pace_result["escalated"])
 
     # ── fill (SPAWN into whatever slots are STILL free after `act` — a gate
     #     that closed above frees its slot the same tick, PULSE's own
