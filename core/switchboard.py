@@ -27,6 +27,46 @@ here; a defensive check against the deterministic agent-id itself (an
 unexpected collision) additionally refuses to ever overwrite an existing
 worker record.
 
+## Wave 19 (GAP-C, fleet-outage self-release) — the #2 risk for the first
+real-LLM run: a real fleet WILL hit a systemic outage (quota/auth/credit
+exhausted, host CLI down) where EVERY spawn dies, synchronously, the instant
+it is attempted (`eng._spawn_worker` raises — the realistic shape of a CLI
+that refuses to even launch, distinct from a worker that launches fine and
+then goes SILENT, which stays `core/liveness.py`'s own time-based ladder,
+untouched by this brick). `fill` (below) catches that exception right at the
+mint-then-spawn call site, frees the just-minted worker slot (a genuine
+retry candidate next `fill` call — never a permanently "dead" record no
+other module here has vocabulary for) and bumps `manifest["fleet"]
+["consecutive_deaths"]` (`_record_fleet_death`, reset to 0 by
+`_record_fleet_progress` the instant an ordinary block-engineer spawn
+genuinely succeeds: "outage clearing" IS a subsequent spawn succeeding, the
+design's own words). Scoped to the ORDINARY block-dispatch spawn only — the
+same fleet the design calls out (`worker_count`'s own pool); the rarer
+cadence-reviewer spawn (`core/reviewers.py::dispatch`, unedited — out of
+this brick's minimal-edit scope) shares the identical `eng._spawn_worker`
+seam but is left unwrapped here, so no rig in this stack ever configures a
+`cadence:` that could dispatch a reviewer during a simulated outage.
+
+Past `fleet_outage_deaths` (`core/knobs.py`, the ONE knobs.yaml seam)
+consecutive deaths, the engine SELF-RELEASES: `manifest["paused"]` flips
+true and `fill` (this module) refuses to spawn ANYTHING further — no
+runaway re-spawn loop, no burn to session-end, no silent death — while a
+fleet-outage escalation is raised ARCHITECT-FIRST (`core/casestate.py::
+open_case`, wave 18's own routing, reused verbatim, unedited — a block-less
+case, `kind="fleet_outage"`, exactly the shape `core/casestate_rig.py`'s own
+BL0 block-less slice already proves works) rather than an immediate operator
+page; the architect's own `operator` verdict is what floors it onto the
+operator (wave 17's `reping`, also reused verbatim, unedited — a
+quota/auth outage is the operator's to fix, never the architect's or a
+worker's). `_fleet_paused` (below) derives "is dispatch currently paused"
+LIVE off `manifest["cases"]` every `fill` call — never a second, driftable
+boolean of its own — so the operator's `resume` (`core/casestate.py::
+settle`, unedited) or the architect resolving the case itself
+(`architect_resolve`, unedited) lifts the pause the SAME tick either clears
+the case: no `core/casestate.py` edit needed at all, and a SECOND, LATER
+outage (after the first genuinely resolved) can still raise its own fresh
+case — "one outage case at a time", never a permanent one-shot latch.
+
 No git/subprocess of any kind here — the ONE read (`pipeline.dispatchable`)
 goes through `core.gitobs`; the ONE write is a plain manifest mutation, the
 same "gates is a direct alias onto the manifest" idiom `core/snapshot.py`
@@ -41,6 +81,8 @@ if _HERE not in sys.path:
 
 import pipeline   # noqa: E402 — core/pipeline.py, the dispatch-eligible read + in-flight count
 import reviewers  # noqa: E402 — core/reviewers.py, wave 10's cadence-PULL reviewer dispatch
+import casestate  # noqa: E402 — core/casestate.py, wave 18's architect-first raise-and-defer (unedited)
+import knobs as knobs_mod   # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (fleet_outage_deaths)
 
 
 def _agent_id(block):
@@ -49,6 +91,64 @@ def _agent_id(block):
     reason) reconsiders the same block always mints the SAME identity —
     never a second/duplicate identity for one dispatch."""
     return f"engineer-{block}"
+
+
+def _fleet_paused(manifest):
+    """Wave 19 (GAP-C): True while a still-open fleet-outage case sits on
+    file — derived LIVE off `manifest["cases"]`, never a second, driftable
+    boolean of its own (see module docstring). `core/architect.py` carries
+    an IDENTICAL, deliberately duplicated helper (never imported — keeps
+    that module's own dependency direction unchanged) so its own
+    clear-ahead forward-job scan honors the SAME pause."""
+    return any(c.get("kind") == "fleet_outage" and c.get("decision") is None
+              for c in (manifest.get("cases") or {}).values())
+
+
+def _record_fleet_death(eng, manifest, agent_id, block_id, exc):
+    """Wave 19 (GAP-C): one fleet-wide spawn-then-immediate-death event —
+    bumps `manifest["fleet"]["consecutive_deaths"]` and, past
+    `fleet_outage_deaths` (`core/knobs.py`), self-releases: pauses dispatch
+    + raises the ONE fleet-outage escalation, architect-first (never a
+    second one while this one is still open — guarded by `_fleet_paused`,
+    never a separate latch that could go stale)."""
+    fleet = manifest.setdefault("fleet", {"consecutive_deaths": 0, "total_deaths": 0,
+                                          "outage_case_id": None, "deaths": []})
+    fleet["consecutive_deaths"] = fleet.get("consecutive_deaths", 0) + 1
+    fleet["total_deaths"] = fleet.get("total_deaths", 0) + 1
+    fleet.setdefault("deaths", []).append(
+        {"agent_id": agent_id, "block": block_id, "error": repr(exc)})
+    eng.log("flow", f"switchboard: SPAWN FAILED for {agent_id} (block={block_id!r}): "
+                    f"{exc!r} — worker slot freed (a genuine retry next fill, never a "
+                    f"permanently-dead record); fleet consecutive_deaths="
+                    f"{fleet['consecutive_deaths']}")
+
+    threshold = knobs_mod.load(eng.ctx).fleet_outage_deaths
+    if fleet["consecutive_deaths"] < threshold or _fleet_paused(manifest):
+        return
+
+    detail = (f"fleet outage: {fleet['consecutive_deaths']} consecutive worker "
+             f"spawn-then-immediate-death events (>= fleet_outage_deaths="
+             f"{threshold}) — self-releasing: dispatch PAUSED (spawning "
+             f"NOTHING further, never re-spawning into the outage), escalated "
+             f"ARCHITECT-FIRST (never an immediate operator page, never a "
+             f"silent death, never burned to session-end)")
+    case_id = casestate.open_case(eng, manifest, None, "fleet.outage", detail,
+                                  worker_id=None, kind="fleet_outage")
+    fleet["outage_case_id"] = case_id
+    manifest["paused"] = True
+    eng.log("operator", f"switchboard: FLEET OUTAGE — {detail} (case={case_id!r})")
+
+
+def _record_fleet_progress(manifest):
+    """Wave 19 (GAP-C): a spawn that genuinely SUCCEEDED — "outage clearing"
+    IS a subsequent spawn succeeding (the design's own words) — resets the
+    consecutive-death counter. Deliberately NOT gated on `_fleet_paused`:
+    while paused, `fill` (below) never even attempts a spawn, so this is
+    only ever reached post-resume, exactly where the reset belongs."""
+    fleet = manifest.setdefault("fleet", {"consecutive_deaths": 0, "total_deaths": 0,
+                                          "outage_case_id": None, "deaths": []})
+    if fleet.get("consecutive_deaths"):
+        fleet["consecutive_deaths"] = 0
 
 
 def _active_worker_count(manifest):
@@ -88,6 +188,16 @@ def fill(eng, snapshot, view=None):
     this whole arm falls through unchanged to the block-dispatch loop."""
     manifest = snapshot.manifest
     workers = manifest.setdefault("workers", {})
+
+    # ── Wave 19 (GAP-C): the fleet-outage self-release — spawn NOTHING new
+    #     while a fleet-outage case sits open (never re-spawning into the
+    #     outage; see module docstring). Checked FIRST, before any free-slot
+    #     accounting — a pause means zero dispatch, not a partial one. ──
+    if _fleet_paused(manifest):
+        manifest["paused"] = True
+        return []
+    manifest["paused"] = False
+
     worker_count = max(1, int(eng.paths.get("worker_count", 1) or 1))
 
     free = worker_count - _active_worker_count(manifest)
@@ -130,7 +240,23 @@ def fill(eng, snapshot, view=None):
             "status": "spawning",
             "branch": None,
         }
-        eng._spawn_worker(agent_id, block["id"])   # STUBBED — no real process
+        try:
+            eng._spawn_worker(agent_id, block["id"])   # STUBBED — no real process
+        except Exception as exc:
+            # Wave 19 (GAP-C): a SYNCHRONOUS spawn-time failure (quota/auth/
+            # credit exhausted, host CLI down) — distinct from a worker that
+            # spawns fine and later goes silent (`core/liveness.py`'s own
+            # ladder, untouched). Free the slot (a genuine retry candidate,
+            # never a permanently-"dead" record) and count it toward the
+            # fleet-outage signal; NEVER re-raise — the tick continues.
+            workers.pop(agent_id, None)
+            _record_fleet_death(eng, manifest, agent_id, block["id"], exc)
+            free -= 1
+            if _fleet_paused(manifest):
+                manifest["paused"] = True
+                break
+            continue
+        _record_fleet_progress(manifest)
         eng._to_worker(
             agent_id,
             f"[TRON]  {agent_id} — you're spawned for block {block['id']}. "

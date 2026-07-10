@@ -255,15 +255,38 @@ def _enqueue_reconcile(eng, manifest, view, done_block):
                     f"for {nxt!r} (M-05) — its dispatch is gated until reconciled")
 
 
+def _fleet_paused(manifest):
+    """Wave 19 (GAP-C, fleet-outage self-release): True while a still-open
+    fleet-outage case sits on file — an IDENTICAL, deliberately duplicated
+    helper to `core/switchboard.py`'s own (never imported — keeps this
+    module's existing dependency direction, `casestate`/`pipeline`/
+    `gitobs`/`landing` only, unchanged); both read the SAME `manifest[
+    "cases"]` shape, so an operator resume or an architect self-resolve
+    (`core/casestate.py::settle`/`architect_resolve`, both unedited by this
+    wave) is honored the instant either clears the case, from either
+    module, with no cross-import and no second boolean to keep in sync."""
+    return any(c.get("kind") == "fleet_outage" and c.get("decision") is None
+              for c in (manifest.get("cases") or {}).values())
+
+
 def enqueue(eng, manifest, view, landed_blocks):
     """Called BEFORE `core/switchboard.py::fill` each tick (`core/tick.py`):
     (1) clear-ahead `forward` jobs for every in-scope row missing a block
     file; (2) a `reconcile` job for the next in-scope block after each block
     whose gate outcome THIS tick was `record_landed` (✅ genuinely observed
-    on trunk). Idempotent throughout — see module docstring."""
+    on trunk). Idempotent throughout — see module docstring.
+
+    Wave 19 (GAP-C): while a fleet-outage case sits open, (1) — NEW
+    forward-looking work discovery — is skipped ("spawn NOTHING new while
+    paused", the design's own words, extended to the architect's own queue,
+    never just `core/switchboard.py`'s worker-pool spawn); (2) is left
+    unguarded — it only ever fires for a block that landed THIS tick, which
+    structurally never happens while dispatch is paused (nothing new lands
+    with nothing new spawned), so no separate guard is needed there."""
     manifest.setdefault("architect", new_state())
     manifest.setdefault("architect_queue", [])
-    _enqueue_forward_jobs(eng, manifest, view)
+    if not _fleet_paused(manifest):
+        _enqueue_forward_jobs(eng, manifest, view)
     for block in landed_blocks:
         _enqueue_reconcile(eng, manifest, view, block)
 

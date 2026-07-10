@@ -107,6 +107,19 @@ _OPTIONAL_DEFAULTS = {
     "abandon_flag_window": 60,
     "carve_liveness_timeout": 300,
     "grant_ttl": 60,
+    # Wave 19 (GAP-C, fleet-outage self-release): consecutive fleet-wide
+    # worker spawn-then-immediate-death events (`core/switchboard.py::fill`'s
+    # own counter, `manifest["fleet"]["consecutive_deaths"]`, reset on any
+    # successful spawn) before the engine self-releases (pause dispatch +
+    # architect-first escalation). Distinct from `silence_ping_min`/
+    # `silence_escalate_min` (a SINGLE worker's time-based silence, `core/
+    # liveness.py`'s own ladder) — this is a SYNCHRONOUS spawn-time failure
+    # count across the whole fleet, never a timeout. NOT added to `contracts/
+    # schema/knobs.schema.yaml` (a contract file, off limits per this wave's
+    # hard rule) — an OPTIONAL knob exactly like `grant_ttl` above, this
+    # module's own literal default is the canon value until the schema is
+    # updated by a later wave that owns contract edits.
+    "fleet_outage_deaths": 3,
 }
 # The schema's own explicit "REQUIRED key" annotation — the ONLY `knobs:`
 # field whose ABSENCE (given the `knobs:` map itself is present) is a
@@ -182,6 +195,11 @@ class Knobs:
     @property
     def grant_ttl(self):
         return float(self._get("grant_ttl"))
+
+    @property
+    def fleet_outage_deaths(self):
+        """Wave 19 (GAP-C) — see `_OPTIONAL_DEFAULTS`'s own comment above."""
+        return int(self._get("fleet_outage_deaths"))
 
     # ── `cadence:` / `peer_consults:` — own top-level blocks, siblings of `knobs:` ──
     @property
