@@ -22,6 +22,16 @@ any kind lives here):
     genuinely pending (to-do and dispatchable, or to-do/in-progress waiting
     on an unmet dep that is ITSELF still in-scope and not yet done) is an
     ordinary "not done yet", not a gap.
+  - Wave 8 (`core/casestate.py`): a block the operator explicitly ABANDONED
+    (`manifest["abandoned_blocks"]`, written by `casestate.settle`'s
+    `abandon` verb) is skipped OUTRIGHT — same treatment as a `deferred`/
+    `cut`/`folded`/`split` row below, never re-derived from its doc status.
+    "Abandon means drop — visibly": the block's own trunk status is left
+    exactly as `worker.wall` found it (never `done`, TRON never writes
+    project git for this), so without this exclusion it would fall straight
+    into the `stuck` gap below the instant its gate frees the slot — a
+    dropped block must never block, and must never falsely RAISE on, a
+    clean end.
   - Returns `{"ended_at": <iso8601 utc>, "reason": <str>}` — a fresh clean-
     terminal marker — only when EVERY in-scope block is `done` on trunk AND
     nothing is in-flight. The CALLER (`core/tick.py`) is the one that writes
@@ -76,6 +86,7 @@ def check(manifest, view):
     caller-fetched) + `manifest` (for in-flight state) — see module
     docstring for the full contract. Never touches git/state IO itself."""
     inflight = pipeline.in_flight_blocks(manifest)
+    abandoned = set(manifest.get("abandoned_blocks") or [])
     status_idx = {row["id"]: row.get("status")
                  for row in view if row.get("has_block_file")}
 
@@ -85,6 +96,10 @@ def check(manifest, view):
         if not row.get("has_block_file"):
             continue
         bid = row["id"]
+        if bid in abandoned:
+            # Wave 8: operator-abandoned — permanently OUT of the
+            # "must reach done" scope, never a gap, never blocks the end.
+            continue
         status = row.get("status")
         if status == "done":
             continue

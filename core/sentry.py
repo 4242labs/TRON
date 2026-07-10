@@ -38,8 +38,15 @@ its CURRENT stage:
         so a caller can't tell a sentry-driven one apart by shape — plus a
         structured record appended to `manifest["escalations"]` (block,
         stage, holding, the cap it tripped, a human detail, the clock
-        reading). Casestate/operator settle on this record is a later wave
-        (T4-E6/H2) — this is the honest, durable trace for now.
+        reading) — the honest, durable trace, unconditionally, kept exactly
+        as before. Wave 8 (`core/casestate.py`) ALSO opens a parked
+        operator CASE for this same escalation (`casestate.open_case`,
+        source `"sentry.cap"`) — one path for "needs the operator", same as
+        a `worker.wall`: the block is already terminal/slot-freed by the
+        mutation above, so `open_case` only tags it with the minted
+        `case_id` (never re-mutates `stage`/`escalation`); an operator
+        `resume`/`amend`/`abandon` on that case clears it exactly like any
+        other parked case (`core/casestate.py`'s own `settle`).
   - A gate already terminal (`closed`/`escalated`, whether `core.gate`
     itself or a PRIOR `pace()` call put it there) is skipped outright, and
     its pacing fields are dropped — a stale episode never survives past the
@@ -80,7 +87,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-import gate   # noqa: E402 — core/gate.py, the STAGE_CLOSED/STAGE_ESCALATED terminal vocabulary
+import gate        # noqa: E402 — core/gate.py, the STAGE_CLOSED/STAGE_ESCALATED terminal vocabulary
+import casestate    # noqa: E402 — core/casestate.py, wave 8's parked-case FSM
 
 # ── the ONE pacing ladder's two knobs — every stage, no exceptions ──
 GATE_NUDGE_AFTER = 3   # ticks holding at one stage, no progress -> re-nudge (once per episode)
@@ -132,6 +140,13 @@ def _escalate(eng, manifest, block, gate_state, stage, holding, now):
              "gate_idle_cap": GATE_IDLE_CAP, "detail": detail, "at": now}
     manifest.setdefault("escalations", []).append(record)
     eng.log("flow", f"sentry: ESCALATED {block} — {detail}")
+    # Wave 8: one path for "needs the operator" — a cap escalation ALSO
+    # opens a parked case (never REPLACES the honest `manifest["escalations"]`
+    # record above, which stays exactly as it always has). `open_case` sees
+    # the gate is already terminal (set two lines up) and only tags it with
+    # the minted case_id — never re-writes `stage`/`escalation`.
+    casestate.open_case(eng, manifest, block, "sentry.cap", detail,
+                        worker_id=gate_state.get("wid"), kind="cap")
     return detail
 
 
