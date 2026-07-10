@@ -1,12 +1,67 @@
-"""core.gate — ADR-0004 rewrite, brick 2: the DONE-ladder TAIL state machine
-(`gate.record` -> `close`), the exact path the engine has never reached a
-clean close through (0 clean terminal closes in ~50 forensic runs).
+"""core.gate — ADR-0004 rewrite, brick 3: the FULL DONE-ladder state machine,
+`gate.local -> gate.merge -> gate.trunk -> gate.record -> close`.
 
-Scope (T4 of contracts/rebuild-spec.md, Section 5 of blueprint-contracts.md):
-this module does NOT own the whole DONE ladder (local -> merge -> trunk gates
-land in a later wave) — it takes a block that has ALREADY passed gate.trunk
-(every applicable AC re-run green on trunk) and drives exactly the two
-remaining stages:
+Brick 2 (below, unmodified in substance) covered only the TAIL (`gate.record`
+-> `close`), the exact path the engine has never reached a clean close
+through (0 clean terminal closes in ~50 forensic runs) — it took a block that
+had ALREADY passed gate.trunk (every applicable AC re-run green on trunk) as
+a given. Brick 3 adds the HEAD three stages so a block can be driven through
+the ENTIRE ladder from scratch, on real git, via `new_state_full` (below);
+`new_state` (unchanged) still starts a state directly at `gate.record`, so
+existing tail-only callers (`core/gate_rig.py`) keep working unmodified.
+
+Local mode (no remote — blueprint-contracts.md §5's "one gated merge"): with
+no PR to wait on, the single gated merge IS the worker landing its feature
+branch onto trunk via `meta/scripts/land.sh` under a grant — the SAME
+content-bound landing primitive `core/landing.py` already provides for the
+record stage, reused verbatim for the code merge too (a different, freshly
+content-bound case-id: `role="merge"` vs `role="record"`, `landing.
+paperwork_case_id`'s own branch+patch-id embedding making the two
+structurally distinct, never name-only).
+
+  gate.local — the worker reports it ran the block's acceptance suite
+            locally. The gate judges the report ON EVIDENCE, never a bare
+            "done": a well-formed `{"verdict": "pass", "evidence": <str>}`
+            dict (passed into `advance`'s `local_report` kwarg — the ONE
+            piece of the DONE ladder that isn't purely git-observable, by
+            construction: local validation happens on the worker's own
+            machine, before anything has a git artifact to observe) advances
+            to `gate.merge`; a bare/absent/malformed report holds at
+            `gate.local` and is asked again — never advances, never
+            escalates (a worker still validating locally is not a
+            violation).
+
+  gate.merge — land the worker's OWN feature branch onto trunk via
+            `core.landing.land_via_grant`, under a content-bound case-id
+            (`landing.paperwork_case_id("merge", branch, patch_id)` — never
+            name-only, so a same-named branch re-authored with new content
+            after a prior merge attempt can never short-circuit on a stale
+            receipt, the exact Wave-1 confirmed root). Advances to
+            `gate.trunk` only once the merge is OBSERVED on trunk by real
+            ancestry (`land_via_grant`'s own observe-first contract) —
+            captures the merged sha for the next stage.
+
+  gate.trunk — re-validate the block's applicable ACs ON TRUNK, at the
+            merged sha, by running the project's declared test command
+            (`eng.paths["test_command"]`/`["test_env"]`/`["ci_check_name"]`,
+            the same duck-typed shape `engine/fsm.py`'s own
+            `_test_stage_verdict` reads) in a clean detached worktree
+            (`core.gitobs.validate_trunk`, delegating to
+            `engine/trunk.py`'s existing trunk-validation — the single git/
+            test observation seam, never a raw subprocess in this module).
+            `"pass"` advances to `gate.record` (brick 2's tail, below);
+            `"fail"` (a genuinely observed red) HOLDS at `gate.trunk` —
+            never advances, never silently escalates either, so a worker
+            that fixes the code and re-merges gets re-validated on the new
+            sha; `"unconfirmed"` (nothing trustworthy could be read) holds
+            the same way. Verdicts are cached per merged-sha (`trunk_verdict
+            _sha`) so a re-tick before the sha changes doesn't re-run the
+            suite.
+
+Scope of the TAIL (T4 of contracts/rebuild-spec.md, Section 5 of
+blueprint-contracts.md): a block that has ALREADY passed gate.trunk (every
+applicable AC re-run green on trunk) drives exactly the two remaining
+stages:
 
   record  — order the worker to flip the block doc's Status field to ✅ on
             its OWN branch (TRON reads status, never writes it). Once a new
@@ -34,22 +89,28 @@ remaining stages:
             trust-release, never an infinite silent hang either).
 
 Substrate calls (learned by READING, never copying, `engine/fsm.py`'s
-`_drive_close` / `_confirm_close` / `_drive_record_paperwork_landing` —
-re-expressed here without their pacing ladders, wall-kind taxonomy, or
-violation-repair machinery, which stay out of scope for this brick). ALL git
+`_drive_gate` / `_test_stage_verdict` / `_drive_close` / `_confirm_close` /
+`_drive_record_paperwork_landing` — re-expressed here without their pacing
+ladders, wall-kind taxonomy, role/PR machinery, or violation-repair
+machinery, which stay out of scope for this module). ALL git/test
 observation comes from `core.gitobs` — the single seam, never a raw `git`
 call or `import trunk` in this module:
+  - `gitobs.validate_trunk`     — the gate.trunk declared-test verdict.
   - `gitobs.record_commit_ok`   — the record-diff content check.
   - `gitobs.replica_clean`      — the close-time cleanliness check.
   - `gitobs.tip_sha` / `gitobs.patch_id` / `gitobs.last_touching_sha` —
     branch-state reads.
   - `core.landing.land_via_grant` / `core.landing.paperwork_case_id` — the
-    Wave-1 landing primitive, imported and reused verbatim, never forked.
+    Wave-1 landing primitive, imported and reused verbatim, never forked,
+    for BOTH the code merge (`gate.merge`) and the paperwork record
+    (`gate.record`) — two different, independently content-bound case-ids
+    (`role="merge"` vs `role="record"`), never the same landing call reused
+    for two different pieces of content.
 
 Duck-typed `eng` contract — everything `core/landing.py` already needs
 (`eng.paths`, `eng.dry`, `eng.ctx.grants_dir`, `eng.events`, `eng.log`,
-`eng._truth_ref()`, `eng._to_worker`, `eng._grant_ttl()`) PLUS the one
-addition this brick needs to free a worker slot:
+`eng._truth_ref()`, `eng._to_worker`, `eng._grant_ttl()`) PLUS the additions
+this module needs:
 
   `eng._release_worker(wid, reason=str)` — marks `wid`'s slot free in
   whatever worker/slot state `eng` owns (a list, a dict, a roster — this
@@ -57,12 +118,29 @@ addition this brick needs to free a worker slot:
   the real transport). Called exactly once, only after `gitobs.replica_clean`
   observes a clean replica.
 
-`gate_state` (caller-owned, one per in-flight block, built by `new_state`)
-carries the immutable block context (`block`, `block_file`, `branch`, `wid`)
-plus this module's own mutable progress fields. `advance(eng, block,
-gate_state)` drives it forward by exactly one observable step per call;
-call it again (a tick loop, or the rig standing in for one) until the
-outcome is `"closed"` or `"escalate"`.
+  `eng.paths.get("test_command")` / `.get("test_env")` /
+  `.get("ci_check_name")` — the project's declared trunk-validation command
+  (project.yaml `test:`), the exact shape `engine/fsm.py`'s own
+  `_test_stage_verdict` already reads off `eng.paths`; `gate.trunk` reads
+  these, never a value the block/worker supplies.
+
+  `eng.ctx.scratch_dir` — the scratch-worktree-admin root
+  (`meta/agents/tron/scratch/`) `gitobs.validate_trunk`'s clean detached
+  checkout is carved under (mirrors `engine/ctx.py`'s own `scratch_dir`
+  property).
+
+`gate_state` (caller-owned, one per in-flight block) carries the immutable
+block context (`block`, `block_file`, `branch`, `wid`) plus this module's
+own mutable progress fields. Two constructors:
+  - `new_state(...)` — unchanged, starts a state directly at `gate.record`
+    (the tail-only entry point `core/gate_rig.py` still drives).
+  - `new_state_full(...)` — starts a state at `gate.local`, the FULL ladder.
+
+`advance(eng, block, gate_state, local_report=None)` drives a state forward
+by exactly one observable step per call (`local_report` is read only while
+`gate_state["stage"] == STAGE_LOCAL`, the one stage whose predicate isn't
+purely git-observable); call it again (a tick loop, or a rig standing in for
+one) until the outcome is `"closed"` or `"escalate"`.
 """
 import os
 import sys
@@ -76,6 +154,9 @@ import landing  # noqa: E402 — core/landing.py, Wave-1's ONE landing primitive
 
 CLOSE_ATTEMPT_CAP = 5   # real-git close checks before an unclean replica escalates
 
+STAGE_LOCAL = "local"
+STAGE_MERGE = "merge"
+STAGE_TRUNK = "trunk"
 STAGE_RECORD = "record"
 STAGE_CLOSE = "close"
 STAGE_CLOSED = "closed"
@@ -108,13 +189,43 @@ def new_state(eng, block, block_file, branch, wid):
     }
 
 
-def advance(eng, block, gate_state):
+def new_state_full(eng, block, block_file, branch, wid):
+    """Construct a `gate_state` that starts at `gate.local` — the FULL
+    ladder (`gate.local -> gate.merge -> gate.trunk -> gate.record ->
+    close`). Built on top of `new_state` (unchanged) so the tail's own
+    baseline capture (`record_base_sha`, resolved the SAME way, at
+    construction time — the record stage's baseline is a property of
+    `block_file` on `branch`, independent of when the earlier stages run)
+    stays exactly as trustworthy for a full-ladder state as it already is
+    for a tail-only one."""
+    st = new_state(eng, block, block_file, branch, wid)
+    st["stage"] = STAGE_LOCAL
+    st["local_ordered"] = False
+    st["local_report"] = None
+    st["merge_ordered"] = False
+    st["merge_case_id"] = None
+    st["merged_sha"] = None
+    st["trunk_verdict_sha"] = None
+    st["trunk_verdict"] = None
+    st["trunk_verdict_detail"] = None
+    return st
+
+
+def advance(eng, block, gate_state, local_report=None):
     """Advance `gate_state` by exactly one observable step. Returns
     `(outcome, detail)`. Never advances two STAGES in one call (record's
     own order+check+land sequence is the substance of the one 'record'
     step, not multiple stages); never trusts anything but a real
-    git-observed or grant-observed predicate."""
+    git-observed or grant-observed predicate — `local_report` is the ONE
+    exception (gate.local's predicate is inherently not git-observable) and
+    is only ever consulted while `gate_state["stage"] == STAGE_LOCAL`."""
     stage = gate_state.get("stage")
+    if stage == STAGE_LOCAL:
+        return _advance_local(eng, block, gate_state, local_report)
+    if stage == STAGE_MERGE:
+        return _advance_merge(eng, block, gate_state)
+    if stage == STAGE_TRUNK:
+        return _advance_trunk(eng, block, gate_state)
     if stage == STAGE_RECORD:
         return _advance_record(eng, block, gate_state)
     if stage == STAGE_CLOSE:
@@ -130,6 +241,115 @@ def _escalate(gate_state, detail):
     gate_state["stage"] = STAGE_ESCALATED
     gate_state["escalation"] = detail
     return "escalate", detail
+
+
+def _advance_local(eng, block, gate_state, local_report):
+    """One local-stage step: order once (side effect, idempotent), then
+    judge whatever `local_report` THIS call was handed. A well-formed
+    local-pass report (`{"verdict": "pass", "evidence": <non-empty str>}`)
+    advances to `gate.merge`; a bare/absent/malformed report (`None`, `{}`,
+    a wrong verdict, empty evidence) holds at `gate.local` — never
+    advances, never escalates. Nothing is trusted from a PRIOR call's
+    report implicitly re-supplied — a report only counts the tick it's
+    actually handed to `advance`, so a caller can't accidentally wedge a
+    stale/malformed report into a later, unrelated call."""
+    branch = gate_state["branch"]
+    wid = gate_state.get("wid")
+
+    if not gate_state["local_ordered"]:
+        if wid and not eng.dry:
+            eng._to_worker(
+                wid,
+                f"[TRON]  {wid} — gate.local: run the block's acceptance "
+                f"suite locally on {branch} and report a structured "
+                f"local-pass verdict (evidence, not a bare 'done').",
+                "gate.local")
+        gate_state["local_ordered"] = True
+        eng.log("flow", f"gate[{block}] local: ordered local validation on {branch}")
+
+    report = local_report if isinstance(local_report, dict) else None
+    verdict = report.get("verdict") if report else None
+    evidence = report.get("evidence") if report else None
+    if verdict != "pass" or not evidence:
+        return "local_waiting", "no well-formed local-pass report this call (bare/absent never advances)"
+
+    gate_state["local_report"] = report
+    gate_state["stage"] = STAGE_MERGE
+    eng.log("flow", f"gate[{block}] local: accepted local-pass evidence on {branch} -> merge")
+    return "local_passed", f"local evidence accepted: {evidence}"
+
+
+def _advance_merge(eng, block, gate_state):
+    """One merge-stage step: land the worker's OWN feature branch onto
+    trunk via the Wave-1 landing primitive, under a case-id content-bound
+    to THIS branch's current patch-id (`role='merge'` — distinct from the
+    record stage's `role='record'` case-id for the SAME branch later, so
+    the two landings can never collide on each other's receipts). Advances
+    to `gate.trunk` only once `land_via_grant` itself reports `"landed"`
+    (real ancestry observed) — captures the merged sha for the trunk
+    stage's re-validation."""
+    branch = gate_state["branch"]
+    wid = gate_state.get("wid")
+    truth_ref = eng._truth_ref()
+
+    patch_id = gitobs.patch_id(eng.paths["root"], branch, truth_ref, eng.dry)
+    case_id = gate_state.get("merge_case_id") or landing.paperwork_case_id(
+        "merge", branch, patch_id)
+    gate_state["merge_case_id"] = case_id
+    gate_state["merge_ordered"] = True
+
+    outcome = landing.land_via_grant(eng, case_id, block, branch, wid,
+                                     "gate.merge", "gate-merge")
+    if outcome == "landed":
+        gate_state["merged_sha"] = gitobs.tip_sha(eng.paths["root"], branch, eng.dry)
+        gate_state["stage"] = STAGE_TRUNK
+        eng.log("flow", f"gate[{block}] merge: {branch} observed on trunk "
+                        f"({str(gate_state['merged_sha'])[:8]}) -> trunk")
+        return "merge_landed", f"{branch} observed on trunk @ {gate_state['merged_sha']}"
+    if outcome == "pending":
+        return "merge_pending", f"grant live for {case_id}; awaiting land.sh"
+    return "merge_fail_closed", f"unresolvable patch-id for {branch} (case {case_id})"
+
+
+def _advance_trunk(eng, block, gate_state):
+    """One trunk-stage step: re-validate the block's applicable ACs ON
+    TRUNK, at the merged sha, via `gitobs.validate_trunk` (the single git/
+    test observation seam — never a raw subprocess here). `"pass"`
+    advances to `gate.record`; `"fail"` (a genuinely observed red) HOLDS at
+    `gate.trunk` — never advances, since a real failure is not the same
+    thing as a violation to escalate; a worker that fixes the code and
+    re-merges (a new `gate.merge` cycle a caller may re-drive this state
+    through) gets re-validated on the new sha. `"unconfirmed"` (nothing
+    trustworthy could be read) holds the same way. Verdicts are cached per
+    merged-sha so a re-tick before the sha changes never re-runs the
+    suite."""
+    sha = gate_state.get("merged_sha")
+    if not sha:
+        return _escalate(gate_state,
+                         "gate.trunk reached with no merged_sha recorded — "
+                         "gate.merge never observed a landing")
+
+    if gate_state.get("trunk_verdict_sha") == sha and gate_state.get("trunk_verdict") in ("pass", "fail"):
+        status = gate_state["trunk_verdict"]
+        detail = gate_state.get("trunk_verdict_detail", "")
+    else:
+        status, detail = gitobs.validate_trunk(
+            eng.paths["root"], sha, eng.paths.get("test_command"),
+            eng.paths.get("test_env"), eng.paths.get("ci_check_name"),
+            eng.dry, scratch_root=eng.ctx.scratch_dir)
+        if status in ("pass", "fail"):
+            gate_state["trunk_verdict_sha"] = sha
+            gate_state["trunk_verdict"] = status
+            gate_state["trunk_verdict_detail"] = detail
+        eng.log("flow", f"gate[{block}] trunk: declared test on {str(sha)[:8]} -> "
+                        f"{status}: {detail}")
+
+    if status == "pass":
+        gate_state["stage"] = STAGE_RECORD
+        return "trunk_passed", detail
+    if status == "fail":
+        return "trunk_failed", detail
+    return "trunk_unconfirmed", detail
 
 
 def _advance_record(eng, block, gate_state):
