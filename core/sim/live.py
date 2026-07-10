@@ -73,9 +73,12 @@ from engine import Engine, BootupError   # noqa: E402 — core/engine.py, THE MO
 import state                       # noqa: E402 — core/state.py
 import gitobs                       # noqa: E402 — core/gitobs.py, the ONE git-observation seam
 import real_tier                    # noqa: E402 — core/sim/real_tier.py, the real host-cli spawn wiring
+import architect                    # noqa: E402 — core/architect.py, ARCHITECT_WID (courier the architect too)
 # the real-scaffold copy + live-instance seed, reused verbatim (never re-derived)
 from boot_real_scaffold_rig import copy_real_scaffold, seed_live_instance   # noqa: E402
 from seed_canon import install_canon   # noqa: E402 — installs the instance canon a real run needs
+
+_ARCHITECT_WID = architect.ARCHITECT_WID
 
 MAIN = "main"
 DEFAULT_POLL_SEC = 20.0
@@ -153,8 +156,17 @@ def _courier(eng, manifest, delivered):
     set of `(wid, seq)`) dedupes across loops so a turn is couriered once."""
     inbox = eng.ctx.worker_inbox
     workers = manifest.get("workers") or {}
+    # Harvest the persistent ARCHITECT too — it is pool-EXCLUDED (never in
+    # manifest["workers"]), so a workers-only loop would never deliver its
+    # turn output. Without this, a real architect's `architect.reconciled`/
+    # triage completion never reaches the engine -> the reconcile-gate never
+    # clears -> the next block is gated FOREVER (the historical "01-03 never
+    # closed", forward-wall #4).
+    harvest_ids = list(workers.keys())
+    if _ARCHITECT_WID not in harvest_ids:
+        harvest_ids.append(_ARCHITECT_WID)
     couriered = 0
-    for wid in list(workers.keys()):
+    for wid in harvest_ids:
         tl = os.path.join(eng.ctx.worker_dir(wid), jobs.TIMELINE)
         if not os.path.isfile(tl):
             continue
