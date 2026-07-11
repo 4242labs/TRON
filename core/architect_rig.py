@@ -787,9 +787,48 @@ def run_forward_scenario():
     print(f"architect(final)={architect_final}")
 
 
+def run_phantom_triage_grace_scenario():
+    """s4 first-honest-SIM lock: a `classify.unclassified` PHANTOM triage that
+    never gets a structured verdict auto-resolves benignly after the grace
+    window — it can NEVER wedge the architect + session-end. A real
+    `worker.wall` triage never auto-resolves here (still requires a verdict)."""
+    root = build_root()
+    inst = os.path.join(root, "meta", "agents", "tron")
+    os.makedirs(inst, exist_ok=True)
+    tron_ctx = Ctx(inst)
+    eng = MiniEng(root, tron_ctx, test_command="true", worker_count=1)
+
+    mA = {"architect": {"status": "busy"}, "triage_verdicts": {}}
+    jobA = {"kind": "triage", "triage_id": "triage-1", "source": "classify.unclassified",
+            "block": None, "worker_id": "engineer-01-03", "ordered": True,
+            "verdict": None, "resolved": False}
+    mA["architect"]["current_job"] = jobA
+    for _ in range(architect._PHANTOM_TRIAGE_GRACE_TICKS + 1):
+        architect._advance_triage(eng, mA, jobA)
+    ok("PT1 (PHANTOM-TRIAGE GRACE LOCK — must be GREEN): a classify.unclassified "
+       "phantom triage with no verdict auto-resolves benignly after the grace "
+       "window — never wedges the architect/session-end",
+       jobA.get("resolved") is True and jobA.get("verdict") == "answer",
+       f"resolved={jobA.get('resolved')} verdict={jobA.get('verdict')} "
+       f"ticks={jobA.get('await_ticks')}")
+
+    mB = {"architect": {"status": "busy"}, "triage_verdicts": {}}
+    jobB = {"kind": "triage", "triage_id": "triage-2", "source": "worker.wall",
+            "block": "01-02", "case_id": "case-01-02-1", "worker_id": "engineer-01-02",
+            "ordered": True, "verdict": None, "resolved": False}
+    mB["architect"]["current_job"] = jobB
+    for _ in range(architect._PHANTOM_TRIAGE_GRACE_TICKS + 5):
+        architect._advance_triage(eng, mB, jobB)
+    ok("PT2 (REAL-TRIAGE PARITY — must be GREEN): a real worker.wall triage never "
+       "auto-resolves without a real verdict (still requires architect input)",
+       jobB.get("resolved") is not True and jobB.get("verdict") is None,
+       f"resolved={jobB.get('resolved')} verdict={jobB.get('verdict')}")
+
+
 def main():
     run_reconcile_gate_scenario()
     run_forward_scenario()
+    run_phantom_triage_grace_scenario()
 
     passed = sum(1 for _, c, _ in _results if c)
     print(f"\ncore.architect_rig: {'PASS' if passed == len(_results) else 'FAIL'} "
