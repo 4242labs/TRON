@@ -375,6 +375,60 @@ def t_record_closeout_bundle_r5():
        not okc and "blocks/A-01.md" in detail, detail)
     shutil.rmtree(d2, ignore_errors=True)
 
+    # (5) token-boundary own-lane (Sonnet review HIGH): block '01-1' must NOT smuggle a
+    #     flip of '01-10''s pipeline row — a bare `block_id in line` would accept it.
+    d = _mkrepo()
+    b1 = "blocks/01-1.md"
+    pf5 = "pipeline.md"
+    with open(os.path.join(d, b1), "w") as fh:
+        fh.write("# Block 01-1\n**Status:** 🔄 In progress\n\nbody\n")
+    with open(os.path.join(d, pf5), "w") as fh:
+        fh.write("| 01-1  | 🔄 | Block `blocks/01-1.md` |\n"
+                 "| 01-10 | 🔄 | Block `blocks/01-10.md` |\n")
+    _git(d, "add", "-A"); _git(d, "commit", "-qm", "seed 01-1 + 01-10 rows")
+    with open(os.path.join(d, b1), "w") as fh:
+        fh.write("# Block 01-1\n**Status:** ✅ Done\n**Completed:** 2026-07-11\n\nbody\n")
+    with open(os.path.join(d, pf5), "w") as fh:   # flip BOTH 01-1's row AND 01-10's row
+        fh.write("| 01-1  | ✅ | Block `blocks/01-1.md` |\n"
+                 "| 01-10 | ✅ | Block `blocks/01-10.md` |\n")
+    _git(d, "add", "-A"); _git(d, "commit", "-qm", "flip 01-1 + smuggle 01-10")
+    okc, detail = trunk.record_commit_ok(d, b1, pipeline_file=pf5, block_id="01-1")
+    ok("R5 token-boundary own-lane: block '01-1' cannot smuggle a '01-10' pipeline row "
+       "(a bare substring match would wrongly accept it) — REFUSED", not okc, detail)
+    shutil.rmtree(d, ignore_errors=True)
+
+    # (6) a bare deletion of the block doc with NO archival is REFUSED even if body empty
+    d = _mkrepo()
+    bstub = "blocks/A-09.md"
+    with open(os.path.join(d, bstub), "w") as fh:
+        fh.write("**Status:** 🔄 In progress\n")     # stub: empty non-status body
+    _git(d, "add", "-A"); _git(d, "commit", "-qm", "seed stub")
+    _git(d, "rm", "-q", bstub); _git(d, "commit", "-qm", "vanish the block doc")
+    okc, detail = trunk.record_commit_ok(d, bstub)
+    ok("R5 a bare deletion (no archival) of a stub block doc is REFUSED — a block doc "
+       "must never just vanish at record", not okc, detail)
+    shutil.rmtree(d, ignore_errors=True)
+
+    # (7) configured archive_dir (Sonnet review MED-HIGH): a project whose archive_dir is
+    #     NOT nested under blocks_dir must still recognize the genuine archival.
+    d = _mkrepo()
+    ba = "blocks/A-07.md"
+    arch_cfg = "attic/A-07.md"           # archive_dir = attic/, not blocks/archive/
+    with open(os.path.join(d, ba), "w") as fh:
+        fh.write("# Block A-07\n**Status:** 🔄 In progress\n\nbody\n")
+    _git(d, "add", "-A"); _git(d, "commit", "-qm", "seed A-07")
+    with open(os.path.join(d, ba), "w") as fh:
+        fh.write("# Block A-07\n**Status:** ✅ Done\n**Completed:** 2026-07-11\n\nbody\n")
+    os.makedirs(os.path.join(d, "attic"), exist_ok=True)
+    _git(d, "mv", ba, arch_cfg); _git(d, "commit", "-qm", "archive to attic")
+    okc, detail = trunk.record_commit_ok(d, ba, archive_dir="attic/")
+    ok("R5 configured archive_dir: an archival to the project's own archive_dir (not "
+       "blocks/archive/) is recognized and CONFORMS", okc, detail)
+    okc2, detail2 = trunk.record_commit_ok(d, ba)   # without the config -> destination out-of-lane
+    ok("R5 the SAME commit without the configured archive_dir does NOT falsely conform — "
+       "proves the config is what recognizes the destination", not okc2, detail2)
+    shutil.rmtree(d, ignore_errors=True)
+
 
 # ── R4 (ADR-0005): a CAS-loser is a non-ff the worker REBASES, never a wall ──
 def t_r4_nonff_rebase():
