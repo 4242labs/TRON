@@ -149,6 +149,17 @@ def route(eng, manifest, worker_reports):
         _open_gate_if_branch(eng, workers, gates, rep)
 
 
+def _is_review_pseudo_block(block):
+    """True iff `block` is a reviewer's `review:<type>` PSEUDO-block (core.
+    reviewers.review_block) — a read-only cadence review, NOT a buildable
+    pipeline block. Matches the `review:` PREFIX (the exact shape reviewers mint),
+    never a bare ':' anywhere, so a human-authored pipeline ID cell with a stray
+    ':' is never mis-classified as a reviewer. Single-source discriminator shared
+    by _route_online (skip the build-ASSIGN) and _open_gate_if_branch (never open
+    a gate ladder for a review)."""
+    return isinstance(block, str) and block.startswith("review:")
+
+
 def _route_online(eng, manifest, workers, gates, rep):
     """`worker.online` — the worker's first check-in. Its job is ONE thing:
     ASSIGN (tell the worker WHAT to build), exactly once. It does NOT require a
@@ -186,7 +197,11 @@ def _route_online(eng, manifest, workers, gates, rep):
     # builder; its review order already went out at spawn. Mark it assigned so a
     # repeat worker.online is inert (same idempotency the `assigned` guard gives
     # an engineer), and let the DONE-REVIEW flow (core.reviewers) drive it.
-    if isinstance(block, str) and ":" in block:
+    # Match the `review:` PREFIX exactly (reviewers.review_block's own shape), not
+    # a bare ':' anywhere — so a typo'd human-authored pipeline ID cell carrying a
+    # stray ':' is never silently mis-read as a reviewer (a build-ASSIGN that
+    # silently never fires = a stalled block with no wall/page — a silent default).
+    if _is_review_pseudo_block(block):
         worker["assigned"] = True
         eng.log("flow", f"router: {agent_id!r} is a reviewer (pseudo-block "
                         f"{block!r}) — already ordered at spawn (PMT-SPAWN), "
@@ -227,6 +242,13 @@ def _open_gate_if_branch(eng, workers, gates, rep):
         return
     block = worker.get("block")
     if not block or block in gates:
+        return
+    # A reviewer carries a `review:<type>` pseudo-block and is driven by the
+    # DONE-REVIEW flow, NOT a gate ladder — a review pseudo-block living in
+    # `manifest["gates"]` would crash the very next tick (core.reviewers docstring).
+    # A reviewer's order never asks for a branch, but LLM workers are
+    # non-deterministic, so never open a gate for one even if a stray branch arrives.
+    if _is_review_pseudo_block(block):
         return
     gates[block] = gate.new_state_full(eng, block, worker.get("block_file"),
                                        branch, agent_id)
