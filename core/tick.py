@@ -201,6 +201,23 @@ def tick(eng):
             result["advanced"].append(block)
         if outcome == "closed":
             result["closed"].append(block)
+            # Mark the closed worker's manifest slot `released` — the
+            # slot-freeing half of `_release_worker`'s documented contract
+            # (gate.py:123) that every rig's `_release_worker` stand-in performs
+            # inline but the REAL `core/engine.py::_release_worker` can't, having
+            # no manifest handle (it only runs the OS teardown `gate.advance`
+            # already invoked). Without this the released worker lingers as a
+            # non-`released` `manifest['workers']` record and `core/liveness.py`
+            # (which iterates every record whose status isn't `released`) STALLS
+            # a worker whose block is already ✅-closed, opening a spurious case
+            # on it — the T2-01-06 root, live. Same `status='released'`
+            # convention `core/liveness.py`'s own skip (line ~257) and every
+            # release-assertion rig read; idempotent.
+            wid = gate_state.get("wid")
+            wrec = (snap.manifest.get("workers") or {}).get(wid) if wid else None
+            if wrec is not None:
+                wrec["status"] = "released"
+                wrec["reason"] = "close-confirmed"
         elif outcome == "escalate":
             result["escalated"].append((block, detail))
 

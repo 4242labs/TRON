@@ -522,6 +522,13 @@ def main():
            "trust-release)",
            eng.workers.get(agent_id, {}).get("status") == "released",
            f"worker_state={eng.workers.get(agent_id)}")
+        ok(f"M7b[{block}] (STALE-SLOT KILLER — must be GREEN): the PERSISTED "
+           "manifest['workers'] record — not just the rig's own stand-in — is "
+           "marked `released` by core.tick.tick on close, so core/liveness.py "
+           "(which iterates every non-`released` record) never STALLS a worker "
+           "whose block is already ✅-closed (the T2-01-06 spurious-case root)",
+           final_workers.get(agent_id, {}).get("status") == "released",
+           f"persisted_worker={final_workers.get(agent_id)}")
 
     # ══ THE DEP-ORDERING KILLER ══
     # The REAL canon dep-gate is "01-01 ✅ on trunk" (`core/pipeline.py::
