@@ -991,6 +991,37 @@ def run_scenario_e_reviewer_never_build_assigned():
        len(eng_build) == 1 and ew[eid].get("assigned") is True,
        f"eng_orders={[(o[2], (o[1] or '')[:48]) for o in eng.orders if o[0] == eid]}")
 
+    # ── E-K4: the discriminator is the `review:` PREFIX, not a bare ':' — a
+    #    (typo'd) human-authored pipeline ID cell carrying a stray ':' is a real
+    #    ENGINEER block and MUST still get the build-ASSIGN, never silently skipped. ──
+    cid = "engineer-S1-05"
+    cw = {cid: {"block": "S1-05: retry-path", "block_file": "meta/blocks/S1-05.md",
+                "status": "spawned"}}
+    m3 = {"workers": cw, "gates": {}}
+    router._route_online(eng, m3, cw, m3["gates"],
+                        {"tag": "worker.online", "agent_id": cid})
+    colon_build = [o for o in eng.orders if o[0] == cid and "build it end to end" in (o[1] or "")]
+    ok("E-K4 (STRAY-COLON-IS-STILL-A-BUILD KILLER — must be GREEN): an engineer "
+       "block id containing a stray ':' (not a `review:` prefix) still gets the "
+       "build-ASSIGN — the reviewer skip keys off the `review:` prefix, not a bare "
+       "':' anywhere (no silent-default stall on a typo'd pipeline row)",
+       len(colon_build) == 1 and cw[cid].get("assigned") is True,
+       f"colon_orders={[(o[2], (o[1] or '')[:48]) for o in eng.orders if o[0] == cid]}")
+
+    # ── E-K5: _open_gate_if_branch must NEVER open a gate ladder for a reviewer —
+    #    a `review:<type>` living in manifest['gates'] crashes the next tick. Even
+    #    if a (non-deterministic) reviewer report carries slots.branch. ──
+    gates = {}
+    rw = {aid: {"block": reviewers.review_block("code"), "type": "code",
+                "status": "reviewing", "wid": aid, "assigned": True}}
+    router._open_gate_if_branch(eng, rw, gates,
+                               {"tag": "worker.online", "agent_id": aid,
+                                "slots": {"branch": "feat/reviewer-should-not-gate"}})
+    ok("E-K5 (REVIEWER-NEVER-GATED KILLER — must be GREEN): a reviewer report "
+       "carrying a stray branch does NOT open a gate.local — no `review:<type>` "
+       "entry ever lands in manifest['gates'] (which would crash the next tick)",
+       "review:code" not in gates and gates == {}, f"gates={gates}")
+
     print("\n== SCENARIO E (reviewer never build-ASSIGNed) ==")
     print(f"root={root}")
     print(f"orders_to_reviewer={[(o[2], (o[1] or '')[:48]) for o in to_reviewer]}")
