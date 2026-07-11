@@ -78,6 +78,7 @@ import state                       # noqa: E402 — core/state.py
 import gitobs                       # noqa: E402 — core/gitobs.py, the ONE git-observation seam
 import real_tier                    # noqa: E402 — core/sim/real_tier.py, the real host-cli spawn wiring
 import architect                    # noqa: E402 — core/architect.py, ARCHITECT_WID (courier the architect too)
+from operator_proxy import tick as operator_proxy_tick   # noqa: E402 — core/sim/operator_proxy.py, moderate-tier LLM operator (ADR-0007)
 # the real-scaffold copy + live-instance seed, reused verbatim (never re-derived)
 from boot_real_scaffold_rig import copy_real_scaffold, seed_live_instance   # noqa: E402
 from seed_canon import install_canon   # noqa: E402 — installs the instance canon a real run needs
@@ -333,7 +334,7 @@ def _courier(eng, manifest, delivered):
 
 def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
              poll_sec=DEFAULT_POLL_SEC, scope="all", max_loops=100000,
-             adapter="host-cli"):
+             adapter="host-cli", operator_proxy=False):
     """Boot + drive a real-LLM E2E SIM to a clean session-end (or a pause
     condition). Returns a structured result dict. ALWAYS tears the real fleet
     down. See module docstring for the clock, PULSE, and pause semantics.
@@ -367,6 +368,7 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
     session_end = None
     loop_i = 0
     boot_spawn = None
+    proxy_settled = 0   # ADR-0007: operator-proxy-settled case count (result surface)
 
     rs = real_tier.real_spawn(adapter=adapter)
     rs.__enter__()                                # install REAL spawn wiring (host-cli or echo)
@@ -379,6 +381,11 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
 
         prev_pages = 0
         delivered = set()   # (wid, seq) already couriered — see _courier
+        proxy_decided = set()   # ADR-0007: case_ids the operator-proxy already settled this run
+        proxy_attempts = {}     #           per-case decide attempts (malformed-output cap)
+        if operator_proxy:
+            print("live: operator-proxy ENABLED (moderate tier — an LLM decides "
+                  "escalated operator cases on the operator's behalf)", flush=True)
         while loop_i < max_loops:
             loop_i += 1
             # THE COURIER runs BEFORE observe so this tick sees the harvested
@@ -389,6 +396,20 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
                     print(f"  courier: delivered {n} turn-output report(s) to the inbox", flush=True)
             except Exception as e:   # noqa: BLE001 — the courier must never kill the loop
                 print(f"  courier: error (non-fatal): {e}", flush=True)
+
+            # ADR-0007: the MODERATE-tier operator-proxy runs right after the courier
+            # and before the tick, so the SAME tick drains+settles any decision it
+            # injects. OFF by default — a complex SIM's pages reach the real human.
+            if operator_proxy:
+                try:
+                    inj = operator_proxy_tick(eng, state.load(ctx),
+                                              proxy_decided, proxy_attempts)
+                    if inj:
+                        proxy_settled += inj
+                        print(f"  operator-proxy: injected {inj} operator.decision "
+                              f"report(s) (total settled this run: {proxy_settled})", flush=True)
+                except Exception as e:   # noqa: BLE001 — the proxy must never kill the loop
+                    print(f"  operator-proxy: error (non-fatal): {e}", flush=True)
 
             try:
                 res = eng.tick()
@@ -444,6 +465,7 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
         "operator_pages": final_manifest.get("operator_pages") or {},
         "escalations": final_manifest.get("escalations") or [],
         "scope": final_manifest.get("scope") or {},
+        "proxy_settled": proxy_settled,   # ADR-0007: operator cases the LLM proxy settled
     }
     print("=" * 72)
     print(f"live: OUTCOME={outcome} reason={reason}")
@@ -460,6 +482,9 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
     print(f"live: cases={list(result['cases'].keys())} "
           f"pages={list(result['operator_pages'].keys())} "
           f"escalations={len(result['escalations'])}")
+    if operator_proxy:
+        print(f"live: operator-proxy settled {proxy_settled} operator case(s) "
+              f"(moderate-tier LLM stand-in)")
     print(f"live: copy root (forensics)={root}")
     print("=" * 72)
     return result
@@ -494,6 +519,12 @@ def build_parser():
                     help="R3-ACCEPT: a moderate SIM's planted-wall marker string; at "
                         "least one operator page must carry it, so a swallowed planted "
                         "wall masked by an unrelated escalation of the same count fails.")
+    ap.add_argument("--operator-proxy", action="store_true", dest="operator_proxy",
+                    help="MODERATE tier (ADR-0007): stand an LLM in for the operator — "
+                        "each escalated operator-owned case is decided by a one-shot "
+                        "claude call (resume/amend/abandon), injected via the real "
+                        "settle path. OFF by default: a COMPLEX SIM omits this and its "
+                        "pages reach the real human — NEVER enable it for a complex run.")
     return ap
 
 
@@ -591,7 +622,8 @@ def main(argv=None):
     try:
         result = run_live(scaffold_src=args.scaffold_src, worker_count=args.worker_count,
                           budget_min=args.budget_min, poll_sec=args.poll_sec,
-                          scope=args.scope, adapter=args.adapter)
+                          scope=args.scope, adapter=args.adapter,
+                          operator_proxy=args.operator_proxy)
     except LiveRunError as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2
