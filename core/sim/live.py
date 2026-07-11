@@ -348,13 +348,17 @@ def build_parser():
                         "SIM (any page is a spurious escalation = FAIL), or the count "
                         "of planted walls for a moderate SIM (each must reach the "
                         "operator AND be settled). The acceptance gate FAILS on a "
-                        "dangling open case or a page-count mismatch, so a hollow "
-                        "'session_end' that swallowed or dropped a planted wall can "
-                        "never be reported clean.")
+                        "dangling open case or a distinct-escalation-count mismatch, so "
+                        "a hollow 'session_end' that swallowed or dropped a planted wall "
+                        "can never be reported clean.")
+    ap.add_argument("--expect-signature", default=None, dest="expect_signature",
+                    help="R3-ACCEPT: a moderate SIM's planted-wall marker string; at "
+                        "least one operator page must carry it, so a swallowed planted "
+                        "wall masked by an unrelated escalation of the same count fails.")
     return ap
 
 
-def _acceptance_verdict(result, expect_pages=0):
+def _acceptance_verdict(result, expect_pages=0, expect_signature=None):
     """R3-ACCEPT (ADR-0005) — escalation-fidelity acceptance gate. A clean pass is
     NOT merely `session_end and not orphans` (which proves nothing about whether a
     planted wall reached the operator — the false-green vehicle). It additionally
@@ -362,9 +366,18 @@ def _acceptance_verdict(result, expect_pages=0):
       • outcome == session_end and no orphan processes;
       • NO dangling open case (every `manifest["cases"]` entry settled, decision set)
         — R3's terminal fidelity, re-asserted here defensively;
-      • the operator-page count matches `expect_pages` exactly — 0 for a trivial SIM
-        (a spurious page is a defect), or the planted-wall count for a moderate SIM
-        (a swallowed/dropped planted wall shows up as a shortfall).
+      • the number of DISTINCT operator escalations matches `expect_pages` exactly —
+        0 for a trivial SIM (a spurious escalation is a defect), or the planted-wall
+        count for a moderate SIM (a swallowed/dropped wall shows up as a shortfall).
+        NB: `manifest["operator_pages"]` accumulates one entry per page DELIVERY
+        ATTEMPT — THE FLOOR (`casestate.reping`) re-pages an unsettled case every
+        tick, and no `_deliver_page` hook is wired in a live host-cli run, so a single
+        genuine escalation produces MANY page entries before the proxy settles it.
+        Counting raw entries would false-REJECT every clean run; we count distinct
+        escalated `case_id`s instead.
+      • if `expect_signature` is given (a moderate SIM's planted-wall marker), at least
+        one page must carry it in its detail — so a swallowed planted wall masked by an
+        unrelated escalation of the same count cannot pass.
     Returns (ok, reasons[])."""
     reasons = []
     if result.get("outcome") != "session_end":
@@ -376,12 +389,21 @@ def _acceptance_verdict(result, expect_pages=0):
     if open_cases:
         reasons.append(f"dangling OPEN operator case(s) at end: {open_cases} "
                        f"(an escalation was never settled — R3 terminal fidelity)")
-    n_pages = len(result.get("operator_pages") or {})
-    if n_pages != expect_pages:
-        reasons.append(f"operator-page count {n_pages} != expected {expect_pages} "
-                       f"(escalation-fidelity mismatch — a planted wall was swallowed/"
-                       f"dropped, or a spurious page fired): "
-                       f"pages={list((result.get('operator_pages') or {}).keys())}")
+    pages = result.get("operator_pages") or {}
+    escalated_cases = {p.get("case_id") for p in pages.values()
+                       if isinstance(p, dict) and p.get("case_id")}
+    n_escalations = len(escalated_cases)
+    if n_escalations != expect_pages:
+        reasons.append(f"distinct operator escalations {n_escalations} != expected "
+                       f"{expect_pages} (a planted wall was swallowed/dropped, or a "
+                       f"spurious escalation fired): cases={sorted(escalated_cases)}")
+    if expect_signature is not None:
+        carrying = [pid for pid, p in pages.items()
+                    if isinstance(p, dict) and expect_signature in str(p.get("detail") or "")]
+        if not carrying:
+            reasons.append(f"no operator page carried the planted-wall signature "
+                           f"{expect_signature!r} — the planted escalation never reached "
+                           f"the operator (swallowed), even if the count matched")
     return (not reasons), reasons
 
 
@@ -413,7 +435,8 @@ def main(argv=None):
     # (R3-ACCEPT): no dangling open case + the expected operator-page count. A bare
     # `session_end and not orphans` gate could report a hollow run — one that swallowed
     # or dropped a planted wall — as clean; this cannot.
-    ok, reasons = _acceptance_verdict(result, expect_pages=args.expect_pages)
+    ok, reasons = _acceptance_verdict(result, expect_pages=args.expect_pages,
+                                      expect_signature=args.expect_signature)
     if ok:
         print(f"live: ACCEPT — clean session-end, no orphans, escalation fidelity OK "
               f"(pages={len(result.get('operator_pages') or {})}=={args.expect_pages}, "

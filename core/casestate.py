@@ -235,6 +235,20 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
 
     Idempotent: a block that already has an OPEN case returns that SAME
     case_id — never a second parked case for one still-open situation."""
+    import architect   # lazy — casestate<->architect mutually import (see module docstring)
+
+    # R1a (ADR-0005) defense-in-depth: the architect can never be the SOURCE of a case.
+    # The router/classify call-sites already short-circuit an architect sender AHEAD of
+    # here, but guarding open_case itself makes an architect-sourced case structurally
+    # unrepresentable: a future caller passing the architect's id would otherwise mint an
+    # orphan case (enqueue_triage's own R1a backstop then refuses to attach a triage to
+    # it), which R3's terminal gate would correctly-but-permanently wedge session-end on.
+    if worker_id == architect.ARCHITECT_WID:
+        eng.log("flow", f"casestate: open_case refused — source is the architect itself "
+                        f"(R1a self-source guard); no case minted (block={block!r}, "
+                        f"source={source!r})")
+        return None
+
     cases = manifest.setdefault("cases", {})
 
     if block:

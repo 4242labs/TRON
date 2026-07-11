@@ -434,7 +434,8 @@ def _advance_record(eng, block, gate_state):
     ok, detail = gitobs.record_commit_ok(eng.paths["root"], block_file, eng.dry,
                                          truth_ref=branch,
                                          pipeline_file=eng.paths.get("pipeline_rel"),
-                                         block_id=block)
+                                         block_id=block,
+                                         archive_dir=eng.paths.get("archive_rel"))
     if not ok:
         return _escalate(gate_state,
                          f"record commit on {branch} is out-of-gate: {detail}")
