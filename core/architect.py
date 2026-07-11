@@ -344,6 +344,19 @@ def _order_triage(eng, job):
                     f"(source={job.get('source')!r})")
 
 
+# A `classify.unclassified` triage is a LOW-CONFIDENCE phantom: classify could
+# not even tag the worker message (routinely a benign status narration — "landed
+# cleanly, standing by", a branch declaration). The architect is ordered a turn
+# to look; a real blocker gets a structured architect.triage_verdict
+# (verdict='operator'). If instead the architect responds with a loosely-tagged
+# / prose message (which never routes to a verdict) or nothing, the phantom must
+# NOT wedge the architect busy forever — that blocks every later job (log-review)
+# and session-end (the s3/s4 first-honest-SIM tail). After this many ordered
+# ticks with no verdict, a phantom auto-resolves benignly. ~4 min at the live
+# runner's ~20s tick — comfortably past the architect's own ordered turn.
+_PHANTOM_TRIAGE_GRACE_TICKS = 12
+
+
 def _advance_triage(eng, manifest, job):
     """One triage-job step (GAP-E, wave 18) — see module docstring for the
     full order-then-observe-then-apply shape. Sets `job["resolved"] = True`
@@ -364,16 +377,34 @@ def _advance_triage(eng, manifest, job):
         verdicts = manifest.get("triage_verdicts") or {}
         v = verdicts.get(job["triage_id"])
         if v is None:
-            return   # still waiting on the architect's own routed report
-        verdict = v.get("verdict")
-        if verdict not in ("scope_forward", "answer", "operator"):
-            eng.log("flow", f"architect[triage:{job['triage_id']}]: "
-                            f"unrecognized verdict {verdict!r} — falling back "
-                            f"to 'operator' (never silently dropped — the one "
-                            f"safe default, still reaches a human)")
-            verdict = "operator"
-        job["verdict"] = verdict
-        job["note"] = v.get("note")
+            # A real (worker.wall, block/case-bearing) triage still waits on the
+            # architect's routed verdict — unchanged. A `classify.unclassified`
+            # PHANTOM instead auto-resolves benignly once the architect has had
+            # its ordered turn (grace window) with no structured verdict — it
+            # must never wedge the architect + session-end (see the constant).
+            if job.get("source") != "classify.unclassified":
+                return
+            job["await_ticks"] = job.get("await_ticks", 0) + 1
+            if job["await_ticks"] < _PHANTOM_TRIAGE_GRACE_TICKS:
+                return
+            job["verdict"] = "answer"
+            job["note"] = ("phantom classify.unclassified triage — no structured "
+                           "architect verdict within grace; benign auto-resolve "
+                           "(never wedges session-end)")
+            eng.log("flow", f"architect[triage:{job['triage_id']}]: phantom "
+                            f"(classify.unclassified) unresolved after "
+                            f"{job['await_ticks']} ordered ticks -> benign 'answer' "
+                            f"auto-resolve (never wedges session-end)")
+        else:
+            verdict = v.get("verdict")
+            if verdict not in ("scope_forward", "answer", "operator"):
+                eng.log("flow", f"architect[triage:{job['triage_id']}]: "
+                                f"unrecognized verdict {verdict!r} — falling back "
+                                f"to 'operator' (never silently dropped — the one "
+                                f"safe default, still reaches a human)")
+                verdict = "operator"
+            job["verdict"] = verdict
+            job["note"] = v.get("note")
 
     if job["verdict"] in ("answer", "operator"):
         if job.get("case_id") is not None:

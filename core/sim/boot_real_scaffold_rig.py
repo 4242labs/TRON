@@ -102,15 +102,68 @@ def _git(args, cwd, check=True):
 # ══════════════════════════════════════════════════════════════════════════
 # 1. COPY the real scaffold (source untouched) + seed a live TRON instance
 # ══════════════════════════════════════════════════════════════════════════
+def _read_scaffold_ref(src):
+    """The git ref (in the SOURCE repo) whose tree is the scaffold-ONLY app —
+    the unbuilt starting line, BEFORE any block's deliverable exists. Read from
+    the scaffold's own staged `meta/tron/scaffold.yaml` (never guessed), so this
+    generalises to any tier's scaffold (trivial/moderate/complex)."""
+    p = os.path.join(src, "meta", "tron", "scaffold.yaml")
+    with open(p) as f:
+        d = yaml.safe_load(f) or {}
+    ref = (d.get("scaffold_ref") or "").strip()
+    if not ref:
+        raise RuntimeError(f"scaffold.yaml has no scaffold_ref: {p}")
+    return ref
+
+
+def _extract(src, ref, dest, pathspec=None):
+    """`git archive <ref> [-- pathspec] | tar -x -C dest` — materialize EXACTLY
+    the committed tree at `ref` (never the source working tree), source repo
+    opened read-only. Build artifacts / untracked files are absent by
+    construction (archive only ever sees committed content)."""
+    cmd = ["git", "-C", src, "archive", ref]
+    if pathspec:
+        cmd += ["--"] + list(pathspec)
+    ar = subprocess.run(cmd, capture_output=True)
+    if ar.returncode != 0:
+        raise RuntimeError(f"git archive {ref} (cwd={src}) rc={ar.returncode}\n"
+                           f"{ar.stderr.decode(errors='replace')}")
+    tr = subprocess.run(["tar", "-x", "-C", dest], input=ar.stdout, capture_output=True)
+    if tr.returncode != 0:
+        raise RuntimeError(f"tar -x (dest={dest}) rc={tr.returncode}\n"
+                           f"{tr.stderr.decode(errors='replace')}")
+
+
 def copy_real_scaffold():
-    """`shutil.copytree` the REAL scaffold to a tempdir (`.git`/`node_modules`/
-    `.next` excluded — build artifacts + the source's own git history, never
-    needed here), then `git init` the COPY's own fresh history. The source
-    at `SCAFFOLD_SRC` is never opened for writing anywhere in this module."""
+    """Materialize an HONEST live-instance seed from the REAL scaffold source
+    (`SCAFFOLD_SRC`), source repo opened READ-ONLY, then `git init` the COPY's
+    OWN fresh history. The seed is a MIX of two committed trees — never the
+    source working tree, which sits at HEAD = the full delivered answer key
+    (every block already built). Seeding from that working tree made the SIM
+    HOLLOW: the fleet "built" `src/lib/tip.ts`, `convert.ts`, their Vitest
+    suites and the wired `converter-form.tsx` that the seed already contained.
+    Instead:
+
+      • the APP tree at `scaffold_ref` (`meta/tron/scaffold.yaml`) — the
+        unbuilt starting line (bare Next scaffold; NO `src/lib/*`, NO tests,
+        NO `vitest.config.ts`, NO wired `converter-form.tsx`, no vitest dep),
+        overlaid with
+      • `meta/` at HEAD — the full authored PLAN + harness (`pipeline.md` with
+        01-02/01-03 still 📋 to-do, `blocks/*.md`, `tron/*.yaml`, `land.sh`,
+        agents, skills).
+
+    Result: a real project START — scaffold done (01-01 archived), the domain
+    logic / UI / Vitest suite genuinely UNBUILT, so the fleet must actually
+    build them (block 01-02 itself instructs adding vitest + config + tests;
+    the worker's `skill-validate` runs `npm install`, so the older
+    scaffold_ref lock re-resolves cleanly). `SCAFFOLD_SRC` is never written."""
     d = tempfile.mkdtemp(prefix="tron-boot-real-scaffold-")
-    root = os.path.join(d, "trivial-tip-converter")
-    shutil.copytree(SCAFFOLD_SRC, root, symlinks=True,
-                    ignore=shutil.ignore_patterns(".git", "node_modules", ".next"))
+    root = os.path.join(d, os.path.basename(os.path.normpath(SCAFFOLD_SRC)))
+    os.makedirs(root)
+
+    ref = _read_scaffold_ref(SCAFFOLD_SRC)
+    _extract(SCAFFOLD_SRC, ref, root)                         # unbuilt app scaffold
+    _extract(SCAFFOLD_SRC, "HEAD", root, pathspec=["meta"])   # full plan + harness
 
     land_sh = os.path.join(root, "meta", "scripts", "land.sh")
     if os.path.isfile(land_sh):
@@ -126,8 +179,8 @@ def copy_real_scaffold():
     _git(["config", "user.email", "boot-real-scaffold-rig@test.local"], root)
     _git(["config", "user.name", "core-boot-real-scaffold-rig"], root)
     _git(["add", "-A"], root)
-    _git(["commit", "-m", "seed: COPY of tron-meta/sims/_sources/trivial-tip-converter "
-                          "(source repo untouched)"], root)
+    _git(["commit", "-m", "seed: scaffold_ref app (unbuilt) + HEAD meta plan "
+                          "— answer key withheld, source repo untouched"], root)
     _git(["checkout", "--detach", MAIN], root)
     return root
 
@@ -243,6 +296,26 @@ def main():
     tron_ctx = Ctx(inst)
     print(f"copy root={root}")
     print(f"live instance dir={inst}")
+
+    # HONEST-SEED GATE (locks the wave-16.5 fix): the seed must be the UNBUILT
+    # starting line, never the delivered answer key. Assert the fleet's own
+    # block deliverables are ABSENT and the authored plan is PRESENT.
+    seed_tree = subprocess.run(
+        ["git", "-C", root, "ls-tree", "-r", "--name-only", "HEAD"],
+        capture_output=True, text=True).stdout.split()
+    answer_key = ["src/lib/tip.ts", "src/lib/convert.ts", "src/lib/tip.test.ts",
+                  "src/lib/convert.test.ts", "src/app/converter-form.tsx",
+                  "vitest.config.ts"]
+    leaked = [p for p in answer_key if p in seed_tree]
+    ok("SEED-HONEST (KILLER — must be GREEN): no block deliverable ('answer "
+       "key') present on the seed — the fleet must genuinely build it",
+       not leaked, f"leaked={leaked}")
+    ok("SEED-PLAN (must be GREEN): the authored plan IS on the seed "
+       "(blocks 01-02/01-03 + tron project config present)",
+       "meta/blocks/01-02-logic.md" in seed_tree
+       and "meta/blocks/01-03-ui.md" in seed_tree
+       and "meta/tron/project.yaml" in seed_tree,
+       f"seed_files={len(seed_tree)}")
 
     spawn_calls = []
 

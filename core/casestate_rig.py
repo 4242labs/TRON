@@ -68,6 +68,7 @@ import session                # noqa: E402 — core/session.py, the abandoned-bl
 import pipeline                # noqa: E402 — core/pipeline.py, the in-flight/slot-freed proof read
 import sentry                 # noqa: E402 — core/sentry.py, the cap-escalation-opens-a-case proof
 import casestate               # noqa: E402 — core/casestate.py, the module under test
+import architect               # noqa: E402 — core/architect.py, ARCHITECT_WID (self-wall guard lock)
 
 SCAFFOLD_SRC = "/home/anderson/42labs/tron/tron-meta/sims/_sources/trivial-tip-converter"
 MAIN = "main"
@@ -834,6 +835,72 @@ def main():
        "brick (hard rule) — casestate.py only ever reads their exported "
        "STAGE_* constants/read-only helpers, never edits their source",
        True, "verified by diff review, not a runtime check — see hand-back git status")
+
+    # ══ LOCK (s1 first-honest-SIM record-stall root): open_case must NOT evict
+    #    a worker whose OWN gate is still in-flight. A recoverable wall (a land-
+    #    grant re-mint, or one whose case block id doesn't resolve to the live
+    #    gate) left the worker mid-ladder; freeing its slot stranded gate.record/
+    #    close with no worker and the gate silently wedged at `record`. ══
+    lock_eng = MiniEng(root, tron_ctx, test_command="true", worker_count=1)
+    m_a = {"workers": {"eng-X": {"block": "10-01", "status": "busy"}},
+           "gates": {"10-01": {"stage": gate.STAGE_RECORD, "wid": "eng-X"}},
+           "cases": {}}
+    casestate.open_case(lock_eng, m_a, "10-01-branch", "worker.wall",
+                        "recoverable land re-mint — worker still mid-ladder",
+                        worker_id="eng-X", kind="wall")
+    ok("Z1 (RECORD-STALL LOCK — must be GREEN): open_case did NOT release a "
+       "worker whose own gate is still in-flight (the case block didn't park "
+       "it) — gate.record/close keep their worker",
+       lock_eng.workers.get("eng-X", {}).get("status") != "released"
+       and m_a["gates"]["10-01"]["stage"] == gate.STAGE_RECORD,
+       f"worker={lock_eng.workers.get('eng-X')} gate={m_a['gates']['10-01']['stage']}")
+    lock_eng2 = MiniEng(root, tron_ctx, test_command="true", worker_count=1)
+    m_b = {"workers": {"eng-Y": {"block": "10-02", "status": "busy"}},
+           "gates": {"10-02": {"stage": gate.STAGE_LOCAL, "wid": "eng-Y"}},
+           "cases": {}}
+    casestate.open_case(lock_eng2, m_b, "10-02", "worker.wall",
+                        "genuine blocker — only the operator can settle scope",
+                        worker_id="eng-Y", kind="wall")
+    ok("Z2 (GENUINE-BLOCKER PARITY — must be GREEN): open_case DID park the "
+       "worker's own gate (BLOCKED) and free its slot when the case IS its "
+       "real block — unchanged behaviour",
+       m_b["gates"]["10-02"]["stage"] == gate.STAGE_ESCALATED
+       and lock_eng2.workers.get("eng-Y", {}).get("status") == "released",
+       f"worker={lock_eng2.workers.get('eng-Y')} gate={m_b['gates']['10-02']['stage']}")
+
+    # ══ Z3 (01-03 RECONCILE-STALL LOCK, s2): a reconcile completion records
+    #    the architect's OWN in-flight reconcile job block, NEVER a block id
+    #    classify parsed from the report's prose (which named the just-LANDED
+    #    block, not the gated one) — else current_job never clears and the
+    #    dependent block stays permanently gated. ══
+    m_c = {"architect": {"status": "busy",
+                         "current_job": {"kind": "reconcile", "block": "01-03",
+                                         "after": "01-02"}},
+           "reconciled": []}
+    router._route_architect_reconciled(
+        lock_eng, m_c, {"tag": "architect.reconciled", "block": "01-02"})
+    ok("Z3 (RECONCILE-STALL LOCK — must be GREEN): a reconcile report records "
+       "the architect's in-flight job block (01-03), NOT the block its prose "
+       "named (01-02) — current_job can clear, dependent block dispatches",
+       "01-03" in (m_c.get("reconciled") or [])
+       and "01-02" not in (m_c.get("reconciled") or []),
+       f"reconciled={m_c.get('reconciled')}")
+
+    # ══ Z4 (SELF-WALL GUARD, s6): a worker.wall FROM the architect is narration
+    #    (it can't wall/triage itself) — resolve its in-flight triage benignly,
+    #    open NO new case/triage. ══
+    m_d = {"architect": {"status": "busy",
+                        "current_job": {"kind": "triage", "triage_id": "triage-9"}},
+           "cases": {}, "architect_queue": [], "workers": {}, "gates": {}}
+    router._route_wall(lock_eng, m_d,
+        {"tag": "worker.wall", "agent_id": architect.ARCHITECT_WID,
+         "text": "Operator's call — grant re-mint, a clean one; worker proceeds."})
+    ok("Z4 (SELF-WALL GUARD — must be GREEN): a worker.wall from the architect "
+       "resolves its in-flight triage benignly and opens NO new case/triage",
+       (m_d.get("triage_verdicts") or {}).get("triage-9", {}).get("verdict") == "answer"
+       and not m_d.get("cases") and len(m_d.get("architect_queue") or []) == 0,
+       f"verdicts={m_d.get('triage_verdicts')} cases={list((m_d.get('cases') or {}).keys())} "
+       f"queue={len(m_d.get('architect_queue') or [])}")
 
     passed = sum(1 for _, c, _ in _results if c)
     print(f"core.casestate_rig: {'PASS' if passed == len(_results) else 'FAIL'} "
