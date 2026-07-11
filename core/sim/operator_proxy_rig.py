@@ -30,6 +30,8 @@ Proofs:
   E1  HONEST PATH: injected {resume} -> real classify+router+settle -> case SETTLED (no dangling)
   E2  HONEST PATH: injected {abandon} -> case settled AND block in abandoned_blocks
   E3  HONEST negative: a bad-verb decision never settles -> case stays OPEN (honest REJECT surface)
+  E4  DEFENSE LAYER 2: a bad-verb report routed through the REAL router is refused by
+      `casestate.settle` ITSELF (independent of the proxy's own layer-1 filter) -> case stays OPEN
 
 `ok(name, cond, detail)`; `main()` prints `PASS (n/m)`, exits non-zero on fail.
 """
@@ -242,6 +244,20 @@ def main():
     ok("E3: a bad-verb decision injects nothing and leaves the case OPEN (a malformed op reply never greens)",
        n == 0 and manifest["cases"]["CASE-E3"].get("decision") is None,
        f"n={n} decision={manifest['cases']['CASE-E3'].get('decision')}")
+
+    # ══ E4: DEFENSE LAYER 2 — settle's OWN verb-guard. Bypass the proxy's layer-1
+    # filter and hand the REAL router a bad-verb operator.decision directly: the
+    # case must stay OPEN because `casestate.settle` itself refuses a non-VERB verb
+    # (proves the two layers are independent — a mutation deleting settle's own
+    # check would be caught here, not masked by the proxy's filter always firing first).
+    eng = _DuckEng(_fresh_inbox())
+    manifest = {"cases": {"CASE-E4": _op_case("CASE-E4")}}
+    router._route_decision(eng, manifest, {"tag": "operator.decision",
+                                           "slots": {"case_id": "CASE-E4", "verb": "nuke"}})
+    ok("E4: settle's OWN verb-guard refuses a bad verb via the real router (defense layer 2) — case stays OPEN",
+       "CASE-E4" in manifest.get("cases", {})
+       and manifest["cases"]["CASE-E4"].get("decision") is None,
+       f"case={manifest.get('cases', {}).get('CASE-E4')}")
 
     passed = sum(1 for _, c, _ in _results if c)
     print(f"\ncore.sim.operator_proxy_rig: {'PASS' if passed == len(_results) else 'FAIL'} "
