@@ -39,10 +39,17 @@ stub so the unit lock spends no tokens and asserts the WIRING, not a model's
 judgment.
 """
 import json
+import os
 import re
 import subprocess
+import sys
 
-import casestate                       # VERBS + the settle path's own module
+# Self-establish core/ on sys.path (the stack's own module pattern) so `import
+# casestate` resolves regardless of the import site — both current importers
+# already insert it; this makes the module not depend on that.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import casestate                       # noqa: E402 — VERBS + the settle path's own module
 
 _OPERATOR_PROXY_WID = "operator-proxy"
 _DECIDE_TIMEOUT_S = 90.0               # one-shot claude call ceiling (RD)
@@ -134,7 +141,11 @@ def _inject_decision(eng, case_id, decision):
     """Path A honest injection: append a TAGGED `operator.decision` report to the
     engine inbox. `classify` short-circuits on the tag (no model spend) and
     `router._route_decision` -> `casestate.settle` applies it. `sender.kind ==
-    "operator"` marks it a genuine operator reply, exactly as a human's would."""
+    "operator"` marks it a genuine operator reply, exactly as a human's would.
+    Returns True on a written line, False if the inbox append failed (mirrors the
+    courier's own tolerant append — an IO fault must not raise out of the poll
+    loop, and the caller must NOT mark a case decided on a write that never
+    landed; the case simply stays open and is retried)."""
     rep = {
         "tag": "operator.decision",
         "slots": {
@@ -144,8 +155,14 @@ def _inject_decision(eng, case_id, decision):
         },
         "sender": {"kind": "operator", "id": _OPERATOR_PROXY_WID},
     }
-    with open(eng.ctx.worker_inbox, "a") as ib:
-        ib.write(json.dumps(rep) + "\n")
+    try:
+        with open(eng.ctx.worker_inbox, "a") as ib:
+            ib.write(json.dumps(rep) + "\n")
+    except OSError as e:
+        eng.log("flow", f"operator-proxy: inbox write FAILED for case {case_id!r} "
+                        f"({e}) — decision NOT injected, case stays open (retried)")
+        return False
+    return True
 
 
 def tick(eng, manifest, decided, attempts, decide_fn=_claude_decide):
@@ -153,8 +170,10 @@ def tick(eng, manifest, decided, attempts, decide_fn=_claude_decide):
     this run (and under the per-case attempt cap), calls `decide_fn` and injects
     a real `operator.decision` report — the SAME `eng.tick()` then drains and
     settles it. `decided` (a set of case_ids) and `attempts` (a dict) are the
-    driver's per-run in-memory guards (RC). Returns the count injected this poll.
-    Never raises for a bad decision — a None/invalid reply is a logged no-op."""
+    driver's per-run in-memory guards (RC). Decides AT MOST ONE case per poll (a
+    decide call may block up to _DECIDE_TIMEOUT_S — bounding it to one keeps a
+    poll's latency bounded no matter how many cases are open), so returns 0 or 1.
+    Never raises for a bad decision or an inbox IO fault — both are logged no-ops."""
     cases = manifest.get("cases") or {}
     injected = 0
     for cid, case in cases.items():
@@ -166,14 +185,22 @@ def tick(eng, manifest, decided, attempts, decide_fn=_claude_decide):
             continue
         attempts[cid] = attempts.get(cid, 0) + 1
         decision = decide_fn(case)
-        if not decision or decision.get("verb") not in casestate.VERBS:
+        # AT MOST ONE decide_fn call per poll: it can block up to _DECIDE_TIMEOUT_S,
+        # so returning after the first candidate bounds a single poll's latency to
+        # one call regardless of how many operator cases are open — the rest are
+        # handled on the following polls (`decided`/`attempts` guard the re-work).
+        # A truthy NON-dict return is treated as malformed (never `.get` on a
+        # non-dict) — the same isinstance discipline `_parse_decision` applies.
+        if not isinstance(decision, dict) or decision.get("verb") not in casestate.VERBS:
             eng.log("flow", f"operator-proxy: no valid decision for case {cid!r} "
                             f"(attempt {attempts[cid]}/{_MAX_ATTEMPTS}) — case stays "
                             f"open (a malformed reply never settles)")
-            continue
-        _inject_decision(eng, cid, decision)
+            return injected
+        if not _inject_decision(eng, cid, decision):
+            return injected     # inbox write failed — retried next poll (bounded by cap)
         decided.add(cid)
         injected += 1
         eng.log("flow", f"operator-proxy: settled case {cid!r} -> {decision['verb']!r} "
                         f"(LLM operator stand-in; injected via the real settle path)")
+        return injected
     return injected
