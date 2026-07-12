@@ -552,30 +552,53 @@ def run_scenario_2():
        f"tag8={tag8} queue_len_before={queue_len_before5} "
        f"queue_len_after={len(queue_after5)}")
 
-    # ── ADR-0009 §4 / rig 6 (PHANTOM-WALL) part B — the land.sh-signature
-    #     structural path: a genuine landing wall (carries the land.sh-
-    #     refusal signature `core/pipeline.py::_is_landing_wall` already
-    #     recognizes) classifies DETERMINISTICALLY to worker.wall via
-    #     `_structured` — the judge is NEVER consulted, so it can't be
-    #     downgraded by the guard above either. Poison the stub so a judge
-    #     touch would surface as a WRONG tag. ──
-    _set_stub(tron_ctx, "SHOULD-NEVER-BE-POPPED-LANDING", {})
-    idx_before5 = dict(judge._stub_idx)
-    landing_wall_text = ("land.sh refused: grant minted for commit 98a1347, but "
-                         "worker committed 8f04a86 before landing, causing content "
-                         "mismatch")
-    tag9, slots9 = classify.classify(
-        eng, {"text": landing_wall_text,
-              "sender": {"kind": "worker", "id": "engineer-01-04"}},
-        manifest)
-    ok("S2-K11 (LANDING-SIGNATURE STRUCTURAL KILLER, ADR-0009 §4 rig 6 — must "
-       "be GREEN): a genuine land.sh-refusal-signature wall classifies "
-       "DETERMINISTICALLY to worker.wall — the judge is NEVER consulted (stub "
-       "idx unchanged), so the free-text FREE_TEXT_BLOCKED guard never even "
-       "has a chance to (wrongly) suppress a REAL landing wall",
-       tag9 == "worker.wall" and dict(judge._stub_idx) == idx_before5,
-       f"tag9={tag9} slots9={slots9} idx_before={idx_before5} "
-       f"idx_after={dict(judge._stub_idx)}")
+    # ── ADR-0010 §3/§6 rig 1 (Invariant A — origin, the T3-01 phantom-wall
+    #     killer — SUPERSEDES the ADR-0009 §4 rig 6 part-B scenario this
+    #     slot used to hold: that scenario proved a land.sh-signature free
+    #     text classified DETERMINISTICALLY to worker.wall via a regex
+    #     mint inside `_structured` — ADR-0010 DELETES that exact mint
+    #     branch, since it was an effectively-always-true matcher over this
+    #     fleet's own routine land-grant handshake narration, the root
+    #     cause of the recurring phantom-wall (T2-16, T2-20, ADR-0009 §4
+    #     itself, and now T3-01-TRI-F). A tag-less, branch-less report
+    #     whose free text merely narrates ROUTINE land-grant status must
+    #     stay SILENT — never worker.wall, never a case, never a page.
+    #     Poison the stub so even the JUDGE tries to grade it worker.wall —
+    #     proving `FREE_TEXT_BLOCKED` (ADR-0009 §4's OTHER half, UNTOUCHED
+    #     by ADR-0010) is what actually keeps it silent now that the regex
+    #     shortcut is gone, never a second detector of this module's own.
+    #     Exactly the T3-01 input space S2-K10/the old S2-K11 never fed —
+    #     ADR-0009's own rig 6 tested a bare "placeholder" + a clean
+    #     land.sh-refusal signature, NEITHER of which is routine land-grant
+    #     FYI narration — this closes that proven vacuity. ──
+    t301_fyis = [
+        "FYI — awaiting the land grant",
+        "land.sh fast-forwarded trunk to X; grant consumed",
+        "close-out paperwork committed; waiting on the land grant",
+    ]
+    for _k, fyi_text in enumerate(t301_fyis):
+        _set_stub(tron_ctx, "worker.wall", {"detail": "should never mint (ADR-0010 rig 1)"})
+        idx_before_fyi = dict(judge._stub_idx)   # {} — captured AFTER _set_stub's own reset
+        queue_len_before_fyi = len(manifest.get("architect_queue") or [])
+        tag_fyi, _slots_fyi = classify.classify(
+            eng, {"text": fyi_text, "sender": {"kind": "worker", "id": "engineer-t301"}},
+            manifest)
+        queue_after_fyi = manifest.get("architect_queue") or []
+        ok(f"S2-K11.{_k} (ADR-0010 RIG-1 PHANTOM-WALL KILLER, T3-01 FYI "
+           f"{fyi_text!r} — must be GREEN): a benign land-grant FYI the "
+           "(stubbed) judge itself grades worker.wall NEVER mints "
+           "worker.wall — collapses to unclassified (FREE_TEXT_BLOCKED "
+           "rejects worker.wall at the validator -> invalid-output-"
+           "exhausted) — the judge WAS genuinely consulted this call (stub "
+           "idx advanced past its post-_set_stub reset — the deleted regex "
+           "mint no longer short-circuits it before the judge is ever "
+           "touched), and no case/page-worthy tag reached the caller",
+           tag_fyi != "worker.wall" and tag_fyi in ("worker.progress", "unclassified")
+           and dict(judge._stub_idx) != idx_before_fyi
+           and len(queue_after_fyi) == queue_len_before_fyi + (1 if tag_fyi == "unclassified" else 0),
+           f"tag_fyi={tag_fyi} idx_before={idx_before_fyi} "
+           f"idx_after={dict(judge._stub_idx)} queue_before={queue_len_before_fyi} "
+           f"queue_after={len(queue_after_fyi)}")
 
     # ── deterministic operator CASE-<n> settle regex (bonus — "keep it
     #     working", the design's own words) — zero model calls ──

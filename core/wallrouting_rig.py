@@ -68,6 +68,15 @@ own unit-level scenario 2:
     verdict resolves them — genuinely reach the operator (never a silent,
     unclassified discard).
 
+  ADR-0010 Invariant B (target — durable-authoritative), ISOLATED (a
+    direct `core.router.route` call, no tick loop — mirrors D9-D13's own
+    unit-level slices): a genuine, EXPLICIT `--tag wall` from a MAPPED
+    worker (`engineer-01-02`, bound to block `01-02` in `manifest
+    ["workers"]`) carrying NO block in its prose still opens its case on
+    the worker's DURABLE bound block, never falls into the block-less
+    architect-triage path the way a pre-ADR-0010 prose-first block read
+    would misroute it.
+
 `ok(name, cond, detail)` collector; `main()` prints `PASS (n/m)` and every
 line, exits non-zero on any fail.
 """
@@ -100,6 +109,7 @@ import state                       # noqa: E402 — core/state.py
 import casestate                    # noqa: E402 — core/casestate.py, the module GAP-E reconciles
 import architect                     # noqa: E402 — core/architect.py, wave 18's triage job
 import classify                       # noqa: E402 — core/classify.py, the unclassified-triage source
+import router                          # noqa: E402 — core/router.py, ADR-0010 Invariant B (_route_wall)
 from engine import Engine, BootupError   # noqa: E402 — core/engine.py, the REAL Engine (_page_operator UNSTUBBED)
 
 SCAFFOLD_SRC = "/home/anderson/42labs/tron/tron-meta/sims/_sources/trivial-tip-converter"
@@ -898,6 +908,47 @@ def main():
            and synth_bypass["cases"]["case-bypass-1"].get("decision") is None
            and synth_bypass["cases"]["case-bypass-1"].get("owner") == "architect",
            f"bypass_settled={bypass_settled} case={synth_bypass['cases']['case-bypass-1']}")
+
+        # ══════════════════════════════════════════════════════════════
+        # DELIVERABLE 5 (ADR-0010 §6 rig 3 — Invariant B) — a genuine
+        # `--tag wall` from a MAPPED worker, carrying NO block in its
+        # prose, still opens its case on the worker's DURABLE bound block
+        # (manifest["workers"][wid]["block"]) — never the block-less
+        # architect-triage misroute a pre-ADR-0010 prose-first block read
+        # would have produced. ISOLATED (a direct `core.router.route`
+        # call, no tick loop), mirrors D9-D13's own unit-level shape.
+        # ══════════════════════════════════════════════════════════════
+        WID_B7 = "engineer-01-02"
+        iso_manifest_b7 = {"workers": {WID_B7: {"block": "01-02", "status": "busy"}}}
+        router.route(eng_iso, iso_manifest_b7, [
+            {"tag": "worker.wall", "agent_id": WID_B7,
+             # deliberately NO "block" key at all — the exact shape a real
+             # `report.sh <id> --tag wall "<text>"` line carries (worker-
+             # contract.md §6: "say exactly what blocks you", never a block
+             # id — the engine is the one that knows which block it owns)
+             "slots": {"detail": "operator-only: needs a prod credential rotated"}}])
+        case_b7 = next((c for c in (iso_manifest_b7.get("cases") or {}).values()
+                        if c.get("source") == "worker.wall"), None)
+        triage_job_b7 = next((j for j in (iso_manifest_b7.get("architect_queue") or [])
+                              if j.get("kind") == "triage"
+                              and j.get("case_id") == (case_b7 or {}).get("case_id")), None)
+        blockless_triage_b7 = next((j for j in (iso_manifest_b7.get("architect_queue") or [])
+                                    if j.get("kind") == "triage" and j.get("block") is None
+                                    and j.get("source") == "worker.wall"), None)
+        ok("D14 (DURABLE-BLOCK-RECOVERY KILLER, ADR-0010 Invariant B — must "
+           "be GREEN): an explicit --tag wall from a MAPPED worker "
+           f"({WID_B7!r}) carrying NO prose block still opened its case ON "
+           "THE WORKER'S DURABLE BOUND BLOCK (01-02, recovered from "
+           "manifest['workers'], never block-less) — architect-owned, a "
+           "real PMT-TRIAGE job queued against block=01-02 (never the "
+           "block-less triage path), zero spurious operator pages",
+           case_b7 is not None and case_b7.get("block") == "01-02"
+           and case_b7.get("owner") == "architect" and case_b7.get("decision") is None
+           and triage_job_b7 is not None and blockless_triage_b7 is None
+           and len(iso_manifest_b7.get("operator_pages") or {}) == 0,
+           f"case_b7={case_b7} triage_job_b7={triage_job_b7} "
+           f"blockless_triage_b7={blockless_triage_b7} "
+           f"pages={iso_manifest_b7.get('operator_pages')}")
 
         # ══════════════════════════════════════════════════════════════
         # GREP PROOF — no wall/escalation/unclassified path bypasses the
