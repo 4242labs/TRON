@@ -150,14 +150,34 @@ def _structured(msg):
     """A report that already carries its own `tag` resolves without the
     model — the SAME discipline `core/snapshot.py`'s own `local_reports`
     drain already keeps for `worker.done`. Returns `(tag, slots)` or
-    `(None, None)` when `msg` carries no `tag` at all (the free-text path,
-    this module's own real job, below). A raw `report.sh` verb (`done`, ...)
-    is mapped to its canonical `worker.*` tag here (`_canonical_tag`); an
-    already-namespaced tag passes through untouched."""
+    `(None, None)` when `msg` carries neither a `tag` NOR a branch
+    declaration (the free-text path, this module's own real job, below). A
+    raw `report.sh` verb (`done`, ...) is mapped to its canonical `worker.*`
+    tag here (`_canonical_tag`); an already-namespaced tag passes through
+    untouched.
+
+    A tag-LESS report that declares a branch is the canonical branch
+    declaration and resolves DETERMINISTICALLY to `worker.branch` — NEVER
+    the free-text judge. `scripts/report.sh` documents this shape verbatim
+    ("The canonical branch declaration needs no `--tag` at all:
+    `report.sh <id> --branch <name> <message>`") and it is the ONLY tag-less
+    report that carries a branch slot. A branch slot is itself a
+    deterministic structured signal; handing such a report to the LLM judge
+    let a contentless declaration message (the bare word "placeholder") be
+    mis-graded `worker.wall`, minting a phantom architect-first case the
+    architect could not triage and escalated LOUD to the operator — a
+    spurious page that fails an otherwise-clean run (the T2-16 REJECT). The
+    gate still opens from the same rep's branch via
+    `router._open_gate_if_branch`; this only stops the mis-classification.
+    An EXPLICIT `--tag wall` (or any other tag) still wins above — a
+    worker's stated intent is never overridden."""
     tag = msg.get("tag")
-    if not tag:
-        return None, None
-    return _canonical_tag(tag), dict(msg.get("slots") or {})
+    if tag:
+        return _canonical_tag(tag), dict(msg.get("slots") or {})
+    slots = dict(msg.get("slots") or {})
+    if slots.get("branch") or msg.get("branch"):
+        return "worker.branch", slots
+    return None, None
 
 
 def _settle_from_text(manifest, text):
