@@ -20,8 +20,22 @@ them. A mode can be deleted without breaking a TRON run.
 ## Install
 
 ```zsh
-modes/install.sh              # /tron-flynn + /tron-clu in every project
-modes/install.sh ~/path/proj  # scoped to one project (<project>/.claude/commands/)
+git clone https://github.com/4242labs/TRON.git tron-app
+tron-app/modes/install.sh
+```
+
+That is the whole fresh-machine setup: the slash commands land in Claude's `commands/` directory
+with the mode's absolute path baked in, and the `tron-flynn` / `tron-clu` terminal shortcuts get
+wired onto your PATH. Re-running is safe. `install.sh <project>` scopes the commands to a single
+project instead of the machine; `--no-path` skips the shell-rc line.
+
+The command file and one PATH line are the **only** things written. No pointer files, no
+environment variables, no other machine state. Secrets (CLU's Telegram token) live in the
+gitignored `.env` at the tron-app repo root — never outside the project.
+
+```zsh
+tron-flynn "audit this project"   # → claude "/tron-flynn audit this project"
+tron-clu                          # → claude "/tron-clu"
 ```
 
 The command file — with the mode's absolute path baked in — is the **only** thing written. No

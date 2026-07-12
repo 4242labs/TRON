@@ -3,7 +3,7 @@
 1. **Slash command**:
 
    ```zsh
-   modes/install.sh              # /tron-clu in every project
+   modes/install.sh              # /tron-clu in every project + terminal shortcut
    modes/install.sh ~/path/proj  # /tron-clu in one project only
    ```
 
