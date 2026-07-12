@@ -271,7 +271,20 @@ def _route_wall(eng, manifest, rep):
       - a wall naming a block opens a parked case (architect-first, GAP-E);
       - a BLOCK-LESS wall routes to architect triage (`enqueue_triage`, the
         SAME block-less path `core/classify.py::_triage_unclassified` uses) —
-        never a crash, never a silent drop."""
+        never a crash, never a silent drop.
+
+    ADR-0010 §3 (Invariant B — target): the wall's block is recovered from
+    the DURABLE worker->block binding (`manifest["workers"][worker_id]
+    ["block"]`), never from `rep.get("block")` (parsed prose) — the engine
+    already holds the authoritative answer for any MAPPED worker; throwing
+    it away and re-deriving it from free text is what let a genuine wall
+    from a known worker land block-less and fall into architect triage
+    instead of opening straight on its real block. Prose is only a
+    fallback for a worker the engine cannot map at all (a real anomaly,
+    correctly still routed block-less below) and is cross-checked (logged,
+    never trusted) on disagreement — the SAME distrust
+    `_route_architect_reconciled` already applies to a report's own block
+    claim."""
     block = rep.get("block")
     worker_id = rep.get("agent_id") or rep.get("worker_id")
     slots = rep.get("slots") or {}
@@ -295,6 +308,20 @@ def _route_wall(eng, manifest, rep):
                         "created nothing (R1a self-source guard, ahead of open_case); "
                         "any in-flight triage resolves via the architect-idle backstop")
         return
+    # ADR-0010 §3 (Invariant B — target): recover the block from the DURABLE
+    # worker->block binding, not prose. The engine already holds the
+    # authoritative answer for any MAPPED worker; a parsed `rep.get("block")`
+    # is only a fallback for a worker the engine cannot map at all (a real
+    # anomaly, correctly still routed block-less below) and is cross-checked
+    # (logged, never trusted) on disagreement — the SAME distrust
+    # `_route_architect_reconciled` already applies to a report's own block
+    # claim.
+    durable_block = (manifest.get("workers") or {}).get(worker_id, {}).get("block")
+    if durable_block and block and block != durable_block:
+        eng.log("flow", f"router: worker.wall from {worker_id!r} carried a prose "
+                        f"block {block!r} that disagrees with its durable bound "
+                        f"block {durable_block!r} — trusting durable (ADR-0010 B)")
+    block = durable_block or block   # durable authoritative; prose only if worker unmapped
     if not block:
         eng.log("flow", f"router: block-less worker.wall from {worker_id!r} "
                         f"-> architect triage (never a crash): {detail}")
