@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TRON — workflow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ===== 42labs Design System tokens (v0.3.0) ===== */
+  :root{
+    --canvas-warm:#FDFAF5; --cream:#FEF3E2; --linen:#E8E3DD;
+    --mid-stone:#B8AFA8; --stone:#756D68; --graphite:#433E3A; --charcoal:#1C1917;
+    --copper-soft:#FDECD8; --copper-border:#F5C9A1; --copper:#E2711D; --copper-dark:#CC5D0A; --copper-ink:#B45309;
+    --void:#06101A; --panel:#121C26; --panel-alt:#16222D; --panel-raised:#1F2833;
+    --divider:#2B3540; --mist:#6C7C89; --fog:#949FA8; --steel:#C8CED3; --off-white:#F2F4F5;
+    --mint:#00FFA7; --mint-hover:#09C385; --mint-soft:#051F14; --mint-border:#0E4A34;
+    --blue:#3B82F6; --blue-dark:#2563EB; --blue-light:#60A5FA;
+    --emerald:#16A34A; --emerald-light:#34D399; --red:#DC2626; --red-light:#F87171;
+    --amber:#EAB308; --amber-light:#FBBF24;
+    --font-heading:'Space Grotesk',system-ui,sans-serif;
+    --font-body:'IBM Plex Sans',system-ui,sans-serif;
+    --font-mono:'Geist Mono',ui-monospace,monospace;
+    --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-6:24px; --sp-8:32px; --sp-12:48px;
+    --r-2:6px; --r-3:8px; --r-4:10px; --r-full:999px;
+    /* light semantic (default) */
+    --surface:var(--canvas-warm); --surface-alt:#FFFFFF; --surface-muted:var(--cream);
+    --border:var(--linen); --fg:var(--charcoal); --fg-2:var(--graphite); --fg-muted:var(--stone);
+    --accent:var(--copper); --accent-hover:var(--copper-dark); --accent-soft:var(--copper-soft);
+    --accent-border:var(--copper-border); --accent-on:#FFFFFF;
+    --role-eng:var(--emerald); --role-arch:var(--copper-dark); --role-rev:var(--blue-dark); --role-tron:var(--graphite);
+  }
+  body.theme-dark{
+    --surface:var(--void); --surface-alt:var(--panel); --surface-muted:var(--panel-alt);
+    --border:var(--divider); --fg:var(--off-white); --fg-2:var(--steel); --fg-muted:var(--fog);
+    --accent:var(--mint); --accent-hover:var(--mint-hover); --accent-soft:var(--mint-soft);
+    --accent-border:var(--mint-border); --accent-on:var(--void);
+    --role-eng:var(--emerald-light); --role-arch:var(--amber-light); --role-rev:var(--blue-light); --role-tron:var(--steel);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--surface);color:var(--fg);
+    font-family:var(--font-body);font-size:14px;line-height:1.55;
+    padding:var(--sp-12) var(--pad-x,clamp(20px,5vw,32px));
+    transition:background .3s ease,color .3s ease}
+  .wrap{max-width:1240px;margin:0 auto}
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--sp-6);
+    margin-bottom:var(--sp-8);flex-wrap:wrap}
+  h1{font-family:var(--font-heading);font-weight:700;font-size:30px;letter-spacing:-.02em;margin:0 0 6px}
+  h1 .glyph{color:var(--accent)}
+  .lede{color:var(--fg-muted);max-width:62ch;margin:0;font-size:14.5px}
+  .toggle{font-family:var(--font-mono);font-size:12px;cursor:pointer;
+    background:var(--surface-alt);color:var(--fg-2);border:1px solid var(--border);
+    border-radius:var(--r-full);padding:8px 16px;transition:all .2s ease;white-space:nowrap}
+  .toggle:hover{border-color:var(--accent-border);color:var(--accent)}
+
+  /* section labels */
+  .kicker{font-family:var(--font-heading);font-weight:600;font-size:11px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent);margin:var(--sp-12) 0 var(--sp-4)}
+  .kicker:first-of-type{margin-top:0}
+
+  /* table card */
+  .card{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--r-4);
+    overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04),0 12px 32px -12px rgba(0,0,0,.12)}
+  table{width:100%;border-collapse:collapse}
+  thead th{font-family:var(--font-heading);font-weight:600;font-size:10.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--fg-muted);text-align:left;
+    padding:14px 16px;background:var(--surface-muted);border-bottom:1px solid var(--border);
+    position:sticky;top:0}
+  tbody td{padding:13px 16px;border-bottom:1px solid var(--border);vertical-align:top;font-size:13px}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr{transition:background .15s ease}
+  tbody tr:hover{background:var(--surface-muted)}
+  .step{font-weight:600;color:var(--fg);font-size:13.5px}
+
+  /* trigger / skill mono chips */
+  code,.mono{font-family:var(--font-mono);font-size:12px}
+  .trig{display:inline-block;font-family:var(--font-mono);font-size:11.5px;
+    background:var(--accent-soft);color:var(--accent-hover);border:1px solid var(--accent-border);
+    border-radius:var(--r-2);padding:2px 7px;white-space:nowrap}
+  body.theme-dark .trig{color:var(--accent)}
+  .skill{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-2)}
+  .none{color:var(--fg-disabled)}
+  .sep{color:var(--fg-disabled);padding:0 4px}
+  .io{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-muted)}
+
+  /* actor pills */
+  .actor{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:12px;white-space:nowrap}
+  .actor::before{content:"";width:8px;height:8px;border-radius:var(--r-full);background:currentColor;flex:none}
+  .a-tron{color:var(--role-tron)} .a-eng{color:var(--role-eng)}
+  .a-arch{color:var(--role-arch)} .a-rev{color:var(--role-rev)}
+
+  /* PULSE / SWITCHBOARD panels */
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-6)}
+  @media(max-width:860px){.panels{grid-template-columns:1fr}}
+  .panel{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--r-4);
+    padding:var(--sp-6)}
+  .panel h3{font-family:var(--font-heading);font-weight:600;font-size:15px;margin:0 0 4px;color:var(--fg)}
+  .panel h3 .id{font-family:var(--font-mono);color:var(--accent);font-size:13px}
+  .panel .note{color:var(--fg-muted);font-size:12.5px;margin:0 0 var(--sp-4)}
+  ol.steps{margin:0;padding:0;list-style:none;counter-reset:s}
+  ol.steps li{position:relative;padding:10px 0 10px 38px;border-top:1px dashed var(--border)}
+  ol.steps li:first-child{border-top:none}
+  ol.steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:9px;
+    width:24px;height:24px;border-radius:var(--r-full);display:grid;place-items:center;
+    font-family:var(--font-mono);font-size:12px;font-weight:500;
+    background:var(--accent-soft);color:var(--accent-hover);border:1px solid var(--accent-border)}
+  body.theme-dark ol.steps li::before{color:var(--accent)}
+  ol.steps b{color:var(--fg);font-weight:600}
+  .priority{margin:8px 0 0;padding:0;list-style:none}
+  .priority li{padding:4px 0 4px 18px;position:relative;color:var(--fg-2);font-size:12.5px}
+  .priority li::before{content:"→";position:absolute;left:0;color:var(--accent)}
+
+  /* grammar / legend */
+  .legend{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:var(--sp-4);
+    color:var(--fg-muted);font-size:12px;align-items:center}
+  .legend .actor{font-size:11.5px}
+  .grammar{margin-top:var(--sp-6);background:var(--surface-muted);border:1px solid var(--border);
+    border-radius:var(--r-4);padding:var(--sp-6);font-size:12.5px;color:var(--fg-2)}
+  .grammar code{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--r-2);padding:1px 5px;color:var(--accent-hover)}
+  body.theme-dark .grammar code{color:var(--accent)}
+  .grammar p{margin:0 0 8px}.grammar p:last-child{margin:0}
+  footer{margin-top:var(--sp-12);color:var(--fg-disabled);font-size:11.5px;font-family:var(--font-mono);
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1><span class="glyph">▟</span> TRON — supervisor workflow</h1>
+      <p class="lede">A deterministic event table. <b>PULSE</b> keeps every worker slot busy; each step's outcome is itself the next trigger. Architect work is queued, never pooled.</p>
+    </div>
+    <button class="toggle" id="themeBtn" aria-label="Toggle theme">◐ theme</button>
+  </header>
+
+  <!-- ============ EVENT TABLE ============ -->
+  <div class="kicker">Event table</div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:14%">Trigger</th>
+          <th style="width:17%">Step</th>
+          <th style="width:9%">Actor</th>
+          <th style="width:15%">Skill</th>
+          <th style="width:15%">Inputs</th>
+          <th style="width:15%">Outputs</th>
+          <th style="width:15%">On&nbsp;complete →</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="trig">tron:start</span></td>
+          <td class="step">Bootup</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">protocol:bootup</td>
+          <td class="io">operator inputs</td>
+          <td class="io">operator confirmed + architect up</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">build:block:next</span></td>
+          <td class="step">Spawn engineer</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:dispatch-engineer</td>
+          <td class="io">block:next</td>
+          <td class="io">engineer up</td>
+          <td><span class="trig">block:next:build</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">block:next:build</span></td>
+          <td class="step">Build</td>
+          <td><span class="actor a-eng">Engineer</span></td>
+          <td class="none">—</td>
+          <td class="io">block:next</td>
+          <td class="io">log:done <span class="sep">|</span> wall report</td>
+          <td><span class="trig">block:next:done</span><span class="sep">|</span><span class="trig">wall:raised:&lt;block&gt;</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">block:next:done</span></td>
+          <td class="step">Wrap + release engineer</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:release-engineer</td>
+          <td class="io">log:done</td>
+          <td class="io">block done + slot free</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">review:next:&lt;block&gt;</span></td>
+          <td class="step">Review block (forward)</td>
+          <td><span class="actor a-arch">Architect</span></td>
+          <td class="skill">skill:forward-review</td>
+          <td class="io">pipeline (prior done work)</td>
+          <td class="io">block reviewed</td>
+          <td><span class="trig">block:&lt;block&gt;:clear</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">block:*:clear</span></td>
+          <td class="step">Inform TRON</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:checkpoint</td>
+          <td class="none">—</td>
+          <td class="io">pipeline updated</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">cadence:&lt;type&gt;</span></td>
+          <td class="step">Spawn reviewer</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:dispatch-reviewer</td>
+          <td class="none">—</td>
+          <td class="io">reviewer up</td>
+          <td><span class="trig">review:&lt;type&gt;</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">review:&lt;type&gt;</span></td>
+          <td class="step">&lt;type&gt; Review</td>
+          <td><span class="actor a-rev">Reviewer</span></td>
+          <td class="none">—</td>
+          <td class="none">—</td>
+          <td class="io">log:review:&lt;type&gt; <span class="sep">|</span> wall report</td>
+          <td><span class="trig">review:&lt;type&gt;:done</span><span class="sep">|</span><span class="trig">wall:raised:&lt;block&gt;</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">review:&lt;type&gt;:done</span></td>
+          <td class="step">Release reviewer</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:release-reviewer</td>
+          <td class="none">—</td>
+          <td class="io">slot free</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">review:&lt;type&gt;:done</span></td>
+          <td class="step">&lt;type&gt; Log Review (forward)</td>
+          <td><span class="actor a-arch">Architect</span></td>
+          <td class="skill">skill:log-review</td>
+          <td class="io">log:review:&lt;type&gt;</td>
+          <td class="io">block:adhoc <span class="sep">|</span> <span class="none">—</span></td>
+          <td><span class="trig">block:adhoc:clear</span><span class="sep">|</span><span class="none">—</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">wall:raised:&lt;block&gt;</span></td>
+          <td class="step">Escalate to operator</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:escalate</td>
+          <td class="io">situation</td>
+          <td class="io">contacted + slot free + block blocked</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">operator:decision:&lt;block&gt;</span></td>
+          <td class="step">Apply operator decision</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:apply-decision</td>
+          <td class="io">operator decision</td>
+          <td class="io">resume <span class="sep">|</span> amend <span class="sep">|</span> abandon</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">worker:stalled</span></td>
+          <td class="step">Recover worker</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:recover</td>
+          <td class="io">situation</td>
+          <td class="io">slot free <span class="sep">|</span> wall report</td>
+          <td><span class="trig">pulse</span><span class="sep">|</span><span class="trig">wall:raised:&lt;block&gt;</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">session:end</span></td>
+          <td class="step">Session End</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:session-end</td>
+          <td class="none">—</td>
+          <td class="io">session-end protocol</td>
+          <td><span class="trig">end</span><span class="sep">|</span><span class="trig">pulse</span></td>
+        </tr>
+        <tr>
+          <td><span class="trig">*</span></td>
+          <td class="step">Match + follow SCRIPTS</td>
+          <td><span class="actor a-tron">TRON</span></td>
+          <td class="skill">skill:scripts</td>
+          <td class="io">the unexpected input</td>
+          <td class="io">matched script run</td>
+          <td><span class="trig">pulse</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="legend">
+    <span class="actor a-tron">TRON</span>
+    <span class="actor a-eng">Engineer</span>
+    <span class="actor a-arch">Architect</span>
+    <span class="actor a-rev">Reviewer</span>
+    <span style="margin-left:auto"><span class="trig">trigger</span> &nbsp;every on-complete is itself a trigger</span>
+  </div>
+
+  <!-- ============ STANDING LAYER ============ -->
+  <div class="kicker">Standing layer</div>
+  <div class="panels">
+    <div class="panel">
+      <h3>PULSE <span class="id">— the dispatch loop</span></h3>
+      <p class="note">Re-runs at <code class="mono">tron:start</code> and on every <code class="mono">pulse</code> return.</p>
+      <ol class="steps">
+        <li><b>Keep every worker slot busy</b> — follow this workflow in tandem with SWITCHBOARD.</li>
+        <li><b>Anything unexpected</b> → consult / follow <code class="mono">SCRIPTS</code> (most-specific match wins; <code class="mono">*</code> is the fallback).</li>
+        <li><b>Proceed to SWITCHBOARD.</b></li>
+      </ol>
+    </div>
+    <div class="panel">
+      <h3>SWITCHBOARD — selection</h3>
+      <p class="note">Statuses: <b>pending</b> · <b>cleared</b> · <b>in-progress</b> · <b>blocked</b> · <b>done</b> · <b>abandoned</b>. Only <b>cleared</b> is dispatchable. Run all four, in order:</p>
+      <ol class="steps">
+        <li><b>Fill slots</b> — while a slot is free &amp; cleared work exists, dispatch one per slot, then flip <code class="mono">cleared→in-progress</code>:
+          <ul class="priority">
+            <li>oldest open <b>cleared adhoc</b> (by ID)</li>
+            <li>a <b>due cadence</b> reviewer (consume its counter)</li>
+            <li>next <b>cleared block</b> by sequential ID</li>
+          </ul>
+        </li>
+        <li><b>Clear ahead</b> — enqueue the architect (<code class="mono">review:next:&lt;block&gt;</code>) for <em>every</em> pending block not already queued.</li>
+        <li><b>Wait</b> — no free slot, or all remaining in-progress/queued/blocked → re-enter on next <code class="mono">pulse</code>.</li>
+        <li><b>Session end</b> — nothing pending/cleared/in-progress/queued, no adhoc, no cadence, all idle → <code class="mono">session:end</code>. Blocked blocks hold the run <em>open</em>.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="grammar">
+    <p><b style="color:var(--fg);font-family:var(--font-heading)">Trigger grammar</b> — lowercase, colon-delimited, no spaces. Forms: <code>domain:object</code> (dispatch) · <code>subject:event</code> · <code>subject:object:event</code>.</p>
+    <p><b>subjects</b>: tron · build · block · review · cadence · session · worker · operator · wall &nbsp;·&nbsp; <b>events</b>: build · done · clear · stalled · next · end · adhoc · raised · decision</p>
+    <p><code>&lt;type&gt;</code> ∈ {code, security, data, …} · <code>&lt;block&gt;</code> = pipeline ID (NN-NN-NN) · <code>next</code> = the next dispatch target (reserved) · <code>*</code> = wildcard · <code>|</code> = alternatives · terminals: <code>end</code>, <code>—</code>. &nbsp;<code>pulse</code> is the dispatcher control signal, not a table row.</p>
+  </div>
+
+  <footer>
+    <span>TRON · 42labs workflow canon</span>
+    <span>styled with 42labs.ds v0.3.0</span>
+  </footer>
+</div>
+<script>
+  const b=document.body,btn=document.getElementById('themeBtn');
+  const apply=t=>{b.classList.toggle('theme-dark',t==='dark');btn.textContent=(t==='dark'?'◑ light':'◐ dark');};
+  let t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';apply(t);
+  btn.onclick=()=>{t=b.classList.contains('theme-dark')?'light':'dark';apply(t);};
+</script>
+</body>
+</html>

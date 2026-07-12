@@ -1,0 +1,73 @@
+# TRON message candidate pool
+# Source: ~/42labs/tron/landing-page.md (cycling terminal messages + mockup terminals).
+# Status: CANDIDATES for messages.yaml (Phase 2b). Specific names parameterized into {slots}.
+# Tags here are provisional — final tags align to the Phase-0 tag vocabulary.
+# ⚠️ 2026-06-05: tags/triggers here predate the converged workflow. RE-TAG to the new
+#   trigger grammar (tron-workflow-v2-skills.csv) before feeding messages.yaml. Still OPEN.
+# Tone is SET by these (the landing-page voice): dark, dry, sardonic sci-fi.
+#
+# Slot legend:
+#   {worker_id}  e.g. ENG-014, ARCH-PERSIST, REV-007
+#   {block}      e.g. B-042
+#   {pr}         e.g. #314
+#   {role}       e.g. engineer, architect, reviewer
+#   {n}, {hours}, {agents}, {escalations}, {duration}, {minutes}
+#   {detail}     FREE-TEXT judgment payload supplied by the LLM (not canned)
+
+# ── Between-task feedback (routine; shown so TRON isn't silent) ──
+# No slots required; safe to cycle anytime work is in flight.
+between_task:
+  - "[TRON]  Programs handling it. Users elsewhere."
+  - "[TRON]  Switchboard: closed. Operator: at the beach."
+  - "[TRON]  Loop integrity: 100%. Operator panic: 0%."
+  - "[TRON]  Watching the agents. So you don't have to."
+  - "[TRON]  Sanity check passed. Reviewer skeptical."
+  - "[TRON]  No worker has attempted self-termination today."
+  - "[TRON]  {agents} agents. {hours} hours. {escalations} escalations. You're welcome."
+  - "[TRON]  {worker_id} online: {duration}. Caffeine consumption: theoretical."
+
+# ── Dispatch ──
+dispatch:
+  done: "[TRON]  {worker_id} dispatched. Worktree clean. May the source compile."
+  fresh: "[TRON]  Spawning a fresh {role}. The old one knew too much."
+
+# ── Block lifecycle ──
+block:
+  done_next: "[TRON]  {block} done → spawning {worker_id}. We'll be back."
+
+# ── Review ──
+review:
+  scheduled: "[TRON]  Reviewer scheduled at {block}. Brace yourselves."
+
+# ── PR ──
+pr:
+  opened: "[TRON]  PR {pr} opened. Reviewer's coffee: still warm."
+
+# ── Operator pings (escalation; fleet breaking silence) ──
+escalate:
+  generic: "[TRON]  Above our pay grade. Summoning the User..."
+  no_consensus: "[TRON]  Three agents, three opinions. Tiebreaker: you."
+  review_opinion: "[TRON]  Reviewer has opinions. Human-in-the-loop required."
+  review_flag: "[TRON]  Reviewer flagged {block}. Strong language used."
+  operator_only: "[TRON]  Operator-only lane touched. Paused. Need an operator with keys."
+
+# ── Session ──
+session:
+  ending: "[TRON]  Session ending in {minutes}m. Last call for orders."
+
+# ── Telegram (operator escalation; carries a judgment payload) ──
+tg:
+  wall: |
+    [TRON]  Hey boss — hope you're enjoying the beach.
+            {block} walled on {detail}.
+            Architect peer-consulted, no consensus.
+            What do you say?
+  update: |
+    [TRON]  Update: {block} done, PR {pr} up.
+            Reviewer scheduled at {block_next}.
+  eod: "[TRON]  Pings today: {n}. Routine: handled. End of line."
+
+# ── Seeder voice (SEPARATE from runtime messages.yaml — per review G-4) ──
+seeder:
+  greet: "[seeder] Seeding TRON into {project}. Let's keep this brief."
+  signoff: "[seeder] Try not to break anything before I leave."

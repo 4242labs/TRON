@@ -1,0 +1,39 @@
+TRIGGER,STEP,ACTOR,SKILL (TRON),INPUTS,OUTPUTS,"ON COMPLETE, TRIGGER"
+tron:start,Bootup,TRON,protocol:bootup,operator inputs,operator confirmed + architect up,pulse
+build:block:next,Spawn engineer,TRON,skill:dispatch-engineer,block:next,engineer up,block:next:build
+block:next:build,Build,Engineer,-,block:next,log:done | wall report,block:next:done | wall:raised:<block>
+block:next:done,Wrap + release engineer,TRON,skill:release-engineer,log:done,block done + slot free,pulse
+review:next:<block>,Review block (forward),Architect,skill:forward-review,pipeline (prior done work),block reviewed,block:<block>:clear
+block:*:clear,Inform TRON,TRON,skill:checkpoint,-,pipeline updated,pulse
+cadence:<type>,Spawn reviewer,TRON,skill:dispatch-reviewer,-,reviewer up,review:<type>
+review:<type>,<type> Review,Reviewer:<type>,-,-,log:review:<type> | wall report,review:<type>:done | wall:raised:<block>
+review:<type>:done,Release reviewer,TRON,skill:release-reviewer,-,slot free,pulse
+review:<type>:done,<type> Log Review (forward),Architect,skill:log-review,log:review:<type>,block:adhoc | -,block:adhoc:clear | -
+wall:raised:<block>,Escalate to operator,TRON,skill:escalate,situation,operator contacted + slot free + block blocked,pulse
+operator:decision:<block>,Apply operator decision,TRON,skill:apply-decision,operator decision,"resume (block→cleared) | amend (block→pending, re-cleared by architect) | abandon (block→abandoned)",pulse
+worker:stalled,Recover worker,TRON,skill:recover,situation,slot free | wall report,pulse | wall:raised:<block>
+session:end,Session End,TRON,skill:session-end,-,session-end protocol,end | pulse
+*,Match + follow SCRIPTS,TRON,skill:scripts,the unexpected input,matched script run,pulse
+PULSE — the dispatch loop,,,,,,
+"P1 - Always keep every worker slot busy by following this WORKFLOW in tandem with SWITCHBOARD.",,,,,,
+"P2 - Any input/trigger different than the ones expected > consult/follow SCRIPTS. Match is most-specific-wins; `*` is the fallback.",,,,,,
+"P3 - Re-run at tron:start AND on every ON-COMPLETE = pulse (slot free, *:clear, review done, recovered) AND when skill:session-end returns continue. (session:end may instead return `end`, which terminates the run — the selector lives in skill:session-end.) Then proceed to SWITCHBOARD.",,,,,,
+SWITCHBOARD,,,,,,
+"Statuses: PENDING = todo (needs clearing) · CLEARED = ready to build · IN-PROGRESS = being built · BLOCKED = walled, awaiting operator · DONE · ABANDONED. Only CLEARED is dispatchable. Ignore IN-PROGRESS / DONE / BLOCKED / ABANDONED for selection. Cadence is PULL (checked here). On each pulse run, do all four steps in order:",,,,,,
+"1. FILL SLOTS — WHILE a worker slot is free AND dispatchable work exists, dispatch one block per free slot in priority: (a) oldest open CLEARED adhoc block (by ID); ELSE (b) a due cadence reviewer via cadence:<type> (advance/consume that counter); ELSE (c) the next CLEARED block by sequential ID via build:block:next. On dispatch, flip that block CLEARED>IN-PROGRESS so it is never re-picked by a later/concurrent run.",,,,,,
+"2. CLEAR AHEAD — for EVERY PENDING block not already in the architect's queue, enqueue the ARCHITECT via review:next:<block> (the queue has no slot limit; this keeps the CLEARED buffer ahead of the workers; architect-count sets drain speed).",,,,,,
+"3. WAIT — if no slot is free, or every remaining block is IN-PROGRESS / queued / BLOCKED, do nothing. The run re-enters on the next pulse (slot free, *:clear, operator:decision).",,,,,,
+"4. SESSION END — only if NO block is PENDING, CLEARED, IN-PROGRESS, or queued, no adhoc open, no cadence due, and all agents idle > trigger session:end. (BLOCKED blocks awaiting operator do NOT count as resolved — they hold the run open, not closed.)",,,,,,
+NOTES,,,,,,
+"Fan-out: review:<type>:done fires BOTH Release reviewer AND Log Review — in parallel. (block:next:done fires only Wrap+release; clearing the next block is driven by SWITCHBOARD CLEAR AHEAD, not by a build-completion fan-out — this avoids double-enqueue.)",,,,,,
+"Cadence counter: each <type> counter increments on every block:next:done (one completed block). A <type> cadence is DUE when its count since the last <type> review >= its threshold; dispatch (SWITCHBOARD step 1b) resets it. Forward-review and adhoc-only work do not increment it.",,,,,,
+"Dispatch == spawn: build:block:next and cadence:<type> spawn the worker. The persistent architect is spawned once at Bootup. Liveness (heartbeat / stall / dead worker) is the ENGINE's job; worker:stalled is the only inbound trigger the engine feeds back to the table.",,,,,,
+"Architect is a PERSISTENT, dedicated agent (excluded from the worker slot pool) with a FIFO queue. Architect rows (Review block:next / Log Review) ENQUEUE work — they never require a free worker slot and never contend with engineers/reviewers. The architect drains its queue serially and emits *:clear. Architect throughput is the bottleneck; architect-count is the knob to raise it.",,,,,,
+"A wall parks its block as `blocked` and frees the slot; the block stays out of dispatch until the operator's operator:decision resumes/amends/abandons it. operator:decision is the inbound trigger for the operator's reply (escalate only emits the contact, not the reply).",,,,,,
+"Architect is always FORWARD-LOOKING: every review shapes upcoming blocks (clear next / adhoc). It never reopens a done block.",,,,,,
+"Branch selectors (the table names the alternatives; the selector lives where noted): done-vs-wall (Build & Review) = the worker's reported outcome; adhoc-vs-`-` (Log Review) = skill:log-review (findings or none); resume/amend/abandon (Apply operator decision) = the operator; slot-free-vs-wall (Recover) = skill:recover; end-vs-continue (Session End) = skill:session-end.",,,,,,
+TRIGGER GRAMMAR,,,,,,
+"All triggers: lowercase, colon-delimited segments, no spaces.  Forms: domain:object (imperative dispatch) | subject:event (completion) | subject:object:event (qualified completion).",,,,,,
+"subjects/domains: tron | build | block | review | cadence | session | worker | operator | wall.  events/qualifiers: build | done | clear | stalled | next | end | adhoc | raised | decision.  <block> = a pipeline block ID (NN-NN-NN); block-specific triggers carry it: wall:raised:<block>, operator:decision:<block>, review:next:<block>, block:<block>:clear.",,,,,,
+"pulse is NOT a table-listener trigger — it is the dispatch control signal handled by PULSE P3 (re-run SWITCHBOARD). A linter should treat it as the one reserved control token, not match it to a row.",,,,,,
+"Matching: literal segments outrank <type>/<block> variables (most-specific-wins); `<type>` never binds the reserved literal `next`.  `*` = wildcard.  `|` = alternatives in one cell.  Terminals: `end` (session over) and `-` (no trigger).",,,,,,
