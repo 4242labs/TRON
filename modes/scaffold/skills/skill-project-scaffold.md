@@ -89,6 +89,7 @@ Confirm the six log directories survived the copy: `meta/logs/{architecture,data
 | `APP_REPO_ROOT/.env.example` | Project-specific vars |
 | `APP_REPO_ROOT/docs/playbook-infra.md` | Project-specific URLs |
 | `APP_SUBDIR/AGENTS.md` | Tech stack, project name |
+| `APP_SUBDIR/.gitignore` | Append `CLAUDE.md` — the agent doc the project tracks is `AGENTS.md`; a host-runtime file that appears beside it stays local (the meta repo already ships this rule; `create-next-app`'s `.gitignore` does not) |
 
 `lefthook.yml`, `commitlint.config.js`, `docs/playbook-browser-testing.md`, `docs/guidelines-coding.md`, `.githooks/`, and `scripts/` are taken verbatim — do not edit them per project. A per-project deviation belongs in the kit, not in the copy.
 
