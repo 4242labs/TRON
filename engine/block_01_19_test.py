@@ -1,5 +1,5 @@
 """block_01_19_test — regressions for the 01-19 merge-ownership + order-send-discipline
-set (tron-25/26 matched-pair findings, canon cb739ed).
+set (tron-25/26 matched-pair findings).
 
   T1  one merge-ownership story in local mode: the engine lands the trunk merge; a worker
       is never ordered to merge and never merges. The non-ff arm (local mode's ONLY

@@ -1,5 +1,5 @@
 """block_01_18_test — regressions for the 01-18 gate-anchor-integrity + walled-worker
-pacing-exemption set (holistic review round 2, post-01-17, canon 27d551c).
+pacing-exemption set (holistic review round 2, post-01-17).
 
   T1  the F1 false-contradiction wall: `merged_sha` must anchor a sha that actually
       LANDED, never a pre-image. `merge_ff_only` may internally rebase-and-retry on a
