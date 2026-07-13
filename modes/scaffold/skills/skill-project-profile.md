@@ -30,7 +30,9 @@ If there is no document, run Steps 1 and 2 as a plain interview.
 
 ---
 
-## Step 1 — Service profile (11 questions)
+## Step 1 — Service profile (15 questions)
+
+Every question below decides a file the scaffold keeps or deletes. Nothing here is optional curiosity — an unanswered row leaves the scaffold guessing, and a guessed row ships a workflow that fails on the project's first push.
 
 | # | Question | Determines |
 |---|----------|-----------|
@@ -45,6 +47,10 @@ If there is no document, run Steps 1 and 2 as a plain interview.
 | 9 | Support ticketing: Plain? None? | `mcp-setup.md#plain` |
 | 10 | Slack notifications? (yes / no) | `services-setup.md#slack`, `deploy-notify.yml` |
 | 11 | AI proxy: LiteLLM on Railway? Direct API? None? | `services-setup.md#railway`, `infra/` templates |
+| 12 | Public changelog / automated releases? (yes / no) | `release-please.yml` + its config and manifest — deleted if no |
+| 13 | End-to-end tests with Playwright? (yes / no) | `e2e.yml` and its `<E2E_API_GLOB>` / `<E2E_UI_GLOB>` — deleted if no |
+| 14 | Load / stress testing? (yes / no) | `stress.yml` and its `<SCENARIO_NAME>` / `<SCENARIO_FILE>` / `<STRESS_SESSION_TOKENS>` — deleted if no |
+| 15 | Shared knowledge base / canon repo to track? (repo, or none) | `meta/.github/workflows/canon-drift.yml` + `meta/scripts/canon-drift-check.sh` — both deleted if none |
 
 ---
 
@@ -64,6 +70,21 @@ If there is no document, run Steps 1 and 2 as a plain interview.
 | `STAGING_SUPABASE_URL` | `https://xyz.supabase.co` *(if Supabase)* |
 | `PROD_SUPABASE_URL` | `https://abc.supabase.co` *(if Supabase)* |
 | `VERCEL_PROJECT_NAME` | `myproject` *(if Vercel)* |
+| `CANON_KB_REPO` / `CANON_SCAFFOLD_REPO` | `acme/canon` *(if Q15 named a shared KB)* |
+
+**Linear** — the kit's `skill-linear-cards.md` is seeded once, at scaffold, from these. Every agent on the project writes its cards against them, so a wrong value here is wrong on every card the fleet ever files:
+
+| Value | Example |
+|-------|---------|
+| `LINEAR_TEAM` | `42labs` |
+| `LINEAR_PROJECT` | `myproject` |
+| `DEFAULT_STATE` | `Backlog` |
+| `DEFAULT_ASSIGNEE` | `me` |
+| `DEFAULT_PRIORITY` | `3` (Medium) |
+| `PROJECT_LABELS` | labels every card on this project carries |
+| `SCOPE_LABELS` | the project's own scope vocabulary (`Feature`, `Infra`, …) |
+
+`<AGENT_ROLE>` is **not** collected — it is not a seed value. Each agent stamps its own persona label when it writes a card.
 
 ---
 

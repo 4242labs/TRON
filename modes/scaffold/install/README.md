@@ -2,9 +2,10 @@
 
 ```zsh
 modes/install.sh              # /tron-scaffold in every project + the terminal shortcut
-modes/install.sh ~/path/proj  # /tron-scaffold in one project only
 modes/install.sh --no-path    # skip the shell-rc PATH line
 ```
+
+(`install.sh <project>` scopes the commands to one existing project. It's meaningless for SCAFFOLD — the project it stands up doesn't exist yet — so install this mode machine-wide.)
 
 That is the whole install, fresh machine included. `install.sh` writes the slash command with
 SCAFFOLD's absolute path baked in, and adds one PATH line to your shell rc for the `tron-scaffold`

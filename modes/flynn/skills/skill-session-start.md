@@ -10,7 +10,17 @@ Single entry point for every TRON-FLYNN session. Silent — the operator gets a 
    - Missing → run `skills/skill-bootstrap.md`, then continue.
    - If a `## Project-Specific Rules` section exists → those rules bind for the rest of the session.
 
-2. **Validate the registry.** Read `modes/flynn/projects.md` and find this project's row. Add it if missing; fix any wrong field (name, context path, log path); confirm the context file and log directory actually exist at the registered paths. Note any fix in the session log.
+2. **Validate the registry.** Read `$FLYNN_ROOT/projects.md` and find this project's row. The file is a local operator file (gitignored) — on a fresh machine it won't exist yet; create it with the header below. Add the row if missing; fix any wrong field (name, context path, log path); confirm the context file and log directory actually exist at the registered paths. Note any fix in the session log.
+
+   ```markdown
+   # Projects — TRON-FLYNN registry
+
+   Every project FLYNN knows about. Written by `/tron-scaffold` at seed, read at session start.
+
+   | Project | Local context | Logs | Registered |
+   |:--|:--|:--|:--|
+   | <PROJECT_NAME> | <META_REPO_NAME>/agents/flynn-local.md | <META_REPO_NAME>/logs/flynn/ | <YYYY-MM-DD> |
+   ```
 
 3. **Branch-hygiene precheck.** Skip only if the session will produce no commits. Otherwise, before any edit:
    - Confirm the cwd is a worktree, not the main checkout. Editing canon from the main checkout → stop and create a worktree.
