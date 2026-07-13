@@ -67,7 +67,10 @@
   #core{flex:1; min-height:0; background:var(--cream); overflow:hidden;}
   /* every element name uppercased uniformly (single source — never hardcode mixed case in data) */
   #core text, #ovcanvas text{ text-transform:uppercase; }
-  .bjs-powered-by{display:none !important;}
+  /* Do NOT style .bjs-powered-by — not even opacity. The bpmn-js licence is
+     explicit: the watermark "MUST NOT be removed or changed" and "must stay
+     fully visible and not visually overlapped by other elements". It is left
+     entirely alone, exactly as the library renders it. */
   .bjs-drilldown{display:none !important;}
   .zoomctl{display:flex; gap:6px;}
   .zoomctl button{width:32px; height:32px; border:1px solid var(--border-cool); background:#fff; border-radius:8px; font-size:18px; line-height:1; color:var(--graphite); cursor:pointer; font-family:var(--font-body); box-shadow:0 1px 3px rgba(28,25,23,.08);}
