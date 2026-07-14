@@ -73,21 +73,21 @@ import vocab    # noqa: E402 — core/vocab.py, PROMOTED_SLOT_KEYS (block 01-37,
 
 Snapshot = collections.namedtuple(
     "Snapshot", ["manifest", "gates", "trunk_tip", "worker_reports", "local_reports",
-                "inbox_sidecar"])
+                "inbox_sidecars"])
 
 
-def _drain_inbox(ctx, log):
-    """Rotate `ctx.worker_inbox` to a `.proc` sidecar (or re-read a `.proc`
-    a crashed prior tick already rotated — at-least-once). Returns
-    `(reports, sidecar_path_or_None)`. A malformed/structurally-invalid line
-    is logged and skipped — one poison line must never sink the whole tick.
-    A well-formed line is either ALREADY structured (carries its own `tag`)
+def _drain_inbox_at(path, log, label):
+    """Rotate `path` to a `.proc` sidecar (or re-read a `.proc` a crashed
+    prior tick already rotated — at-least-once). Returns `(reports,
+    sidecar_path_or_None)`. A malformed/structurally-invalid line is logged
+    and skipped — one poison line must never sink the whole tick. A
+    well-formed line is either ALREADY structured (carries its own `tag`)
     or genuinely free-text (carries `text` — `classify_message`'s own input
     shape, `{text, sender}`); `build()`, below, resolves EVERY one of these
     to a tag via `core.classify.classify` before this tick's `route`/`act`
     ever sees it — a line with NEITHER key is the only shape still dropped
-    here as structurally invalid."""
-    path = ctx.worker_inbox
+    here as structurally invalid. `label` is used only for the log line
+    (which channel this drain belongs to)."""
     proc = path + ".proc"
     if not os.path.exists(proc):
         if not os.path.exists(path):
@@ -95,7 +95,7 @@ def _drain_inbox(ctx, log):
         try:
             os.rename(path, proc)
         except OSError as e:
-            log("flow", f"snapshot: inbox rotate failed ({e}); draining nothing this tick")
+            log("flow", f"snapshot: {label} rotate failed ({e}); draining nothing this tick")
             return [], None
 
     reports = []
@@ -108,13 +108,143 @@ def _drain_inbox(ctx, log):
         try:
             rec = json.loads(line)
         except json.JSONDecodeError as e:
-            log("flow", f"snapshot: dropped a malformed worker-inbox line: {e}")
+            log("flow", f"snapshot: dropped a malformed {label} line: {e}")
             continue
         if not isinstance(rec, dict) or ("tag" not in rec and "text" not in rec):
-            log("flow", f"snapshot: dropped a structurally invalid worker-inbox line: {line!r}")
+            log("flow", f"snapshot: dropped a structurally invalid {label} line: {line!r}")
             continue
         reports.append(rec)
     return reports, proc
+
+
+def _drain_inbox(ctx, log):
+    """LEGACY shared-inbox drain (pre-block-01-38) — `ctx.worker_inbox`,
+    trusted sender-as-written (never overwritten). Kept unchanged for
+    backward compatibility: several pre-01-38 `core/*_rig.py` fixtures
+    still write here directly (none of block 01-38's own Tasks name or
+    touch them — see `engine/ctx.py::worker_inbox`'s own docstring). A REAL
+    spawn never writes here at all (`_drain_agent_channels`, below, is the
+    real, ambient-identity path)."""
+    return _drain_inbox_at(ctx.worker_inbox, log, "worker-inbox")
+
+
+def _agent_channel_ids(ctx):
+    """Every agent id with a live or crash-residual per-agent channel under
+    `ctx.inbox_dir` — the UNION of `*.jsonl` and `*.jsonl.proc` basenames,
+    so an orphaned `.proc` sidecar (a prior tick that rotated but crashed
+    before persisting) is still found and re-drained even if its live
+    `.jsonl` sibling no longer exists. Sorted for deterministic drain
+    order. Empty (never an error) when `ctx.inbox_dir` doesn't exist yet —
+    every canon-less `core/*_rig.py` fixture that never spawns a real
+    agent."""
+    d = ctx.inbox_dir
+    if not os.path.isdir(d):
+        return []
+    ids = set()
+    for name in os.listdir(d):
+        if name.endswith(".jsonl.proc"):
+            ids.add(name[:-len(".jsonl.proc")])
+        elif name.endswith(".jsonl"):
+            ids.add(name[:-len(".jsonl")])
+    return sorted(ids)
+
+
+def _drain_agent_channels(ctx, log):
+    """R6 (block 01-38 T1) — drain EVERY per-agent channel
+    (`inbox/<agent_id>.jsonl`), one at a time via `_drain_inbox_at` (the
+    SAME at-least-once idiom the legacy shared inbox already uses). THE
+    ambient-identity enforcement point: every line drained here has its
+    `sender` UNCONDITIONALLY OVERWRITTEN to `{"kind": "worker", "id":
+    agent_id}` — `agent_id` being the CHANNEL (the filename) it arrived
+    on, never whatever the line's own JSON payload happened to claim. A
+    worker's own installed `report.sh` copy can only ever write to ITS OWN
+    channel (ambient, at spawn — `core/engine.py::Engine.
+    _install_agent_channel`), so even a maliciously hand-crafted payload
+    claiming a different `sender.id` is corrected here, before classify/
+    door/minters ever sees it — the D8 impersonation hole, closed
+    structurally, not by convention. (The architect is a worker-SHAPED
+    sender per `core/vocab.py`'s own docstring — its channel is `inbox/
+    <ARCHITECT_WID>.jsonl`, drained identically; `kind` stays `"worker"`
+    either way, `vocab.resolve_origin` resolves ARCHITECT purely off
+    `sender.id == architect_wid`.)
+
+    Returns `(reports, sidecars)` — `sidecars` a list of every `.proc`
+    path this pass rotated/re-read, released together by `release()`."""
+    reports = []
+    sidecars = []
+    for agent_id in _agent_channel_ids(ctx):
+        chan_reports, sidecar = _drain_inbox_at(
+            ctx.agent_inbox(agent_id), log, f"agent-inbox[{agent_id}]")
+        for rec in chan_reports:
+            rec["sender"] = {"kind": "worker", "id": agent_id}
+            # A payload-asserted `agent_id`/`worker_id` at the TOP LEVEL
+            # (never written by the real report.sh door, which only ever
+            # writes `sender` — but a hand-crafted line theoretically
+            # could) must NOT survive the ambient stamp above: `_classify_
+            # reports`'s own IDENTITY BRIDGE only `setdefault`s these keys
+            # off `sender.id`, so a pre-existing top-level claim would
+            # otherwise silently outrank the channel-derived identity —
+            # the exact impersonation surface R6 exists to close. Strip,
+            # never trust.
+            rec.pop("agent_id", None)
+            rec.pop("worker_id", None)
+        reports.extend(chan_reports)
+        if sidecar:
+            sidecars.append(sidecar)
+    return reports, sidecars
+
+
+def _mark_operator_seen(manifest, raw_reports):
+    """R8 (block 01-38 T2/T3, AC-3): the SECOND receipt level — mark a case
+    `seen` the moment the operator's OWN reply names it, independent of
+    whether that reply parses into a valid `resume`/`amend`/`abandon`
+    verb (a malformed reply still proves a human read it; the door
+    refusing its CONTENT must never also erase that fact). Runs on the
+    RAW drained operator-inbox lines, before classify/door — a structured
+    line's `slots.case_id` is trusted directly; a free-text line is
+    matched the SAME way `core/classify.py::_settle_from_text` matches an
+    id (a substring of a genuinely OPEN case id — never a guess at one
+    that isn't), but WITHOUT requiring a recognizable verb (that
+    distinction is exactly what makes this catch a malformed reply
+    `_settle_from_text` itself would refuse)."""
+    import casestate   # local — casestate imports vocab, no cycle risk from here
+    cases = manifest.get("cases") or {}
+    open_ids = [cid for cid, c in cases.items() if c.get("decision") is None]
+    if not open_ids:
+        return
+    for rec in raw_reports:
+        slots = rec.get("slots") or {}
+        case_id = slots.get("case_id")
+        if case_id and case_id in open_ids:
+            casestate.mark_seen(manifest, case_id)
+            continue
+        text = rec.get("text") or ""
+        if not text:
+            continue
+        hit = next((cid for cid in open_ids if cid in text), None)
+        if hit:
+            casestate.mark_seen(manifest, hit)
+
+
+def _drain_operator_channel(ctx, log, manifest):
+    """R8 (block 01-38 T3) — drain `ctx.operator_inbox` EVERY TICK,
+    alongside the per-agent channels above. Every line's `sender` is
+    UNCONDITIONALLY OVERWRITTEN to `{"kind": "operator", "id":
+    "operator"}` — the SAME ambient-identity discipline
+    `_drain_agent_channels` applies, so a payload cannot self-assert
+    operator identity either; only this ONE channel ever resolves to it.
+    Marks the `seen` receipt (`_mark_operator_seen`, above) BEFORE
+    returning — `manifest` may be `None` for a caller with no manifest in
+    scope (mirrors `core.classify.classify`'s own optional-manifest
+    contract), in which case seen-marking is skipped (nothing to mark)."""
+    raw, sidecar = _drain_inbox_at(ctx.operator_inbox, log, "operator-inbox")
+    for rec in raw:
+        rec["sender"] = {"kind": "operator", "id": "operator"}
+        rec.pop("agent_id", None)   # never trust a payload-asserted identity (see _drain_agent_channels)
+        rec.pop("worker_id", None)
+    if manifest is not None:
+        _mark_operator_seen(manifest, raw)
+    return raw, ([sidecar] if sidecar else [])
 
 
 def _classify_reports(eng, manifest, raw_reports):
@@ -177,7 +307,16 @@ def build(eng):
     trunk-tip read (`core.gitobs.tip_sha`, never a raw git call)."""
     ctx = eng.ctx
     manifest = state.load(ctx)
-    raw_reports, sidecar = _drain_inbox(ctx, eng.log)
+    # R6/R8 (block 01-38 T1/T3): THREE drains, merged into one resolved-report
+    # pass — the legacy shared inbox (backward compat, untouched sender),
+    # every per-agent ambient channel (a REAL spawn's only path, sender
+    # stamped from the channel filename), and the operator's own inbound
+    # channel (drained every tick, sender stamped "operator", seen marked).
+    legacy_reports, legacy_sidecar = _drain_inbox(ctx, eng.log)
+    agent_reports, agent_sidecars = _drain_agent_channels(ctx, eng.log)
+    operator_reports, operator_sidecars = _drain_operator_channel(ctx, eng.log, manifest)
+    raw_reports = legacy_reports + agent_reports + operator_reports
+    sidecars = ([legacy_sidecar] if legacy_sidecar else []) + agent_sidecars + operator_sidecars
     worker_reports = _classify_reports(eng, manifest, raw_reports)
 
     root = eng.paths["root"]
@@ -215,18 +354,18 @@ def build(eng):
 
     return Snapshot(manifest=manifest, gates=gates, trunk_tip=trunk_tip,
                     worker_reports=worker_reports, local_reports=local_reports,
-                    inbox_sidecar=sidecar)
+                    inbox_sidecars=sidecars)
 
 
 def release(snap):
-    """Drop the drained inbox sidecar — ONLY ever called by `core.tick.tick`
-    AFTER `core.state.save` has succeeded (at-least-once: a crash before
-    this leaves the sidecar for the next tick to re-drain, same discipline
-    as `engine/fsm.py::_release_claimed`)."""
-    sidecar = snap.inbox_sidecar
-    if not sidecar:
-        return
-    try:
-        os.remove(sidecar)
-    except OSError:
-        pass
+    """Drop every drained inbox sidecar (legacy + every per-agent channel +
+    the operator channel) — ONLY ever called by `core.tick.tick` AFTER
+    `core.state.save` has succeeded (at-least-once: a crash before this
+    leaves each sidecar for the next tick to re-drain, same discipline as
+    `engine/fsm.py::_release_claimed`). One channel's removal failing never
+    stops another's."""
+    for sidecar in (snap.inbox_sidecars or []):
+        try:
+            os.remove(sidecar)
+        except OSError:
+            pass
