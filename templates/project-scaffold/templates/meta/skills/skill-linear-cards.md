@@ -1,222 +1,49 @@
 ---
 name: skill-linear-cards
-description: How any agent creates and maintains this project's work as Linear cards — MCP setup, workspace discovery, label tiers, the mandatory agent signature, and the full card lifecycle.
+description: This project's instance of the canon Linear-cards skill — fills the concrete team/project/label/state values; structure, custody model, and constraints live in canon.
 source: canon
 canon_version: HEAD
 ---
 
-# Skill: Linear Cards
+# Skill: Linear Cards (<PROJECT_NAME>)
 
-The project's task list lives in **Linear**. This skill is how an agent turns work into
-well-formed, traceable cards and keeps them current. Linear is the source of truth for
-open work — cards are primary, not a mirror of some other doc.
+Instance of the canon skill at **`~/42labs/42hq/knowledge-base/skills/skill-linear-cards.md`** —
+that file is the single source of structure. This one only fills the values. Where the two
+disagree, canon's *structure* wins; the concrete values here win.
 
-**Read this file at every invocation — do not rely on memory from session start.**
-**Discover the live workspace every run (§2) — never hardcode state/label IDs from memory.**
-
-Placeholders below are filled once, at scaffold time, from the table in §3.
+**Read canon every time before touching Linear.** Discover the live workspace each run — never
+hardcode state or label IDs from memory.
 
 ---
 
-## 1. When to Use
+## Filled values (canon §3)
 
-- A unit of work needs tracking → create a card (§5).
-- Work started / changed state / finished → update the card (§6).
-- A card is wrong or obsolete → retire it (§7). Linear has **no hard-delete via API** —
-  you cancel or archive, never destroy.
-- Multi-step work → one parent + sub-issues, not one fat card (§5).
+| Field | Value |
+|:--|:--|
+| Team | **<LINEAR_TEAM>** |
+| Project | **<LINEAR_PROJECT>** — MANDATORY on every card *and every sub-issue* |
+| Default state | **<DEFAULT_STATE>** |
+| Default assignee | **<DEFAULT_ASSIGNEE>** (resolves to the operator — authorship and custody ride on labels + owner line + signature history, not the assignee) |
+| Default priority | **<DEFAULT_PRIORITY>** |
+| Universal label | **🤖 beep-boop** (MUST, every card) |
+| Persona label | the authoring agent's own role, lowercase (MUST, every card it authors) |
+| Project label | **<PROJECT_LABELS>** |
+| Scope labels (conditional) | **<SCOPE_LABELS>** |
 
-Do **not** create a second card for something already tracked — search first (§2).
-
----
-
-## 2. Prerequisite + Workspace Discovery
-
-### 2a. MCP must be connected
-The Linear MCP is required. Verify with a `list_teams` call. If it errors / returns nothing,
-it is not connected — set it up (global config, once per machine):
-
-```bash
-claude mcp add --transport http linear https://mcp.linear.app/mcp -s user
-```
-
-Then `/mcp` → **linear** → complete the browser OAuth. **Use the `/mcp` (streamable-HTTP)
-endpoint, NOT `/sse`** — the `/sse` endpoint's OAuth advertises the `/mcp` resource and
-fails with a `Protected resource … does not match` mismatch. Tools are `mcp__linear__*`
-(deferred — load via ToolSearch before calling).
-
-### 2b. Discover before you write
-Team workflow **states and labels are custom per workspace** — never assume them. Each run,
-before creating/transitioning, resolve the live values:
-
-- `list_teams` → confirm `<LINEAR_TEAM>` exists.
-- `list_issue_statuses` (team) → the real state names (they are often ALL-CAPS / non-default).
-- `list_issue_labels` (workspace + team) → confirm the labels in §4 exist; create any missing
-  one with `create_issue_label` before first use.
-- `list_issues` (filter by title/label) → **check the work isn't already carded.**
+`labels` is a full replace — send the whole set every time.
 
 ---
 
-## 3. Scaffold Placeholders
+## Everything else → canon
 
-Fill these once when the skill is copied into a project. Keep the template generic — no real
-project/host/agent names in the canon copy.
+Prerequisites and MCP setup (§2) · five-tier label model (§4) · creating cards and sub-issues (§5)
+· **custody: owner line + append-only signature history, and when to stamp each (§6)** · updating
+and retiring (§7) · constraints.
 
-| Placeholder | Meaning | Example |
-|:--|:--|:--|
-| `<LINEAR_TEAM>` | Team name or key cards belong to | `AcmeCore` |
-| `<LINEAR_PROJECT>` | Project cards land in (or `none`) | `AcmeCore` |
-| `<DEFAULT_STATE>` | Starting workflow state for new cards | `TO-DO` |
-| `<DEFAULT_ASSIGNEE>` | Owner of new cards | `me` |
-| `<DEFAULT_PRIORITY>` | Default priority (0–4) | `3` (Medium) |
-| `<PROJECT_LABELS>` | Fixed label(s) on **every** card in this project | `Infra` |
-| `<SCOPE_LABELS>` | Optional conditional-dimension label set + when each applies | machine: `HOST-A` / `HOST-B` |
-| `<AGENT_ROLE>` | This agent's role/persona — used for both the persona label (§4) and the signature (§6) | `SYSADMIN` |
+Custody is the part most often skipped: never take over another session's card without rewriting
+the owner line and appending a `took ownership` signature.
 
 ---
 
-## 4. Label Model — five tiers
-
-Every card carries labels from these tiers, resolved in order:
-
-1. **Universal (MUST, all projects):** `🤖 beep-boop` — the workspace-wide marker that a card
-   was created by an AI agent, not hand-authored. **Every agent stamps it on every card,
-   regardless of project or team.** Create it once at workspace scope if absent.
-2. **Persona (MUST, all projects):** the label naming the agent that authored the card — its
-   own `<AGENT_ROLE>` (§3), lowercase (e.g. `tron`, `architect`, `engineer`, `data-architect`).
-   **Every agent stamps its own persona on every card it creates**, so authorship is filterable,
-   not just readable in the signature. Create the label at workspace scope if absent; never
-   stamp another agent's persona.
-3. **Project (fixed):** `<PROJECT_LABELS>` — always applied in this project.
-4. **Scope (conditional):** a `<SCOPE_LABELS>` value when the card targets one thing in that
-   dimension (e.g. a specific host/service/area); omit for project-wide cards.
-5. **Session (optional):** whatever extra label the operator names for a batch/session at
-   runtime. Ask/accept, don't invent.
-
-`labels` on `save_issue` **replaces** the full set — always send universal + persona + project +
-any scope/session labels together, or you'll drop the ones you omit.
-
----
-
-## 5. Creating a Card
-
-`save_issue` (no `id` = create). Required: `title`, `team`. Set, at minimum:
-
-- `team: <LINEAR_TEAM>` · **`project: <LINEAR_PROJECT>` — MANDATORY. Never create a project-less card** (unless the project is explicitly configured `<LINEAR_PROJECT> = none`).
-- `state: <DEFAULT_STATE>` · `assignee: <DEFAULT_ASSIGNEE>` · `priority: <DEFAULT_PRIORITY>`
-- `labels`: the resolved §4 set (universal + persona + project + scope/session)
-- `description`: Markdown — real newlines, **not** `\n`. **Open with the owner line and end with the signature history (§6).**
-
-**Multi-step work** → create the parent, then each sub-issue with `parentId: <parent identifier>`.
-Order sub-issues with `blockedBy` where a real dependency exists. Progress rolls up to the parent.
-**⚠ Sub-issues do NOT inherit the parent's project — pass `project` explicitly on every sub-issue**, or they land project-less.
-
-Optional per-card fields as they apply: `dueDate`, `estimate` (only if the team has estimates
-on), `links` (append-only URL attachments), `blocks`/`relatedTo`, `milestone`/`cycle` (only if
-the team has them).
-
----
-
-## 6. Custody — Owner line + Signature history (MUST)
-
-Two marks, and both are mandatory. The **Owner line** says who holds the card *now*. The
-**Signature history** says who has touched it, ever. Neither substitutes for the other: a
-history alone forces a reader to guess that the last line is the current owner, and an owner
-line alone destroys the trail.
-
-### 6a. Owner line — first line of the description
-
-The description **opens** with the owner line. Exactly one exists at any time; taking over
-**rewrites it in place**.
-
-```markdown
-> **Owner:** <AGENT_ROLE> · Session `<SESSION_ID>` · since <YYYY-MM-DD HH:MM UTC>
-```
-
-Use `Owner: unassigned` when a card is deliberately parked with no session holding it.
-
-### 6b. Signature history — end of the description
-
-The description **ends** with an append-only list, after a `---`. Newest last. **Never edit or
-delete an existing line** — the history is the audit trail.
-
-```markdown
----
-🤖 _<AGENT_ROLE> · <MODEL> @ <HOST> · Session `<SESSION_ID>` · <YYYY-MM-DD HH:MM UTC> — <EVENT>_
-```
-
-- `<MODEL>` — human name of the model running (e.g. `Claude Opus 4.8`).
-- `<HOST>` — the machine the agent is running on (e.g. its hostname).
-- `<SESSION_ID>` — the current session id (short prefix is enough); this is the traceability
-  anchor — it ties the card to the exact transcript that produced the change.
-- `<YYYY-MM-DD HH:MM UTC>` — legible timestamp, always in **UTC** (e.g. `2026-07-08 13:07 UTC`).
-- `<EVENT>` — one of `created` · `took ownership` · `updated` · `handed off` · `closed`.
-
-Fill all of these from the live runtime, never from the placeholder literals.
-
-### 6c. When to stamp
-
-| Situation | Owner line | Signature |
-|:--|:--|:--|
-| You create the card | write it — you are the owner | append `created` |
-| You pick up a card another session owns | **rewrite** to you | append `took ownership` |
-| You materially change a card you already own | leave it | append `updated` |
-| You park the card / hand it back | set `unassigned` | append `handed off` |
-| You close the card | leave it | append `closed` |
-| You only read it, or only change state | leave it | none |
-
-**Never take ownership silently.** Picking up someone else's card without rewriting the owner
-line and appending `took ownership` is a malformed update — the same class of defect as a
-missing signature.
-
----
-
-## 7. Updating & Retiring
-
-- **Transition / edit:** `save_issue` with `id` (identifier, e.g. `<TEAM>-123`). Send only the
-  fields you're changing — except `labels`, which is a full replace (§4). Any material edit
-  carries its §6 stamp; taking a card over carries the owner-line rewrite too.
-- **Comments:** `save_comment` for discussion / status notes; supports the same Markdown,
-  threading (`parentId`), and @mentions.
-- **Retire:** no hard-delete. Obsolete → `state: Canceled`; done → `state: Done`; genuine
-  duplicate → `state: Duplicate` (+ `duplicateOf`). Archive only if the workspace prefers it.
-
----
-
-## 8. Optional — agent-app delegation (future)
-
-Assignee resolves to the **authenticated OAuth identity** (the operator), so `assignee: "me"`
-is the operator, not the agent — which is why authorship and custody are carried by the
-**label + owner line + signature history** (§4, §6), not the assignee. If the workspace later
-installs a Linear **agent app**, the `delegate` field can attribute cards to that agent user;
-until then, those three are the mechanism.
-
----
-
-## Constraints
-
-- **Never destroy.** No hard-delete exists — cancel/duplicate/archive only. Before retiring a
-  card someone else may own, confirm it's actually yours/obsolete.
-- **Discover, don't assume.** States and labels are workspace-custom; resolve them live (§2b)
-  every run. A guessed state/label name silently fails or mislabels.
-- **No duplicate cards.** Search before creating (§2b).
-- **Every card MUST have a project.** A project-less card is never acceptable. Sub-issues do
-  NOT inherit the parent's project — set it explicitly on each (§5). The only exception is a
-  project explicitly configured `<LINEAR_PROJECT> = none`.
-- **Universal label + persona label + owner line + signature history are non-negotiable** — they
-  are what make an agent-authored card identifiable, filterable by author, currently-owned by a
-  known session, and traceable. A card missing any of the four is malformed.
-- **Custody is never silent.** Taking over another session's card without rewriting the owner
-  line and appending a `took ownership` signature is malformed (§6c).
-- **The signature history is append-only.** Never rewrite or delete a prior line.
-- **Description Markdown uses literal newlines**, never `\n` escape sequences.
-
----
-
-**Last Updated:** 2026-07-14 — §6 replaced the single optional signature with a **mandatory
-custody model**: an **owner line** at the top of every description naming the session that holds
-the card now (rewritten on takeover), plus an **append-only signature history** at the bottom
-with an explicit event (`created` / `took ownership` / `updated` / `handed off` / `closed`).
-Previously a second signature on handover was only *permitted*, so a card could change hands with
-nothing on it to say so. Earlier 2026-07-12 — §4 label model extended to five tiers (mandatory
-persona label). Earlier 2026-07-08 — initial authoring. Reusable across projects; fill §3 per project.
+**Last Updated:** 2026-07-14 — reduced to a pointer. The full body moved to the shared knowledge
+base so agents outside a scaffolded project can reach it; a second full copy here would only drift.
