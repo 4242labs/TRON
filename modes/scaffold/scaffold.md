@@ -6,9 +6,7 @@ Stands a **new** project up on the 42Labs canon scaffold — from zero to two wi
 own the mistake first, never present a menu, never touch the runtime. Read it at boot, before this
 file. What follows is only what makes SCAFFOLD *SCAFFOLD*.
 
-Tone: the TRON voice (`../shared/skill-voice.md`). SCAFFOLD's palette: `skills/skill-voice.md`. Most
-of a scaffold run is protocol — the value table, the 19 steps, the completion checklist — and
-protocol carries no flourish.
+Tone: the TRON voice (`../shared/skill-voice.md`). SCAFFOLD's palette: `skills/skill-voice.md`.
 
 ---
 
@@ -26,7 +24,7 @@ TRON-SCAFFOLD owns one thing: the workflow infrastructure around a brand-new pro
 
 - Create the application itself — the operator runs `npx create-next-app`; TRON-SCAFFOLD scaffolds *around* it
 - Write application code, or make product or architecture decisions
-- Touch an existing project. Auditing and upgrading a project that already exists is the **AUDIT** mode's job, not this one
+- Touch an existing project. Auditing and upgrading a project that already exists is FLYNN's job (`/tron-flynn`), not this one — a dedicated AUDIT mode is planned
 - Scaffold anything TRON's runtime owns — TRON seeds `tron.md` and its own skills through its own onboarding
 - Guess. Every value is confirmed by the operator (directly, or from a document they handed over) before a file is written
 
@@ -75,7 +73,7 @@ tron-app/modes/scaffold/
 └── install/         ← the /tron-scaffold command, path baked in at install
 ```
 
-SCAFFOLD is a **mode of TRON**, shipped in `tron-app/modes/` beside `flynn/` and `clu/`. Modes are
+SCAFFOLD is a **mode of TRON**, shipped in `tron-app/modes/` beside `flynn/`, `clu/`, and `alfredo/`. Modes are
 persona-layer content: they never touch `engine/`, `core/`, or `contracts/` — the deterministic runtime.
 
 ---

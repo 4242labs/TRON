@@ -9,18 +9,13 @@ description: CLU's operator channels — attention file, blocking questions, Tel
 type per reply, everything else is silence. It binds every mode and is not restated here. What
 follows is CLU's own channel machinery, which no other mode has.
 
-The transcript is noise: sweeps, orders, worker chatter. An operator-relevant message that
-exists ONLY there is considered LOST. Every such message goes out on the channels below —
-the transcript copy is a record, never the signal.
+Shared law already says nothing may live only in the transcript, and that a blocking question fires
+only when waiting-on-operator is the system's only remaining state. CLU is the mode with somewhere
+else to put those messages — that's what this file is.
 
-## The one rule
-
-**A blocking question (AskUserQuestion) fires exactly when waiting-on-operator is the
-system's only remaining state. Everything else signals without stopping.**
-
-Blocking while a worker is still building would freeze supervision of the whole fleet on a
-question about one block. Blocking when the fleet is stopped anyway costs nothing — and makes
-"idle, waiting on you" a state that cannot render as silence.
+CLU's cut of the blocking rule: **a wall raised while other workers are live is not blocking.** It
+goes out on the channels below immediately, and escalates into a blocking question when the fleet
+drains. Blocking mid-flight would freeze supervision of the whole fleet on a question about one block.
 
 ## Channels
 
@@ -78,9 +73,8 @@ session report and keep the item alive on the remaining channels — TG is a cha
 
 **Outbound-only (for now).** TG is send-only in this system today: only `tg-send.sh` exists, there is no poller / `getUpdates` reader, and a group/channel does not change that — the send/receive asymmetry is structural, not a routing choice. No agent (TRON or worker) can see a TG reply. Never imply or assume a TG message will be read back — every actual answer still arrives through the conversation TRON is running in. (Two-way TG would need a genuinely new component — a poller or MCP server — and may land soon; until it does, treat TG as notification-out only.)
 
-## Repetition law (unchanged)
-
-Pending operator items are repeated in EVERY session report until cleared — the attention
-file and TG do not replace that; they are how the operator hears about it away from the scroll.
+The repetition law is shared (`../../shared/skill-operator-comms.md`): pending operator items repeat
+in every report until cleared. The attention file and TG do not replace that — they are how the
+operator hears about it away from the scroll.
 
 End of line.

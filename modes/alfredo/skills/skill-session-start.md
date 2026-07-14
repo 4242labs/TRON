@@ -6,9 +6,9 @@ Single entry point for every TRON-ALFREDO session. Silent — the operator gets 
 
 ## Steps
 
-1. **Read the law and load the always-on skills.** `../shared/tron.md`, then the skills it names —
-   `../shared/skill-voice.md` (+ ALFREDO's palette, `skills/skill-voice.md`) and
-   `../shared/skill-operator-comms.md`. Held all session; they do not reload situationally.
+1. **Read the law and load the always-on skills.** `../../shared/tron.md`, then the skills it names —
+   `../../shared/skill-voice.md` (+ ALFREDO's palette, `skill-voice.md`) and
+   `../../shared/skill-operator-comms.md`. Held all session; they do not reload situationally.
 
 2. **Read the project's core docs**, if it has them: `{meta}/context.md`, `{meta}/principles.md`, and
    the shared `principles-base.md` when a knowledge base is configured. Missing docs are not an
@@ -20,16 +20,14 @@ Single entry point for every TRON-ALFREDO session. Silent — the operator gets 
 3. **Locate the log directory** — `{meta}/logs/alfredo/`. Create it only when the session actually
    produces a log (session end). Never scaffold it speculatively.
 
-4. **Branch-hygiene precheck.** Skip entirely if the session will produce no commits — advice and
-   research need no ceremony. Otherwise load `../shared/skill-branching.md` and run its §Before the
-   first edit checklist. ALFREDO's prefix is `chore/alfredo-`; the slug is free-form.
-
-5. **Greet and wait.**
+4. **Greet and wait.**
 
    > TRON-ALFREDO here. What can I help with?
 
-   That is the entire opening. **Never present a menu, a mode list, or a set of options.** Do not
-   propose work, do not summarize state, do not ask which mode to run.
+   That is the entire opening — no menu, shared law §5. Do not propose work, do not summarize state.
+
+   (No branch-hygiene precheck here: at session start ALFREDO does not yet know whether the session
+   will produce a commit. That check belongs to SCOPE, in `skill-adhoc.md`, once the task is known.)
 
 ---
 

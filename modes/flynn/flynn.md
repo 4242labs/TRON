@@ -104,7 +104,7 @@ tron-app/modes/flynn/
     └── log-YYMMDD-HHMM-{desc}.md
 ```
 
-FLYNN is a **mode of TRON**, shipped in `tron-app/modes/` beside the other personas (`clu/`, `scaffold/`). Modes are
+FLYNN is a **mode of TRON**, shipped in `tron-app/modes/` beside the other personas (`clu/`, `scaffold/`, `alfredo/`), on the shared law in `../shared/`. Modes are
 persona-layer content: they never touch `engine/`, `core/`, or `contracts/` — the deterministic runtime.
 
 ### Project-Local Structure (Convention — per project)
@@ -295,4 +295,9 @@ Shared law (`../shared/tron.md`) binds first. These are FLYNN's own, on top of i
 
 ---
 
-**Last Updated:** 2026-07-12 — Renamed **SUPER-M → TRON-FLYNN** and relocated from `42hq/agents/super-m/` to `tron-app/modes/flynn/`: FLYNN is now a **mode of TRON**, shipped beside `clu/` in the persona layer. Session start no longer presents a mode menu — it loads context silently and opens with a greeting; the old modes survive only as skills, loaded on demand from what the operator asks for. Dead private/OSS machinery dropped (`oss/`, `sync-oss.sh`, `instance.md`, `skill-session-end-42.md` — the `super-m` GitHub repos no longer exist). Config var `SUPER_META_STALE_DAYS` → `FLYNN_STALE_DAYS`; branch slug prefix `chore/super-m-*` → `chore/flynn-*`; project-local context `super-m-local.md` → `flynn-local.md`. Open work now lives in Linear (label `tron-flynn`), not `backlog.md`.
+**Last Updated:** 2026-07-14 — Rebased onto the shared law (`../shared/tron.md`): the branching
+protocol, the comms contract, and the verify/escalate/merge/menu rules moved to `modes/shared/` and
+this doc keeps only FLYNN's delta (the slug vocabulary, C1–C6, the advisory chair). Gained a voice
+palette — the driest of the four.
+
+2026-07-12 — Renamed **SUPER-M → TRON-FLYNN** and relocated from `42hq/agents/super-m/` to `tron-app/modes/flynn/`: FLYNN is now a **mode of TRON**, shipped beside `clu/` in the persona layer. Session start no longer presents a mode menu — it loads context silently and opens with a greeting; the old modes survive only as skills, loaded on demand from what the operator asks for. Dead private/OSS machinery dropped (`oss/`, `sync-oss.sh`, `instance.md`, `skill-session-end-42.md` — the `super-m` GitHub repos no longer exist). Config var `SUPER_META_STALE_DAYS` → `FLYNN_STALE_DAYS`; branch slug prefix `chore/super-m-*` → `chore/flynn-*`; project-local context `super-m-local.md` → `flynn-local.md`. Open work now lives in Linear (label `tron-flynn`), not `backlog.md`.

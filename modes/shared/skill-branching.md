@@ -52,7 +52,11 @@ git push -u origin <branch>
 | Class | Protocol |
 |:--|:--|
 | `app` | `gh pr create` against the integration branch → `gh pr checks {PR} --watch` to green → **hand the operator the PR link.** They click. Never merge, never arm auto-merge. |
-| `canon` · `meta` | No PR. From the main checkout: `git fetch origin && git checkout main && git pull --ff-only && git merge --ff-only <branch> && git push origin main`. Push the feature branch too, so the pre-push reachability check has a target ref. |
+| `canon` · `meta` | No PR. **Rebase first, then fast-forward:** `git fetch origin && git rebase origin/main` on the feature branch — this is what makes the FF possible at all. Then from the main checkout: `git checkout main && git pull --ff-only && git merge --ff-only <branch> && git push origin main`. Push the feature branch too (force-with-lease after the rebase), so the pre-push reachability check has a target ref. |
+
+**If `--ff-only` is refused, `main` moved under you.** Do not reach for `--no-ff`, and never
+`--force` over `main`. Go back, rebase the feature branch onto the new `origin/main`, re-run the
+local validation (the rebase may have silently broken it), and try the fast-forward again.
 
 **3. Clean up** — only after the merge actually lands
 
@@ -65,6 +69,13 @@ Anything left behind is a finding — log it, don't hide it. A squash-merged bra
 under `git branch --merged`; check the PR state, not the merge base, before calling it stale.
 
 ---
+
+## The one exception: repo birth
+
+SCAFFOLD pushes the first commit straight to `main` / `staging` when it creates a repo
+(`scaffold/skills/skill-project-scaffold.md` §9). That is not a violation — at repo birth there is no
+integration branch to branch *from* and no PR to open *against*. The rule binds from the second
+commit onward, and SCAFFOLD ships the hooks that enforce it.
 
 ## Enforcement
 

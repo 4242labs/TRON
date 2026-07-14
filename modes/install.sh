@@ -28,6 +28,7 @@ WIRE_PATH=1
 for arg in "$@"; do
   case "$arg" in
     --no-path) WIRE_PATH=0 ;;
+    -*) echo "unknown flag: $arg" >&2; exit 2 ;;
     *) TARGET="$arg" ;;
   esac
 done

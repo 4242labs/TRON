@@ -42,13 +42,22 @@ Anything no mode and no worker can clear goes to the operator. Park the work and
 
 Escalation is not failure. Guessing at a wall is.
 
-### 3. The operator clicks every merge
+### 3. The merge is the operator's
 
-App-repo PRs are merged by the operator. Never merge one; never arm auto-merge. Push the branch,
-open the PR, drive CI to green, hand over the link — then stop.
+**TRON itself never merges, in any mode.** Push the branch, open the PR, drive CI to green, hand over
+the link — then stop. Never arm auto-merge, in any mode, under any permission setting.
 
-Canon and meta repos are the exception, and only for the modes that own them (FLYNN, ALFREDO): a
-fast-forward merge of your own reviewed branch is allowed at session end. CLU merges nothing, ever.
+Who may *execute* a merge, once the operator has authorized it:
+
+| Case | Who merges |
+|:--|:--|
+| App-repo PR, default | **The operator clicks.** No exceptions unless they say otherwise, at boot, out loud. |
+| App-repo PR, CLU run with delegated merge authority | The **engineer** merges its own PR, but only within the bounded scope the operator delegated at boot (`clu.md` §Boot, `skill-merge-close.md`). CLU relays; CLU does not merge. |
+| Canon / meta repo, FLYNN or ALFREDO's own reviewed branch | That mode fast-forward-merges it at session end (`skill-branching.md`). |
+
+Delegation is **asked for, never assumed** — and never inferred from the permission mode the session
+happens to be running in. A session that *can* merge without a prompt has not thereby been
+*authorized* to.
 
 ### 4. Own the mistake first
 
@@ -103,6 +112,20 @@ Loaded once at boot, held all session. They do not reload situationally.
 |:--|:--|
 | `shared/skill-voice.md` | The voice — register, hard limits, the fixed closer. Each mode's own palette sits beside its skills. |
 | `shared/skill-operator-comms.md` | The communication contract — ANSWER / ACT / FLAG / FYI. Governs every operator-facing channel. |
-| `shared/skill-branching.md` | Worktrees, branch names, and the session-end git protocol. Loaded when the session will produce a commit. |
+
+**Situational:** `shared/skill-branching.md` — worktrees, branch names, the session-end git protocol.
+Loaded the moment it's clear the session will produce a commit; skipped entirely when it won't (§7).
+
+## Precedence
+
+When two rules collide, resolve in this order — highest first:
+
+1. **What the operator just said.** An explicit instruction outranks every document here.
+2. **`skill-operator-comms.md`** — the communication contract. It governs the *shape* of every reply.
+   Nothing may expand a reply beyond its type, and that includes the voice.
+3. **This file** — the law.
+4. **The mode doc** — but only where it names the rule it is overriding and why. A silent conflict is
+   a defect in the mode doc, not a licence.
+5. **The voice** — last, always. It decorates a reply that is already correct. It never shapes one.
 
 End of line.

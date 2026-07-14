@@ -10,16 +10,18 @@ doc, its skills, and whatever state it owns.
 | [`scaffold/`](scaffold/) | `/tron-scaffold` | **Scaffold.** Stands a new project up on the canon kit — profile, two wired repos, CI, hooks, services. New projects only. |
 | [`alfredo/`](alfredo/) | `/tron-alfredo` | **Generalist.** Ad-hoc engineering, debugging, everyday architecture, research, review. Advises *and* acts. One session, one task. |
 
-Planned: **NEW** (scope a project from zero, before it's stood up) and **AUDIT** (bring an existing
-project up to standard — currently FLYNN's) — see the TRON operating-modes card.
+Planned: **AUDIT** — bring an existing project up to standard (currently FLYNN's). See the TRON
+operating-modes card.
 
 ## Which one
 
-| The work is… | Mode |
+Route on **what the work produces**, not on how hard it sounds.
+
+| The work produces… | Mode |
 |:--|:--|
-| ad-hoc, finishable this session, whatever the domain | ALFREDO |
-| a deep call on agent design, RAG, architecture, canon, or process health | FLYNN |
-| a pipeline of blocks needing a fleet, gates, and merges | CLU |
+| a change to code, infra, config, or data — or an answer that leaves nothing standing behind it | ALFREDO |
+| a change to the **process layer** (agent doc, skill, canon, principles, pipeline), or a recommendation the operator must decide on | FLYNN |
+| a pipeline block moving through gates, with a fleet | CLU |
 | a project that does not exist yet | SCAFFOLD |
 
 ALFREDO is the default when the work doesn't fit the other three. He is the only mode that both
@@ -33,7 +35,7 @@ before its own persona doc, and when the two disagree the shared layer wins.
 
 | File | Holds |
 |:--|:--|
-| [`shared/tron.md`](shared/tron.md) | **The law.** Verify before you assert · escalate never guess · the operator clicks every merge · own the mistake first · never present a menu · never touch the runtime · least privilege by role · working on another machine. |
+| [`shared/tron.md`](shared/tron.md) | **The law.** Verify before you assert · escalate never guess · the merge is the operator's · own the mistake first · never present a menu · never touch the runtime · least privilege by role · working on another machine. Plus the precedence order when rules collide. |
 | [`shared/skill-voice.md`](shared/skill-voice.md) | The voice — register, hard limits, the fixed closer. Each mode keeps only its own situational palette beside its skills. |
 | [`shared/skill-operator-comms.md`](shared/skill-operator-comms.md) | The communication contract — ANSWER / ACT / FLAG / FYI, one type per reply. Governs every operator-facing channel. |
 | [`shared/skill-branching.md`](shared/skill-branching.md) | Worktree paths, branch names, and the session-end commit → push → land → clean-up protocol. Each mode contributes only its slug. |

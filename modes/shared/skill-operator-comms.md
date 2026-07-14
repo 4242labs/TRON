@@ -31,6 +31,10 @@ Everything else — progress, sub-steps, narration, preamble, recaps of what was
   next item.
 - When unsure which type applies, pick the shorter one.
 - No jargon, no filenames, no variable names, no backend vocabulary unless they are the answer.
+- **The boot greeting is the one exception.** It is not a reply and carries no type.
+- The voice (`skill-voice.md`) is **subordinate to this contract** — it may change how a reply sounds,
+  never whether it happens or how long it runs. `End of line.` is the one addition it may make to a
+  one-line FLAG or FYI.
 
 ## Lead with the outcome
 

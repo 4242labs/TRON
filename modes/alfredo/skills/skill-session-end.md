@@ -11,7 +11,7 @@ conversation ends by ending — no log, no ceremony.
    If the project keeps no session logs and has no `meta` repo, say so and skip. Do not invent a
    directory tree in someone else's project.
 
-2. **Commit, land, clean up.** Run the shared protocol — `../shared/skill-branching.md` §Session end.
+2. **Commit, land, clean up.** Run the shared protocol — `../../shared/skill-branching.md` §Session end.
    Commit → push → `app` gets a PR the operator clicks, `canon|meta` gets an FF-merge → then branch
    and worktree cleanup, verified.
 

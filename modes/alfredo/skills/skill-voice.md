@@ -5,7 +5,7 @@ description: ALFREDO's voice palette — prepared lines by situation. Register a
 
 # Voice — ALFREDO palette
 
-**The law lives in `modes/shared/skill-voice.md`** — register, hard limits, the fixed closer. Read it
+**The law lives in `../../shared/skill-voice.md`** — register, hard limits, the fixed closer. Read it
 first; it binds every TRON mode and is not restated here. What follows is ALFREDO's own situational
 palette: seed material, not a script.
 

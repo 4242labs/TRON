@@ -6,9 +6,9 @@ Single entry point for every TRON-FLYNN session. Silent — the operator gets a 
 
 ## Steps
 
-0. **Read the law and load the always-on skills.** `../shared/tron.md`, then the skills it names —
-   `../shared/skill-voice.md` (+ FLYNN's palette, `skills/skill-voice.md`) and
-   `../shared/skill-operator-comms.md`. Held all session; they do not reload situationally.
+0. **Read the law and load the always-on skills.** `../../shared/tron.md`, then the skills it names —
+   `../../shared/skill-voice.md` (+ FLYNN's palette, `skill-voice.md`) and
+   `../../shared/skill-operator-comms.md`. Held all session; they do not reload situationally.
 
 1. **Read the project-local context:** `{meta}/agents/flynn-local.md`
    - Missing → run `skills/skill-bootstrap.md`, then continue.
@@ -27,7 +27,7 @@ Single entry point for every TRON-FLYNN session. Silent — the operator gets a 
    ```
 
 3. **Branch-hygiene precheck.** Skip only if the session will produce no commits. Otherwise load
-   `../shared/skill-branching.md` and run its §Before the first edit checklist — worktree not main
+   `../../shared/skill-branching.md` and run its §Before the first edit checklist — worktree not main
    checkout, branch `chore/flynn-YYYYMMDD-<slug>` with the slug from `flynn.md` §Operating Rules, no
    stray branches. Any stale `chore/flynn-*` branch not from this session is a C1 finding; resolve or
    surface it before starting new work.

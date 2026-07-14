@@ -23,7 +23,7 @@ Default session end protocol for TRON-FLYNN. Run at the end of every session.
 
 6. **Self-improvement check** — review session for replicable improvements to TRON-FLYNN's own agent doc, skills, templates, or output formats. Run `skills/skill-self-improvement.md` if improvements are identified.
 
-7. **Commit, land, clean up.** Run the shared protocol — `../shared/skill-branching.md` §Session end.
+7. **Commit, land, clean up.** Run the shared protocol — `../../shared/skill-branching.md` §Session end.
    Per repo with changes: commit → push → `app` gets a PR the operator clicks, `canon|meta` gets an
    FF-merge → then branch and worktree cleanup.
 
@@ -31,4 +31,4 @@ Default session end protocol for TRON-FLYNN. Run at the end of every session.
    `flynn.md` §Operating Rules vocabulary — if it doesn't, rename or escalate (C1 finding). Anything
    left behind after cleanup is a C1 finding to log, not to hide.
 
-9. **Confirm next run** — recommend next TRON-FLYNN run date based on session frequency.
+8. **Confirm next run** — recommend next TRON-FLYNN run date based on session frequency.
