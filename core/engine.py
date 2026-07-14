@@ -105,6 +105,8 @@ headless SIM/the rig, never itself durable state.
 """
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -414,7 +416,15 @@ class Engine:
         slots = dict(slots or {})
         if worker_id:
             slots.setdefault("worker_id", worker_id)
-        slots.setdefault("report", self.ctx.p("scripts", "report.sh"))
+            # R6 (block 01-38 T1, ambient identity): a real worker-directed
+            # message points `{report}` at THAT agent's OWN installed,
+            # ambient-identity copy (`workers/<agent_id>/report.sh` —
+            # `Engine._install_agent_channel`, spawn-time) — never the
+            # shared canon template below, and never a typed identity the
+            # agent supplies itself.
+            slots.setdefault("report", self.ctx.agent_report_script(worker_id))
+        else:
+            slots.setdefault("report", self.ctx.p("scripts", "report.sh"))
         slots.setdefault("contract", self.ctx.worker_contract)
 
         if self._renderer is None:
@@ -450,6 +460,42 @@ class Engine:
         jobs.release(worker_id)
         self.log("flow", f"engine: released {worker_id} ({reason})")
 
+    # ── R8 (block 01-38 T2): the operator OUTBOUND transport — real,
+    #     non-stubbed, seam-shaped (a rig/test double overrides this exact
+    #     attribute, never a code branch) ──
+    def _deliver_page(self, case_id, block, detail, worker_id=None, page_id=None):
+        """The real production transport: shells out to `scripts/tg-send.sh`
+        (the transport SEAM the block names) — never requires live creds to
+        BE a real seam: `tg-send.sh` itself degrades to a loud nonzero exit
+        when `.env`/token/chat id are absent, which this reads as an honest
+        `"failed"` receipt, never a silent/default `"delivered"`. Any
+        failure of ANY kind (missing script, timeout, nonzero exit) reads as
+        `"failed"` — this method never raises, and never returns anything
+        outside `{"delivered","failed"}` (`_page_operator`, the caller,
+        already treats any other value as absent/`None`).
+
+        A rig/test double stands in for this ENTIRE method by assigning a
+        replacement onto the live `Engine` INSTANCE (`eng._deliver_page =
+        fake`, the exact pattern `core/opfloor_rig.py` already established
+        for the pre-01-38 stubbed hook) — a plain Python instance attribute
+        shadows this class method automatically, so every existing rig that
+        already does this is unaffected by this method's own existence."""
+        if self.dry:
+            return None
+        try:
+            line = self.emit(
+                vocab.TPL_TG_ESCALATE,
+                f"[TRON]  operator page case={case_id} block={block!r}: {detail}",
+                slots={"worker_id": worker_id or "unassigned", "detail": detail})
+        except Exception:   # noqa: BLE001 — a template/render fault must never block paging
+            line = f"[TRON]  operator page case={case_id} block={block!r}: {detail}"
+        tg = self.ctx.p("scripts", "tg-send.sh")
+        try:
+            r = subprocess.run([tg, line], capture_output=True, text=True, timeout=15)
+        except Exception:   # noqa: BLE001 — missing script, timeout, OSError, ... -> "failed", never a crash
+            return "failed"
+        return "delivered" if r.returncode == 0 else "failed"
+
     # ── duck-typed surface: operator paging (real — a durable, structured
     #     trace + THE FLOOR, wave 17/GAP-A) ──
     def _page_operator(self, case_id, block, detail, worker_id=None,
@@ -463,17 +509,19 @@ class Engine:
         silent shape every other duck-typed hook already has) — as a
         structured event (`operator_page`, the SAME type `engine/
         eventlog.py`'s own closed vocabulary already names for this hand-
-        off) plus a home-log line, THEN reads a delivery RECEIPT off the
-        injected `eng._deliver_page` hook (stubbed like `_to_worker` — no
-        real transport wired this wave; `core/opfloor_rig.py` is what
-        actually exercises delivered vs failed on a real, deterministic
-        clock). An ABSENT hook (production, this wave — a real transport is
-        a LATER wave's concern) or a return value that isn't literally
-        `"delivered"`/`"failed"` reads as `None` (absent) — the SAME "not
-        yet confirmed, keep re-pinging" floor outcome a `"failed"` receipt
-        gets; there is NO default-delivered assumption anywhere in this
-        stack (GAP-A's own bug, made structurally impossible). Returns the
-        receipt so the caller (`core/casestate.py`) can drive THE FLOOR."""
+        off) plus a home-log line, THEN reads a delivery RECEIPT off
+        `eng._deliver_page` — block 01-38 T2's REAL production transport
+        (`scripts/tg-send.sh`, above), a genuine class method now, still
+        read via `getattr`/`callable` so a rig's own INSTANCE-level
+        replacement (`eng._deliver_page = fake_deliver_page`, `core/
+        opfloor_rig.py`'s established pattern — a plain attribute shadows
+        the class method) stands in for it exactly as before this block. A
+        return value that isn't literally `"delivered"`/`"failed"` reads as
+        `None` (absent) — the SAME "not yet confirmed, keep re-pinging"
+        floor outcome a `"failed"` receipt gets; there is NO default-
+        delivered assumption anywhere in this stack (GAP-A's own bug, made
+        structurally impossible). Returns the receipt so the caller
+        (`core/casestate.py`) can drive THE FLOOR."""
         page_id = None
         pages = None
         if manifest is not None:
@@ -528,6 +576,41 @@ class Engine:
             return self._roles_config().select_review_role(typ)
         return self._roles_config().select_build_role()
 
+    # ── R6 (block 01-38 T1): ambient identity — a private per-agent report
+    #     channel, created AT SPAWN, never asserted by the agent itself ──
+    def _install_agent_channel(self, agent_id):
+        """Create `agent_id`'s own private report channel — `inbox/
+        <agent_id>.jsonl` — plus a per-agent COPY of the seeded `report.sh`
+        door at `workers/<agent_id>/report.sh`. NEVER a template
+        substitution: the copy is byte-identical to the seeded source and
+        derives its OWN identity purely from WHERE it is installed (its own
+        `basename`) — nothing here ever writes a typed identity into the
+        script, and nothing the agent does afterward can override it (no
+        argv, no env). A worker physically cannot mint as the architect: it
+        can only ever run ITS OWN copy, which can only ever write to ITS
+        OWN channel.
+
+        Idempotent — `retire_stale_dir` (called just above, by every real
+        caller) already archived any predecessor's dir before this runs; a
+        re-spawn under the SAME agent_id gets a fresh script copy and an
+        EXISTING inbox left exactly as-is (never truncated — the same
+        at-least-once discipline every other inbox in this stack keeps).
+
+        A no-op (inbox dir created, script copy SKIPPED) when this instance
+        ships no seeded `scripts/report.sh` at all — every canon-less
+        `core/*_rig.py` fixture, which never spawns a real agent that would
+        need to invoke it."""
+        os.makedirs(self.ctx.inbox_dir, exist_ok=True)
+        inbox = self.ctx.agent_inbox(agent_id)
+        if not os.path.exists(inbox):
+            open(inbox, "a").close()
+        src = self.ctx.p("scripts", "report.sh")
+        if os.path.isfile(src):
+            dst = self.ctx.agent_report_script(agent_id)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+            os.chmod(dst, os.stat(src).st_mode)
+
     # ── duck-typed surface: the two real process-spawn seams ──
     def _real_spawn(self, wid, role, block):
         if not role:
@@ -537,6 +620,7 @@ class Engine:
         scratch = self.ctx.worker_scratch_dir(wid)
         os.makedirs(scratch, exist_ok=True)
         os.makedirs(self.ctx.worker_dir(wid), exist_ok=True)
+        self._install_agent_channel(wid)
         session_id = str(uuid.uuid4())
         jobs.spawn_runner(wid, self.ctx.worker_dir(wid), session_id, cwd=scratch,
                           model=self._model_for_role(role))

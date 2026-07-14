@@ -99,7 +99,34 @@ class Ctx:
     # ── inboxes (drained each tick) ──
     @property
     def worker_inbox(self):
+        # LEGACY shared inbox (pre-block-01-38): still drained (`core/
+        # snapshot.py::build`) for backward compatibility with pre-existing
+        # `core/*_rig.py` fixtures and the frozen pre-rewrite engine
+        # (`engine/fsm.py`), neither of which block 01-38's own Tasks name.
+        # A REAL spawn (`core/engine.py::Engine._spawn_worker`/
+        # `_spawn_architect`) never writes here — see `inbox_dir`/
+        # `agent_inbox`, below (R6, ambient identity).
         return self.p("worker-inbox.jsonl")
+
+    # ── R6 (block 01-38 T1): per-agent report channels, created at spawn.
+    #    The FILENAME is the sender identity — `core/snapshot.py::build`
+    #    stamps every line drained from here with a sender derived from
+    #    WHICH file it arrived on, never a payload field. Replaces the
+    #    single shared `worker_inbox` (above) for every REAL spawn. ──
+    @property
+    def inbox_dir(self):
+        return self.p("inbox")
+
+    def agent_inbox(self, agent_id):
+        return self.p("inbox", f"{agent_id}.jsonl")
+
+    def agent_report_script(self, agent_id):
+        # The per-agent, ambient-identity copy of `scripts/report.sh` —
+        # installed at spawn (`core/engine.py::Engine._install_agent_
+        # channel`), never templated: it derives its OWN identity purely
+        # from being installed HERE (`workers/<agent_id>/report.sh`), never
+        # from a typed argv or an overridable env value.
+        return self.p("workers", agent_id, "report.sh")
 
     @property
     def operator_inbox(self):

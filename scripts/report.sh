@@ -1,55 +1,64 @@
 #!/usr/bin/env bash
 # report.sh — the worker -> engine channel. A worker runs this to deliver a line
-# to TRON; the engine drains worker-inbox.jsonl every tick and classifies it.
-# There is no LLM TRON session to resume — all worker traffic lands here.
+# to TRON; the engine drains it every tick and classifies it.
 #
-# Usage (from a worker's handover):  report.sh "<worker-id>" "<message>"
+# Block 01-38 (ADR-0012 R6 — identity is ambient, not asserted): a REAL
+# spawned agent runs its OWN installed copy, `<instance>/workers/<agent-id>/
+# report.sh` — byte-identical to this file, copied verbatim at spawn
+# (`core/engine.py::Engine._install_agent_channel`, never templated). That
+# copy carries NO typed worker-id argv and NO overridable env value for its
+# identity: identity comes ENTIRELY from where the copy physically lives —
+# `basename` of its own install directory — so a worker can no longer type
+# a different name and mint as someone else (the D8 hole R6 closes). It
+# writes to that same agent's own private channel, `inbox/<agent-id>.jsonl`
+# — never the shared file below.
 #
-# Block 01-37 (ADR-0012 R1/R2, T2/T3): this script embeds NO vocabulary of its
-# own any more — it loads the GENERATED schema (`core/vocab.py::write_schema`,
-# never hand-committed) a real seed materializes at `<instance>/
-# vocab.schema.json`, next to this script's own `..`. Structured channel
-# (A-2, tron-13): a gate-ladder reply carries its verb as data — the engine
-# resolves it deterministically, no judgment call:
-#   report.sh "<worker-id>" --tag <verb> \
-#             [--block <id>] [--branch <name>] [--type <reviewer-type>] \
+#   report.sh [--tag <verb>] [--block <id>] [--branch <name>] [--type <t>] \
 #             [--triage-id <id>] [--verdict <scope_forward|answer|operator>] \
 #             "<message>"
-# Run `report.sh <worker-id> --schema` to print the legal verb set.
+#   report.sh --schema     # print the legal --tag verb set
 #
-# T1 (01-24 F-1a): flags come BEFORE the message, never after — a trailing `--tag wall`
-# on what was meant as a plain positional message (typically a branch declaration) is
-# the exact fat-finger that opens a false wall, so it is a HARD ERROR here, never
-# silently swallowed into the message text. The canonical branch declaration needs no
-# `--tag` at all: `report.sh "<worker-id>" --branch <name> "<message>"`.
+# LEGACY mode (pre-01-38): a first argument that does NOT start with "--" is
+# read as a SELF-TYPED worker id — `report.sh "<worker-id>" ...` — writing to
+# the single shared `worker-inbox.jsonl`. Kept alive, byte-for-byte
+# unchanged from before this block, ONLY because this one physical file is
+# also the door the frozen pre-rewrite engine (`engine/fsm.py`, its own CI
+# suite: `engine/block_01_24_test.py`/`block_01_29_test.py`) and several
+# pre-01-38 `core/*_rig.py` fixtures already depend on — none of which block
+# 01-38's own Tasks name or touch, and breaking them is out of this block's
+# scope (recorded in the PR body as a deliberate, documented resolution of a
+# real scope tension, never a silent guess). A legal worker id NEVER begins
+# with "--" (the established naming: `engineer-01-02`, `ENG-A`, `REV-code`,
+# the architect's own WID), so the two shapes are unambiguous by
+# construction — no flag/positional collision possible. A REAL `core/
+# engine.py` spawn (this block's own concern) NEVER invokes this script the
+# legacy way; every canon prompt slot (`{report}`) a real agent is ever
+# handed points at ITS OWN ambient copy (`core/engine.py::Engine.emit`),
+# never at this shared source file.
 #
-# T3 (block 01-37): `--kind` is DELETED — dead since 01-31 made every wall
-# architect-first; it no longer changes any routing (confirmed: no `core/*.py`
-# reader of `slots.kind` remains). `--tag verdict --triage-id <id> --verdict
-# <v>` is the architect's own verdict-wire reply (T9), ported from the
-# ADR-0011 salvage lineage.
+# THE DOOR (block 01-37 T3, R2): a `--tag` the generated schema does not
+# know is REFUSED HERE — the legal set is printed and this exits nonzero, so
+# the WORKER sees its own report failed and can retry, in the SAME turn,
+# rather than believing a bad report succeeded. The attempted line is STILL
+# appended to the inbox (never silently discarded) — the engine's own
+# admission door (`core/classify.py`/`core/door.py`) is the SECOND,
+# authoritative check (R2) and is what actually RECORDS the refusal durably
+# and opens a case — this script's own check is a fast, local courtesy only,
+# reading the SAME generated schema, never a second hand-maintained copy.
 #
-# THE DOOR (T3, R2): a `--tag` the generated schema does not know is REFUSED
-# HERE — the legal set is printed and this exits nonzero, so the WORKER sees
-# its own report failed and can retry, in the SAME turn, rather than
-# believing a bad report succeeded (the historical disease: "a bad --tag
-# exits 0 and is dropped downstream"). The attempted line is STILL appended
-# to the inbox (never silently discarded) — the engine's own admission door
-# (`core/classify.py`/`core/door.py`) is the SECOND, authoritative check
-# (R2: "total in both directions, enforced at both ends") and is what
-# actually RECORDS the refusal durably (full text + sender) and opens a
-# case (AC-4) — this script's own check is a fast, local courtesy only,
-# reading the SAME generated schema, never a second hand-maintained copy of
-# the vocabulary.
+# T1 (01-24 F-1a): flags come BEFORE the message, never after — a trailing
+# `--tag wall` on what was meant as a plain positional message (typically a
+# branch declaration) is a HARD ERROR here, never silently swallowed into
+# the message text.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TRON_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-INBOX="$TRON_DIR/worker-inbox.jsonl"
-SCHEMA="$TRON_DIR/vocab.schema.json"
 
 usage() {
-  echo "usage: report.sh <worker-id> [--tag <verb>] [--block <id>] [--branch <name>] [--type <reviewer-type>] [--triage-id <id>] [--verdict <scope_forward|answer|operator>] \"<message>\"" >&2
-  echo "       report.sh <worker-id> --schema     # print the legal --tag verb set" >&2
+  echo "usage (ambient — a real spawned agent's OWN installed copy, workers/<id>/report.sh):" >&2
+  echo "       report.sh [--tag <verb>] [--block <id>] [--branch <name>] [--type <reviewer-type>] [--triage-id <id>] [--verdict <scope_forward|answer|operator>] \"<message>\"" >&2
+  echo "       report.sh --schema     # print the legal --tag verb set" >&2
+  echo "usage (legacy — self-typed worker id, pre-01-38 rigs / the retired engine only):" >&2
+  echo "       report.sh <worker-id> [--tag <verb>] ... \"<message>\"" >&2
   echo "flags must come BEFORE the message, never after." >&2
 }
 
@@ -62,8 +71,47 @@ legal_set() {
   fi
 }
 
-WID="${1:-unknown}"
-shift || true
+if [ "$#" -eq 0 ]; then
+  usage
+  exit 2
+fi
+
+# ── AMBIENT vs LEGACY (block 01-38, R6) — see the header comment above for
+#    the full rationale; detection is unambiguous by construction. ──
+case "${1:-}" in
+  --*) AMBIENT=1 ;;
+  *)   AMBIENT=0 ;;
+esac
+
+if [ "$AMBIENT" -eq 1 ]; then
+  # Walk up from this copy's own directory until the instance root is found
+  # (marked by messages.yaml, always present at instance root —
+  # `engine/ctx.py::messages`) — robust to install depth: `workers/<id>/
+  # report.sh` sits two levels down; the seeded source template this was
+  # copied from (`scripts/report.sh`) sits one.
+  d="$SCRIPT_DIR"
+  while [ "$d" != "/" ] && [ ! -f "$d/messages.yaml" ]; do
+    d="$(dirname "$d")"
+  done
+  if [ ! -f "$d/messages.yaml" ]; then
+    echo "report: ambient invocation but no instance root (messages.yaml) found walking up from $SCRIPT_DIR" >&2
+    exit 3
+  fi
+  TRON_DIR="$d"
+  PARENT_NAME="$(basename "$(dirname "$SCRIPT_DIR")")"
+  if [ "$PARENT_NAME" != "workers" ] && [ "${1:-}" != "--schema" ]; then
+    echo "report: this copy is not installed under <instance>/workers/<agent-id>/ — it carries no ambient identity to report as. Run YOUR OWN spawned copy (the {report} path your SPAWN order named), never this shared template." >&2
+    exit 3
+  fi
+  WID="$(basename "$SCRIPT_DIR")"
+  INBOX="$TRON_DIR/inbox/$WID.jsonl"
+else
+  WID="$1"
+  shift
+  TRON_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  INBOX="$TRON_DIR/worker-inbox.jsonl"
+fi
+SCHEMA="$TRON_DIR/vocab.schema.json"
 
 if [ "${1:-}" = "--schema" ]; then
   legal_set
@@ -111,6 +159,7 @@ if [ -n "$TAG" ] && [ -f "$SCHEMA" ]; then
   fi
 fi
 
+mkdir -p "$(dirname "$INBOX")"
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 jq -cn --arg id "$WID" --arg text "$MSG" --arg at "$TS" \
   --arg tag "$TAG" --arg block "$BLOCK" --arg branch "$BRANCH" --arg rtype "$RTYPE" \
