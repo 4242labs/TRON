@@ -397,14 +397,29 @@ def run_scenario_2():
        "(source=worker.report_refused) — never a direct operator page",
        len(queue_after) == queue_len_before + 1 and triage_job is not None,
        f"queue_before={queue_len_before} queue_after={queue_after}")
+    # block 01-38 T7: a refusal now emits its forensic `door_refusal` event
+    # AND — because it opens an architect-first case — the case FSM's own
+    # `case_opened`/`case_seq_advanced` events follow it in the SAME stream.
+    # So the refusal is no longer the tail; assert its IDENTITY + PAYLOAD
+    # (exactly one door_refusal, full attempted text preserved) AND its
+    # CAUSAL ORDER (it is recorded BEFORE the case it triggered — the record
+    # precedes the effect), never a bare "somewhere in the stream" membership.
+    new_events = eng.events.log[events_before:]
+    refusal_idxs = [i for i, e in enumerate(new_events) if e["type"] == "door_refusal"]
+    opened_idxs = [i for i, e in enumerate(new_events)
+                   if e["type"] == "case_opened"
+                   and e["payload"].get("source") == "worker.report_refused"]
     ok("S2-K4 (FORENSIC-RECORD KILLER — must be GREEN): the refusal was "
-       "recorded durably — the home-log line AND a durable events.event "
-       "record — full attempted text preserved, never reduced to a count",
-       len(eng.events.log) == events_before + 1
-       and eng.events.log[-1]["type"] == "door_refusal"
-       and raw_text_invalid in eng.events.log[-1]["payload"]["raw"]
+       "recorded durably — the home-log line AND EXACTLY ONE durable "
+       "door_refusal events.event with the full attempted text preserved "
+       "(never reduced to a count), recorded BEFORE the architect-first case "
+       "it opened (causal order: record precedes effect)",
+       len(refusal_idxs) == 1
+       and raw_text_invalid in new_events[refusal_idxs[0]]["payload"]["raw"]
+       and len(opened_idxs) == 1
+       and refusal_idxs[0] < opened_idxs[0]
        and any(raw_text_invalid in msg for _ch, msg in eng.log_lines),
-       f"events_tail={eng.events.log[-1:]}")
+       f"new_events={new_events}")
 
     # ── genuine free prose (no tag, no branch) -> refused identically
     #     (T8: structured-only, no free-text judgment behind it at all) ──

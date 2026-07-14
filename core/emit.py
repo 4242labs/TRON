@@ -102,6 +102,46 @@ EFFECTS = dict([
     # version-handshake fail). Acceptance reads the must-be-zero set at zero
     # (R4). The specific counter is named in the event's `counter` field.
     _reg("must_be_zero", "forensic", counter_class="must_be_zero"),
+
+    # ── core/casestate.py — the parked-case FSM (T7 sub-commit 2) ──
+    # The deterministic case-id counter advanced (`manifest["case_seq"]`).
+    _reg("case_seq_advanced", "state"),
+    # A correlation case was parked (raise-and-defer) — the case record minted.
+    _reg("case_opened", "state"),
+    # Opening a case moved the block's own gate to BLOCKED/parked-tagged.
+    _reg("case_gate_parked", "state"),
+    # A block was made re-drivable: its terminal gate and/or a worker record
+    # naming it were dropped (fires once per dropped gate/worker record).
+    _reg("block_redrivable", "state"),
+    # The architect's triage verdict escalated a case to the operator (owner
+    # flip + the FLOOR's first page bookkeeping).
+    _reg("case_escalated_to_operator", "state"),
+    # The architect resolved a case itself (scope_forward/answer) — decided,
+    # never paged.
+    _reg("case_architect_resolved", "state"),
+    # A case record was cleared from `manifest["cases"]` (settled, ≤1 tick).
+    _reg("case_cleared", "state"),
+    # An operator reply settled a case (decision/settled_at/note applied).
+    _reg("case_settled", "state"),
+    # A block was abandoned (added to `manifest["abandoned_blocks"]`).
+    _reg("block_abandoned", "state"),
+    # A landing wall's case auto-resolved on durable trunk truth (ADR-0008).
+    _reg("case_stale_resolved", "state"),
+    # THE FLOOR anchored a case's re-ping backoff clock (first sighting).
+    _reg("case_page_anchored", "state"),
+    # THE FLOOR forced a re-ping (attempts++/receipt/backoff reset).
+    _reg("case_repinged", "state"),
+    # THE FLOOR escalated the CHANNEL after a failed-delivery streak (warning,
+    # still retrying — never terminal).
+    _reg("case_channel_escalated", "state"),
+    # An escalation was recorded in `manifest["escalations"]` (the batched,
+    # operator-readable ledger).
+    _reg("escalation_logged", "state"),
+    # R8 SAFE-PARK-AND-HALT: a proven-dead transport — paging halts for this
+    # case (paired with the `must_be_zero` counter above), full snapshot kept.
+    _reg("case_page_permfailed", "state"),
+    # R8 "seen" receipt: a genuine inbound reply named an open case.
+    _reg("case_seen", "state"),
 ])
 
 

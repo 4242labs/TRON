@@ -187,13 +187,14 @@ def _safe_token(s):
     return "".join(c if (c.isalnum() or c in "-_") else "-" for c in s)
 
 
-def next_case_id(manifest, block, source):
+def next_case_id(eng, manifest, block, source):
     """Mint a deterministic, monotonically-numbered case id — a manifest-
     persisted counter (`manifest["case_seq"]`, incremented exactly once per
-    mint), never `uuid`/`random` (adversary-safe: reproducible across a
-    replay of the SAME manifest history)."""
+    mint via the one emit API — block 01-38 T7), never `uuid`/`random`
+    (adversary-safe: reproducible across a replay of the SAME manifest
+    history)."""
     seq = int(manifest.get("case_seq", 0)) + 1
-    manifest["case_seq"] = seq
+    emit.put(eng, manifest, "case_seq_advanced", (), "case_seq", seq, seq=seq)
     token = _safe_token(block or source)
     return f"case-{token}-{seq}"
 
@@ -219,7 +220,7 @@ def dispatch_excluded_blocks(manifest):
     return parked_blocks(manifest) | set(manifest.get("abandoned_blocks") or [])
 
 
-def _drop_gate_and_worker(manifest, block):
+def _drop_gate_and_worker(eng, manifest, block):
     """The shared 'un-block, re-drivable' mechanism `resume`/`amend`/
     `abandon` all use: drop the block's (now-terminal) gate AND any worker
     record still naming it, so `core/pipeline.py::in_flight_blocks` and
@@ -227,15 +228,18 @@ def _drop_gate_and_worker(manifest, block):
     slate — the NEXT `core/switchboard.py::fill` pass (this same tick, if
     still under `worker_count`, per `core/tick.py`'s own act-before-fill
     ordering) mints a genuinely FRESH dispatch, never a half-resurrected
-    stale `gate_state`."""
+    stale `gate_state`. Both drops route through the one emit API (block
+    01-38 T7): each real drop writes one `block_redrivable` event."""
     if not block:
         return
     gates = manifest.get("gates")
-    if gates is not None:
-        gates.pop(block, None)
+    if gates is not None and block in gates:
+        emit.drop(eng, manifest, "block_redrivable", ("gates",), block,
+                  block=block, what="gate")
     workers = manifest.get("workers") or {}
     for wid in [w for w, rec in workers.items() if rec.get("block") == block]:
-        workers.pop(wid, None)
+        emit.drop(eng, manifest, "block_redrivable", ("workers",), wid,
+                  block=block, worker_id=wid, what="worker")
 
 
 def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
@@ -263,7 +267,7 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
                         f"source={source!r})")
         return None
 
-    cases = manifest.setdefault("cases", {})
+    cases = manifest.get("cases") or {}
 
     if block:
         existing = next((cid for cid, c in cases.items()
@@ -274,12 +278,12 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
                             f"(source={source!r} detail={detail!r} ignored)")
             return existing
 
-    case_id = next_case_id(manifest, block, source)
+    case_id = next_case_id(eng, manifest, block, source)
     gates = manifest.get("gates") or {}
     gate_state = gates.get(block) if block else None
     prev_stage = gate_state.get("stage") if gate_state else None
 
-    cases[case_id] = {
+    emit.put(eng, manifest, "case_opened", ("cases",), case_id, {
         "case_id": case_id,
         "block": block,
         "source": source,          # "worker.wall" | "sentry.cap" | ...
@@ -290,18 +294,19 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
         "opened_at": _now_iso(),
         "prev_stage": prev_stage,
         "owner": "architect",      # wave 18 (GAP-E): architect-first, always
-    }
+    }, case_id=case_id, block=block, source=source)
 
     if gate_state is not None and gate_state.get("stage") not in (gate.STAGE_CLOSED, gate.STAGE_ESCALATED):
-        gate_state["stage"] = gate.STAGE_ESCALATED
-        gate_state["escalation"] = detail
-        gate_state["parked_case"] = case_id
+        emit.patch(eng, manifest, "case_gate_parked", ("gates", block),
+                   {"stage": gate.STAGE_ESCALATED, "escalation": detail,
+                    "parked_case": case_id}, block=block, case_id=case_id)
     elif gate_state is not None:
         # Already terminal (e.g. `core/sentry.py`'s own cap-escalate already
         # set STAGE_ESCALATED before calling here) — just tag it with the
         # case id so a reader can tell a case-carrying escalation apart from
         # a bare one, never re-mutate the stage/escalation fields it just set.
-        gate_state["parked_case"] = case_id
+        emit.patch(eng, manifest, "case_gate_parked", ("gates", block),
+                   {"parked_case": case_id}, block=block, case_id=case_id)
 
     # Evict the worker ONLY when THIS case actually parks the worker's OWN
     # gate (BLOCKED/CLOSED). A worker whose own gate is still IN-FLIGHT is
@@ -388,20 +393,25 @@ def architect_resolve(eng, manifest, case_id, verdict, note=None):
     worker_id = case.get("worker_id")
 
     if verdict == "operator":
-        case["owner"] = "operator"
-        case["architect_verdict"] = verdict
         # Wave 17 (GAP-A): the FIRST page for THIS case — identical shape to
-        # the page `open_case` used to fire itself, pre-wave-18.
+        # the page `open_case` used to fire itself, pre-wave-18. Paged BEFORE
+        # the state flip (the page reads only `case.detail`, never `owner`),
+        # so the owner-flip + first-page paging bookkeeping land as ONE
+        # `case_escalated_to_operator` effect (block 01-38 T7).
         receipt = eng._page_operator(case_id, block, case.get("detail"),
                                      worker_id=worker_id, manifest=manifest)
-        case["paging"] = {
-            "attempts": 1,
-            "consecutive_fail": 0 if receipt == "delivered" else 1,
-            "last_receipt": receipt,
-            "holding_since": None,
-            "channel_escalated": False,
-            "permanently_failed": False,
-        }
+        emit.patch(eng, manifest, "case_escalated_to_operator", ("cases", case_id), {
+            "owner": "operator",
+            "architect_verdict": verdict,
+            "paging": {
+                "attempts": 1,
+                "consecutive_fail": 0 if receipt == "delivered" else 1,
+                "last_receipt": receipt,
+                "holding_since": None,
+                "channel_escalated": False,
+                "permanently_failed": False,
+            },
+        }, case_id=case_id, block=block, receipt=receipt)
         eng.log("flow", f"casestate: architect ESCALATED case {case_id!r} to "
                         f"the OPERATOR (paged, receipt={receipt!r}): "
                         f"{case.get('detail')}")
@@ -409,11 +419,12 @@ def architect_resolve(eng, manifest, case_id, verdict, note=None):
 
     # scope_forward / answer — resolved by the architect ITSELF, the
     # operator is NEVER paged for this case.
-    case["decision"] = verdict
-    case["architect_verdict"] = verdict
-    case["settled_at"] = _now_iso()
+    updates = {"decision": verdict, "architect_verdict": verdict,
+               "settled_at": _now_iso()}
     if note:
-        case["note"] = note
+        updates["note"] = note
+    emit.patch(eng, manifest, "case_architect_resolved", ("cases", case_id),
+               updates, case_id=case_id, verdict=verdict)
 
     if verdict == "answer" and worker_id and not eng.dry:
         eng._to_worker(
@@ -422,11 +433,12 @@ def architect_resolve(eng, manifest, case_id, verdict, note=None):
                     f"guidance, re-drive.",
             "architect.answer")
 
-    _drop_gate_and_worker(manifest, block)
+    _drop_gate_and_worker(eng, manifest, block)
     eng.log("flow", f"casestate: case {case_id!r} ARCHITECT-{verdict.upper()} "
                     f"— block {block!r} un-blocked, re-drivable (fresh gate/"
                     f"re-dispatch next fill), operator NEVER paged")
-    cases.pop(case_id, None)   # cleared, same call — "≤1 tick"
+    emit.drop(eng, manifest, "case_cleared", ("cases",), case_id,
+              case_id=case_id)   # cleared, same call — "≤1 tick"
     return True
 
 
@@ -450,9 +462,8 @@ def open_operator_case(eng, manifest, block, source, detail, worker_id=None, kin
     escalations: a `worker.wall`/`sentry.cap`/liveness-stall for a worker NEVER
     reaches here directly — those always go through `open_case` ->
     `core/architect.py::enqueue_triage` -> `architect_resolve`."""
-    cases = manifest.setdefault("cases", {})
-    case_id = next_case_id(manifest, block, source)
-    cases[case_id] = {
+    case_id = next_case_id(eng, manifest, block, source)
+    emit.put(eng, manifest, "case_opened", ("cases",), case_id, {
         "case_id": case_id,
         "block": block,
         "source": source,
@@ -463,16 +474,16 @@ def open_operator_case(eng, manifest, block, source, detail, worker_id=None, kin
         "opened_at": _now_iso(),
         "owner": "operator",
         "architect_verdict": "operator",
-    }
+    }, case_id=case_id, block=block, source=source)
     receipt = eng._page_operator(case_id, block, detail, worker_id=worker_id, manifest=manifest)
-    cases[case_id]["paging"] = {
+    emit.patch(eng, manifest, "case_escalated_to_operator", ("cases", case_id, "paging"), {
         "attempts": 1,
         "consecutive_fail": 0 if receipt == "delivered" else 1,
         "last_receipt": receipt,
         "holding_since": None,
         "channel_escalated": False,
         "permanently_failed": False,
-    }
+    }, case_id=case_id, block=block, receipt=receipt)
     eng.log("flow", f"casestate: architect verdict=operator minted operator-"
                     f"owned case {case_id!r} (source={source!r}, "
                     f"block={block!r}) — paged (receipt={receipt!r}): {detail}")
@@ -539,18 +550,24 @@ def reping(eng, manifest, now):
         # invariant ("never silently drop an UNANSWERED page") holds.
         if pipeline.stale_landing_wall(manifest, case.get("source"),
                                        case.get("worker_id"), case.get("detail")):
-            case["decision"] = "stale-resolved-on-trunk"
-            case["settled_at"] = _now_iso()
+            emit.patch(eng, manifest, "case_stale_resolved", ("cases", case_id),
+                       {"decision": "stale-resolved-on-trunk",
+                        "settled_at": _now_iso()}, case_id=case_id)
             eng.log("flow", f"casestate: case {case_id!r} STALE-RESOLVED — landing "
                             f"worker.wall block closed on trunk; paging stops, page "
                             f"provably answered by trunk (never an unanswered drop) (ADR-0008)")
             continue
 
-        paging = case.setdefault("paging", {
+        # Every operator-owned case reaching here already carries a full
+        # `paging` record (minted by `architect_resolve`'s operator verdict or
+        # by `open_operator_case`) — this fallback dict is read-only belt-and-
+        # suspenders; the paging record is only ever WRITTEN through the emit
+        # calls below (block 01-38 T7), never mutated in place here.
+        paging = case.get("paging") or {
             "attempts": 0, "consecutive_fail": 0, "last_receipt": None,
             "holding_since": None, "channel_escalated": False,
             "permanently_failed": False,
-        })
+        }
 
         if paging.get("permanently_failed"):
             continue   # R8's SAFE-PARK-AND-HALT: a proven-dead transport —
@@ -567,7 +584,8 @@ def reping(eng, manifest, now):
             # opened, or the first pace() call after) — mirrors sentry's own
             # "just advanced" episode start: anchor the clock, no re-ping
             # counted yet (open_case's own call already sent attempt #1).
-            paging["holding_since"] = now
+            emit.patch(eng, manifest, "case_page_anchored", ("cases", case_id, "paging"),
+                       {"holding_since": now}, case_id=case_id)
             continue
 
         holding = now - paging["holding_since"]
@@ -580,28 +598,33 @@ def reping(eng, manifest, now):
         receipt = eng._page_operator(case_id, case.get("block"), case.get("detail"),
                                      worker_id=case.get("worker_id"), manifest=manifest,
                                      page_kind=page_kind)
-        paging["attempts"] += 1
-        paging["last_receipt"] = receipt
-        paging["holding_since"] = now   # reset the anchor — bounded backoff, never a busy-loop
+        # attempts++/receipt/backoff-reset land as ONE `case_repinged` effect;
+        # `paging` (the live manifest record) reflects it in place so the
+        # threshold reads below see the updated consecutive_fail.
+        base = {"attempts": paging["attempts"] + 1, "last_receipt": receipt,
+                "holding_since": now,   # reset the anchor — bounded backoff, never a busy-loop
+                "consecutive_fail": 0 if receipt == "delivered" else paging["consecutive_fail"] + 1}
+        emit.patch(eng, manifest, "case_repinged", ("cases", case_id, "paging"),
+                   base, case_id=case_id, receipt=receipt)
         repinged.append(case_id)
 
         if receipt == "delivered":
-            paging["consecutive_fail"] = 0
             continue
 
-        paging["consecutive_fail"] += 1
         if paging["consecutive_fail"] >= PAGE_CHANNEL_ESCALATE_AFTER and not paging["channel_escalated"]:
-            paging["channel_escalated"] = True
+            emit.patch(eng, manifest, "case_channel_escalated", ("cases", case_id, "paging"),
+                       {"channel_escalated": True}, case_id=case_id)
             detail = (f"case {case_id!r} (target_block={case.get('block')!r}) — "
                      f"{paging['consecutive_fail']} consecutive failed/absent operator-page "
                      f"deliveries (>= PAGE_CHANNEL_ESCALATE_AFTER={PAGE_CHANNEL_ESCALATE_AFTER}) "
                      f"— CHANNEL escalated (louder paging kind going forward); the case itself "
                      f"stays OPEN, never closed, never marked permanent-fail — WARNING-and-retry, "
                      f"never terminal")
-            manifest.setdefault("escalations", []).append({
+            emit.append(eng, manifest, "escalation_logged", ("escalations",), {
                 "target_block": case.get("block"), "case": case_id,
                 "kind": "operator-page-failed", "level": "warning",
-                "consecutive_fail": paging["consecutive_fail"], "detail": detail, "at": now})
+                "consecutive_fail": paging["consecutive_fail"], "detail": detail, "at": now},
+                case=case_id, level="warning")
             eng.log("operator", f"casestate: CHANNEL ESCALATED for case {case_id!r} — {detail}")
 
         # R8 (block 01-38 T5) — permanent transport failure: a FAR higher
@@ -621,7 +644,12 @@ def reping(eng, manifest, now):
         # attempts stop, never the case's own openness.
         if (paging["consecutive_fail"] >= PAGE_PERMANENT_FAIL_AFTER
                 and not paging["permanently_failed"]):
-            paging["permanently_failed"] = True
+            # Flip permanently_failed FIRST (so the snapshot captures it), THEN
+            # deepcopy, THEN record the halt — the snapshot deliberately holds
+            # the state at the moment delivery was proven dead, without the
+            # halt entry itself (unchanged ordering, now via the emit API).
+            emit.patch(eng, manifest, "case_page_permfailed", ("cases", case_id, "paging"),
+                       {"permanently_failed": True}, case_id=case_id)
             snapshot = copy.deepcopy(manifest)
             halt_detail = (f"case {case_id!r} (target_block={case.get('block')!r}) — "
                           f"{paging['consecutive_fail']} consecutive failed/absent "
@@ -630,11 +658,11 @@ def reping(eng, manifest, now):
                           f"SAFE-PARK-AND-HALT: paging halts for this case (never hammer "
                           f"a dead channel further), the case stays OPEN forever (never a "
                           f"silent drop), a full manifest snapshot is captured durably")
-            manifest.setdefault("safe_park_halts", {})[case_id] = {
+            emit.put(eng, manifest, "case_page_permfailed", ("safe_park_halts",), case_id, {
                 "case_id": case_id, "block": case.get("block"), "detail": halt_detail,
                 "consecutive_fail": paging["consecutive_fail"], "at": now,
                 "snapshot": snapshot,
-            }
+            }, case_id=case_id, block=case.get("block"))
             emit.record(eng, "must_be_zero", counter="operator_page_permanent_fail",
                         case_id=case_id, block=case.get("block"),
                         consecutive_fail=paging["consecutive_fail"])
@@ -661,7 +689,8 @@ def mark_seen(eng, manifest, case_id):
     case = cases.get(case_id)
     if case is None or case.get("seen_at") is not None:
         return
-    case["seen_at"] = _now_iso()
+    emit.put(eng, manifest, "case_seen", ("cases", case_id), "seen_at",
+             _now_iso(), case_id=case_id)
     eng.log("operator", f"casestate: case {case_id!r} marked SEEN — a genuine "
                         f"inbound reply named it (operator-ack, never a "
                         f"transport read receipt)")
@@ -702,19 +731,21 @@ def settle(eng, manifest, case_id, verb, note=None):
                         f"— logged, no-op, case stays open")
         return False
 
-    case["decision"] = verb
-    case["settled_at"] = _now_iso()
+    updates = {"decision": verb, "settled_at": _now_iso()}
     if note:
-        case["note"] = note
+        updates["note"] = note
+    emit.patch(eng, manifest, "case_settled", ("cases", case_id), updates,
+               case_id=case_id, verb=verb)
 
     block = case.get("block")
     worker_id = case.get("worker_id")
 
     if verb == "abandon":
-        abandoned = manifest.setdefault("abandoned_blocks", [])
+        abandoned = manifest.get("abandoned_blocks") or []
         if block and block not in abandoned:
-            abandoned.append(block)
-        _drop_gate_and_worker(manifest, block)
+            emit.append(eng, manifest, "block_abandoned", ("abandoned_blocks",),
+                        block, block=block)
+        _drop_gate_and_worker(eng, manifest, block)
         eng.log("flow", f"casestate: case {case_id!r} ABANDONED — block "
                         f"{block!r} dropped (out of must-reach-done scope, "
                         f"never re-dispatched)")
@@ -725,10 +756,11 @@ def settle(eng, manifest, case_id, verb, note=None):
                 note or f"[TRON]  operator amendment on case {case_id} — "
                         f"see the operator's note and re-drive.",
                 "operator.amend")
-        _drop_gate_and_worker(manifest, block)
+        _drop_gate_and_worker(eng, manifest, block)
         eng.log("flow", f"casestate: case {case_id!r} {verb.upper()}D — block "
                         f"{block!r} un-blocked, re-drivable (fresh gate/"
                         f"re-dispatch next fill)")
 
-    cases.pop(case_id, None)   # cleared, same call — "≤1 tick"
+    emit.drop(eng, manifest, "case_cleared", ("cases",), case_id,
+              case_id=case_id)   # cleared, same call — "≤1 tick"
     return True

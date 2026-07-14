@@ -64,6 +64,18 @@ class _Snap:
         self.manifest = manifest
 
 
+class _RigEvents:
+    """Minimal `.event(type, **payload)` sink (block 01-38 T7) — the shape
+    `core.emit` writes to, matching `core/engine.py::_Events`. casestate now
+    routes every state change through the emit API, so any `eng` handed to it
+    needs this, exactly as the real Engine always has."""
+    def __init__(self):
+        self.log = []
+
+    def event(self, type_, **payload):
+        self.log.append({"type": type_, "payload": payload})
+
+
 class FakeEng:
     """The duck-typed surface `core.liveness.sweep` + `core.casestate.open_case`
     touch — an in-memory stand-in with a DRIVEN clock (`_now`) and a per-worker
@@ -79,6 +91,7 @@ class FakeEng:
         self.orders = []           # (wid, kind, text)
         self.released = []         # wid
         self.pages = []            # (case_id, block, detail)
+        self.events = _RigEvents()   # block 01-38 T7: casestate now emits typed events
 
     def _now(self):
         return self.clock

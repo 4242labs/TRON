@@ -55,6 +55,18 @@ class _Snap:
         self.gates = manifest.setdefault("gates", {})
 
 
+class _RigEvents:
+    """Minimal `.event(type, **payload)` sink (block 01-38 T7) — the shape
+    `core.emit` writes to; casestate now routes every state change through
+    the emit API, so any `eng` handed to it needs this (as the real Engine
+    always has)."""
+    def __init__(self):
+        self.log = []
+
+    def event(self, type_, **payload):
+        self.log.append({"type": type_, "payload": payload})
+
+
 class FakeEng:
     def __init__(self):
         self.dry = False
@@ -64,6 +76,7 @@ class FakeEng:
         self.orders = []
         self.released = []
         self.pages = []
+        self.events = _RigEvents()   # block 01-38 T7: casestate now emits typed events
 
     def _now(self):
         return self.clock

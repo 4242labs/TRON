@@ -93,14 +93,27 @@ class _DuckCtx:
         return os.path.join(self.dir, *parts)
 
 
+class _RigEvents:
+    """Minimal `.event(type, **payload)` sink (block 01-38 T7): casestate's
+    settle path now routes its state changes through the emit API, so the
+    duck eng needs an events sink exactly as the real Engine has."""
+    def __init__(self):
+        self.log = []
+
+    def event(self, type_, **payload):
+        self.log.append({"type": type_, "payload": payload})
+
+
 class _DuckEng:
     """The minimum `eng` surface `_inject_decision` + `settle` (resume/abandon)
     touch: a real-shaped ctx (ONLY for `core.intake`'s own `.p()` — no other
-    `Ctx` surface), `.dry`, and a `.log` sink."""
+    `Ctx` surface), `.dry`, a `.log` sink, and (block 01-38 T7) an `.events`
+    sink casestate's emit-routed settle path writes to."""
     def __init__(self, root):
         self.dry = True
         self.ctx = _DuckCtx(root)
         self.logs = []
+        self.events = _RigEvents()
 
     def log(self, channel, msg):
         self.logs.append((channel, msg))
