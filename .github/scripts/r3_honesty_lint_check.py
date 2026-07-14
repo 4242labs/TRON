@@ -4,58 +4,35 @@
 `core/r3_lint.py` is the R3 honesty lint: a harness may not fabricate a
 sender kind the real door (scripts/report.sh) could never produce, write
 `ctx.operator_inbox` at all (no real operator transport exists yet), nor
-mutate `manifest[...]` state directly. This is the THIRD rebuild. A first
-hostile review proved the original pattern-matched a fingerprint of the one
-known offender (10/10 plain evasions defeated it). A SECOND hostile review
-then proved that rebuild still enumerated the WRITE MECHANISM itself (a
-small, fixed set of shapes: open/write, json.dump, append_jsonl, a shelled
-`>>`) rather than the illegal class — 9/10 further plain evasions (all
-touching a mechanism outside that enumerated set) defeated it too, including
-`print(obj, file=handle)`. A THIRD hostile review then proved that rebuild —
-which correctly inverted deny-by-default for both the write mechanism (any
-call touching a resolved channel) AND the payload — still enumerated which
-variable-BINDING SHAPES it would even attempt to trace: `_collect_all_bindings`
-recorded only a single bare-`Name` `Assign` target and `with ... as name:`,
-so tuple/list unpacking, chained assignment, a `for` loop's target, a walrus
-binding, and an attribute-storage target (`self.dest = ...`) were invisible
-— not denied, silently SKIPPED — so a channel/manifest alias reached through
-any of those five shapes was never even offered to the (already-correct)
-write/payload check. This THIRD rebuild replaces the shape-limited binding
-walk with a generic one that captures every name Python's own grammar can
-bind (see `core/r3_lint.py`'s own docstring: `_flatten_bind_targets` /
-`_collect_all_bindings`), and widens container-unwrapping to `Tuple`/`Set`
-(previously `Dict`/`List` only). Proves, live:
+mutate `manifest[...]` state directly. This is the FOURTH rebuild. Rounds
+one through three each replaced one finite enumeration (write mechanisms,
+then binding shapes) with a bigger finite enumeration, and each time a
+hostile review found the next shape outside it — round three's own binding
+walk still resolved a USE back to the NEAREST prior binding, which a FOURTH
+review broke with if/else and try/except branch shadowing (the nearest
+binding is not always the taint-carrying one), `os.path.*`/`str()`
+reconstruction (taint didn't propagate through an arbitrary call), `IfExp`/
+`BoolOp` (unhandled expression shapes fell through to unresolved-but-
+skipped), `AugAssign` as a binding form, and lambda closures. This FOURTH
+rebuild replaces resolution entirely with a flow-insensitive TAINT UNION
+computed as a monotone fixed point (see `core/r3_lint.py`'s own docstring):
+a name is tainted with a marker's kind if ANY binding anywhere in its own
+lexical scope carries that kind — never "the nearest one" — so a missed
+case can only cause a false RED, never a false GREEN. Proves, live:
 
-  RED (x10)  each of the 10 evasions the FIRST review demonstrated is still
-             caught: a renamed inbox-path variable, a `file=` kwarg path,
-             `json.dump` to the inbox handle, a bare `open()` with no
-             `with`, a same-file helper function hiding the actual write, a
-             `subprocess` shell `>>` append, a `manifest` alias before
-             subscripting, a depth-1 `manifest["cases"] = ...` wholesale
-             overwrite, a `.update()` call instead of a subscript
-             assignment, and a `sender` dict built via a helper call
-             instead of an inline literal.
-  RED (x10)  each of the 10 FURTHER evasions the SECOND review demonstrated
-             is caught: `print(obj, file=handle)`, a chained
-             `pathlib.Path(...).open(...).write(...)`, `.write_text()`,
-             a target-path (not payload) helper-indirection, a
-             `getattr()`-obscured attribute name, `manifest` wrapped in a
-             throwaway `dict` container, `manifest` wrapped in a throwaway
-             `list` container, `manifest` obtained via a same-file helper's
-             `return`, an `os.replace()` tmp-file swap onto the real inbox
-             path, and `io.open` (an `Attribute` call, not the bare `open`
-             Name).
-  RED (x8)   each of the 8 FURTHER evasions the THIRD review demonstrated is
-             caught: a tuple-unpack of a same-file helper's `(path, mode)`
-             return, a plain `path, mode = eng.ctx.worker_inbox, "a"`
-             tuple-assign, a `manifest`-tuple-unpack (`m, _extra =
-             eng.manifest, None`), `manifest` wrapped in a throwaway
-             `tuple` container, a chained assignment
-             (`a = path = eng.ctx.worker_inbox`), an attribute-storage
-             target (`self.dest = eng.ctx.worker_inbox` in `__init__`, used
-             later via `self.dest`), a `for dest in (eng.ctx.worker_inbox,)`
-             loop-target binding, and a walrus binding
-             (`if (p := eng.ctx.worker_inbox):`).
+  RED (x28)  every evasion the first three hostile reviews produced is
+             still caught (10 write-mechanism evasions, 10 further
+             write-mechanism evasions, 8 binding-shape evasions — see
+             each fixture's own inline comment for what it demonstrates).
+  RED (x6)   each of the 6 FOURTH-review evasions is caught: if/else and
+             try/except branch shadowing (`dest = eng.ctx.worker_inbox`
+             bound in one branch, an inert literal in the other — nearest-
+             binding picked the wrong one depending on branch order),
+             `AugAssign` as a binding form (`dest = ""; dest +=
+             eng.ctx.worker_inbox`), a ternary (`IfExp`) and a `BoolOp`
+             (`or`) channel-select, `os.path.dirname`/`basename`/`join`
+             path RECONSTRUCTION (taint through a call, not a name alias),
+             and a lambda closure (`getdest = lambda: eng.ctx.worker_inbox`).
   GREEN      two legal shapes stay clean: a door-only report (worker sender,
              or no sender key at all — report.sh's own shape) written
              straight, AND the identical "helper indirection" MECHANISM used
@@ -350,6 +327,82 @@ def bad(eng):
         with open(p, "a") as fh:
             fh.write(json.dumps(rep) + "\\n")
 ''',
+
+    # ── FOURTH-REVIEW evasions (block 01-40 T1, fourth rebuild) — each one
+    #     defeated the THIRD rebuild's generic-binding-walk-but-NEAREST-
+    #     WINS resolution: `_nearest_assign_value` picked the textually
+    #     nearest/last binding for a name, so an ORDINARY idiom that binds
+    #     the SAME name to a tainted value in one place and an inert value
+    #     in another (if/else, try/except, AugAssign, a ternary/BoolOp
+    #     select, a call-based reconstruction, a lambda closure) could
+    #     silently resolve to the wrong — or no — provenance depending on
+    #     branch order or unhandled expression shape. ──
+
+    "29_augassign_path_build": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    dest = ""
+    dest += eng.ctx.worker_inbox
+    with open(dest, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "30_ifexp_channel_select": '''
+import json
+
+def bad(eng, use_alt=False):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    dest = eng.ctx.worker_inbox if not use_alt else eng.ctx.worker_inbox
+    with open(dest, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "31_boolor_channel_select": '''
+import json
+
+def bad(eng, override=None):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    dest = override or eng.ctx.worker_inbox
+    with open(dest, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "32_ospath_join_reconstruct": '''
+import json, os
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    d = os.path.dirname(eng.ctx.worker_inbox)
+    b = os.path.basename(eng.ctx.worker_inbox)
+    dest = os.path.join(d, b)
+    with open(dest, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "33_lambda_closure": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    getdest = lambda: eng.ctx.worker_inbox
+    with open(getdest(), "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "34_try_except_binding": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    try:
+        dest = eng.ctx.worker_inbox
+    except Exception as e:
+        dest = None
+    with open(dest, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
 }
 
 # ─────────────────────── legal shapes (must stay GREEN) ───────────────────────
@@ -385,7 +438,7 @@ def use_it(tron_ctx):
 def main():
     failed = False
 
-    # ── RED x10: every evasion must still be caught ──
+    # ── RED x34: every evasion must still be caught ──
     for name, fixture in EVASION_FIXTURES.items():
         violations = r3_lint.lint_source(fixture, path=f"<evasion:{name}>")
         if violations:

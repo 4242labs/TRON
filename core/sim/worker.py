@@ -221,8 +221,8 @@ def make_adhoc_doc(root, branch, block, title, created, pipeline_rel=PIPELINE_RE
         f.write(content)
     bpath = os.path.join(root, blocks_rel, f"{block}.md")
     os.makedirs(os.path.dirname(bpath), exist_ok=True)
-    with open(bpath, "w") as f:
-        f.write(ADHOC_BLOCK_DOC.format(block=block, title=title, created=created))
+    with open(bpath, "w") as bf:
+        bf.write(ADHOC_BLOCK_DOC.format(block=block, title=title, created=created))
     _git(["add", "-A"], root)
     _git(["commit", "-m", f"arch(log-review): author adhoc block {block}"], root)
     tip = _git_out(["rev-parse", "HEAD"], root)

@@ -283,6 +283,24 @@ def proof_G_held_is_skipped():
        "rev-02" in (m.get("workers") or {}))
 
 
+def proof_H_page_operator_records_receipt():
+    """`FakeEng._page_operator` is the duck-typed hook `core/casestate.py`
+    (real, unmodified) calls on ANY `eng`-like object when a case escalates
+    to the operator — never exercised by proofs A-G above (none of THIS
+    rig's scenarios escalate that far), so drive it directly here with the
+    SAME in-memory fixture manifest every other proof uses, proving the
+    mock's receipt-recording matches `core/engine.py`'s real, non-stubbed
+    `_page_operator` contract (`manifest["operator_pages"][page_id]`)."""
+    eng = FakeEng()
+    m = {}
+    receipt = eng._page_operator("case-page-1", "b1", "detail", manifest=m)
+    ok("H1: _page_operator returns the same 'delivered' receipt the real door's hook does",
+       receipt == "delivered", f"receipt={receipt}")
+    ok("H2: _page_operator durably records the page under manifest['operator_pages'], "
+       "mirroring core/engine.py's real (non-stubbed) hook",
+       bool((m.get("operator_pages") or {})), f"operator_pages={m.get('operator_pages')}")
+
+
 def _source_clean():
     src = open(os.path.join(HERE, "liveness.py")).read()
     # real USAGE, not the docstring's own "no git/subprocess" prose
@@ -294,6 +312,7 @@ def main():
     _install_fixed_knobs()
     proof_A(); proof_B(); proof_C(); proof_D(); proof_E()
     proof_F_reviewing_is_paced(); proof_G_held_is_skipped()
+    proof_H_page_operator_records_receipt()
     ok("SRC: core/liveness.py still shells out to no raw git/subprocess of its own",
        _source_clean())
 

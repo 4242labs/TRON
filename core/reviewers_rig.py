@@ -277,12 +277,12 @@ def make_adhoc_doc(root, branch, block, title):
     _git(["checkout", "-B", branch, MAIN], root)
     ppath = os.path.join(root, PIPELINE_REL)
     with open(ppath) as f:
-        content = f.read()
+        original = f.read()
     row = ADHOC_ROW_TEMPLATE.format(block=block, title=title)
-    if "## Ad-hoc" not in content:
-        content = content.rstrip("\n") + "\n" + ADHOC_PIPELINE_SECTION + row
+    if "## Ad-hoc" not in original:
+        content = original.rstrip("\n") + "\n" + ADHOC_PIPELINE_SECTION + row
     else:
-        lines = content.splitlines(keepends=True)
+        lines = original.splitlines(keepends=True)
         idx = next(i for i, l in enumerate(lines) if l.strip().startswith("## Ad-hoc"))
         j = idx + 1
         while j < len(lines) and not lines[j].strip().startswith("|:"):
@@ -293,8 +293,8 @@ def make_adhoc_doc(root, branch, block, title):
         f.write(content)
     bpath = os.path.join(root, BLOCKS_REL, f"{block}.md")
     os.makedirs(os.path.dirname(bpath), exist_ok=True)
-    with open(bpath, "w") as f:
-        f.write(ADHOC_BLOCK_DOC_TEMPLATE.format(block=block, title=title))
+    with open(bpath, "w") as bf:
+        bf.write(ADHOC_BLOCK_DOC_TEMPLATE.format(block=block, title=title))
     _git(["add", "-A"], root)
     _git(["commit", "-m", f"arch(log-review): author adhoc block {block}"], root)
     tip = _git_out(["rev-parse", "HEAD"], root)
