@@ -20,14 +20,48 @@ A malformed flow must fail at seed/validate time, not at runtime. Two layers:
   VERSION (M-06) — the instance's stamped `project.yaml.tron_version` against its
     own copied canon `VERSION`: any gap means a partial/manual patch, not a full seed.
 
+  VOCAB (block 01-37, ADR-0012 §2 R1/R2 T2/T5) — the CORE engine's (`core/*.py`)
+    OWN closed vocabulary, `core/vocab.py`, a SEPARATE and narrower document from
+    the CANON tags above (which police `engine/fsm.py`'s own, broader,
+    still-load-bearing tag set — see `core/vocab.py`'s own module docstring for
+    why the two are not merged in this block): every outbound `core/engine.py::
+    emit` call site references an imported `vocab.TPL_*` constant, never a
+    literal string · every `vocab.TPL_*` constant names a real `messages.yaml`
+    template id (drift, either direction) · a seeded instance's generated
+    `vocab.schema.json` (when present) has not drifted from a fresh regen of
+    `core/vocab.py`.
+
 Wired into `engine.py doctor` / `validate`. Grammar-driven: the legal token set
 is read FROM routing.yaml, so the rules check internal consistency rather than a
 hardcoded duplicate.
 """
+import importlib.util
 import os
 import re
 
 import util
+
+
+def _load_core_vocab():
+    """`core/vocab.py`, loaded WITHOUT ever putting `core/` onto `sys.path`
+    — that directory ships its OWN `state.py`/`gitobs.py`/... bare modules
+    that would silently SHADOW `engine/`'s same-named modules the moment
+    `engine/fsm.py`'s own `from state import State, ...` resolves (this
+    module is imported by `engine/engine.py` before anything else runs, so
+    a plain `sys.path.insert` here would break the OLD engine's own import
+    resolution — the exact cross-engine collision `core/vocab.py`'s own
+    module docstring warns about). `importlib.util.spec_from_file_location`
+    loads it as a uniquely-named module instead — no path pollution, no
+    collision, regardless of import order."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "core", "vocab.py")
+    spec = importlib.util.spec_from_file_location("_core_vocab_for_lint", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+vocab = _load_core_vocab()   # noqa: E402 — core/vocab.py, block 01-37's closed CORE-engine vocabulary
 # Engine table + class — module-level, no Engine instance needed (fsm exposes TABLE).
 from fsm import TABLE, Engine
 
@@ -560,6 +594,101 @@ def _version(ctx, project):
     return [Result("L18 version stamp matches canon", True)]
 
 
+# ── VOCAB rules (block 01-37, T2/T5) — the CORE (`core/*.py`) engine's own
+#    closed vocabulary, `core/vocab.py`. See this module's own docstring
+#    for why these are additive to, never a replacement of, the CANON rules
+#    above (which still police `engine/fsm.py`'s separate, broader tag set). ──
+def _core_source_files():
+    """Every `core/*.py` module — glob, never a hand-kept list, so a new
+    module is scanned the day it lands. Mirrors `_engine_source_files`'s
+    own idiom for the `engine/` tree."""
+    import glob
+    core_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core")
+    return sorted(glob.glob(os.path.join(core_dir, "*.py")))
+
+
+def _emit_id_lint():
+    # L27 (block 01-37 T5/AC-6): every `.emit(` call site's first positional
+    # arg (the `template_id`) must be an imported `vocab.TPL_*` reference,
+    # never a literal string — a typo/removed template must fail at THIS
+    # call, not fall through to the (deleted) silent `fallback_text` swallow.
+    # Source-grep over every `core/*.py` module (never auto-corrected — a
+    # violation here is a real call-site bug to fix by hand).
+    call_re = re.compile(r"""\.emit\(\s*["']([a-z][a-z0-9_.]*)["']""")
+    violations = []
+    for path in _core_source_files():
+        with open(path, encoding="utf-8") as fh:
+            for i, line in enumerate(fh, 1):
+                if line.strip().startswith("#"):
+                    continue
+                m = call_re.search(line)
+                if m:
+                    violations.append(f"{path}:{i}: literal emit template id "
+                                      f"{m.group(1)!r} — reference a vocab.TPL_* "
+                                      f"constant instead: {line.strip()}")
+    return [Result("L27 emit call sites reference vocab.TPL_* constants, "
+                   "never a literal id", not violations, "; ".join(violations))]
+
+
+def emit_id_lint(paths):
+    """Callable directly with an explicit file list (mirrors `content_field_
+    lint`'s own shape) — the RED/GREEN CI proof (`.github/scripts/
+    vocab_lint_check.py`) scans an isolated fixture file without touching
+    the real tree. Returns `(ok, violations)`."""
+    call_re = re.compile(r"""\.emit\(\s*["']([a-z][a-z0-9_.]*)["']""")
+    violations = []
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            for i, line in enumerate(fh, 1):
+                if line.strip().startswith("#"):
+                    continue
+                m = call_re.search(line)
+                if m:
+                    violations.append(f"{path}:{i}: literal emit template id "
+                                      f"{m.group(1)!r}: {line.strip()}")
+    return not violations, violations
+
+
+def _vocab_messages_sync(ctx):
+    # L28 (block 01-37 T5) — every `vocab.TPL_*` constant names a REAL
+    # `messages.yaml` template id, in BOTH directions: a `vocab.py` constant
+    # with no matching `messages.yaml` entry is a typo/dead constant; a
+    # worker-facing `messages.yaml` template with no `vocab.py` constant is
+    # an un-imported emit id waiting to be hand-typed as a literal (the
+    # exact disease L27 forbids at the call site).
+    msgs = (util.load_yaml(ctx.messages) or {}).get("templates", {}) \
+        if os.path.exists(ctx.messages) else {}
+    known = set(msgs.keys())
+    extra = sorted(vocab.EMIT_TEMPLATE_IDS - known)
+    missing = sorted(known - vocab.EMIT_TEMPLATE_IDS)
+    d = []
+    if extra:
+        d.append(f"vocab.TPL_* names no messages.yaml template: {extra}")
+    if missing:
+        d.append(f"messages.yaml template(s) with no vocab.py constant: {missing}")
+    return [Result("L28 vocab.py emit ids <-> messages.yaml templates in sync",
+                   not d, "; ".join(d))]
+
+
+def _vocab_schema_freshness(ctx):
+    # L29 (block 01-37 T2/AC-2) — the CI regen/diff gate: a SEEDED instance's
+    # generated `vocab.schema.json` (`core/vocab.py::write_schema`, never
+    # hand-committed) must never drift from a fresh regen of the live
+    # `core/vocab.py`. No schema file at all (a repo-root canon self-lint,
+    # or a pre-block-01-37 instance) is skipped here — mirrors L13/L18's own
+    # "nothing to check yet" discipline; AC-3's version handshake (`core/
+    # engine.py::Engine.start`) is the loud, unskippable gate for a REAL
+    # session boot.
+    path = ctx.p("vocab.schema.json") if hasattr(ctx, "p") else None
+    if not path or not os.path.exists(path):
+        return [Result("L29 vocab schema matches a fresh regen (no drift)", True,
+                       "(no seeded vocab.schema.json — skipped)")]
+    ok, detail = vocab.schema_diff(path)
+    return [Result("L29 vocab schema matches a fresh regen (no drift)", ok, detail)]
+
+
 def run(ctx, project=None):
     """Full lint. Returns (ok, results). project optional (L13 skipped if absent)."""
     routing = ctx.load_routing()
@@ -570,7 +699,9 @@ def run(ctx, project=None):
                + _version(ctx, project) + _reply_contract(ctx)
                + _reply_prefixes(ctx) + _emit_only_renders(ctx)
                + _admission_table(ctx, routing) + _paperwork_sanity(project)
-               + _worker_contract(ctx) + _content_integrity())
+               + _worker_contract(ctx) + _content_integrity()
+               + _emit_id_lint() + _vocab_messages_sync(ctx)
+               + _vocab_schema_freshness(ctx))
     return all(x.ok for x in results), results
 
 

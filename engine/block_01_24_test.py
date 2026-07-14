@@ -202,22 +202,31 @@ def ac1_flag_looking_token_inside_the_quoted_message_is_never_flagged():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def ac1_kind_modifier_rides_before_the_message_like_branch_and_block():
-    # F2 (MAJOR, review cycle 1): report.sh had NO way to carry a wall's declared kind —
-    # AC-4's architect kind-routing was unreachable through the structured path the
-    # spec requires (fsm.py read `kind` only from LLM free-text classification). --kind
-    # is a MODIFIER: it rides exactly like --branch/--block, flags-before-message, and
-    # lands in the inbox line's structured slots.
+def ac1_kind_modifier_is_deleted_block_01_37_t3():
+    # F2 (MAJOR, review cycle 1) minted --kind; block 01-37 T3 DELETES it —
+    # confirmed dead by the SAME reasoning F2's own routing rests on: 01-31
+    # made every wall architect-first regardless of kind, so by the time
+    # this test suite's own AC-4 (below) runs, a kind-carrying wall and a
+    # kind-less wall already route IDENTICALLY — --kind never changed
+    # routing again after 01-31, only rode as inert data. `scripts/
+    # report.sh` (block 01-37) no longer recognizes it as a flag at all: an
+    # unrecognized token ends the flag-parsing prefix (the SAME "flags
+    # before message" rule any bare word does) and everything from that
+    # point on, including the literal string "--kind", becomes part of the
+    # free-text message — never a structured slot, never a hard error.
     d, script = _report_sandbox()
     try:
         r = _run_report(script, "ENG-A", "--tag", "wall", "--kind", "scope",
                         "which schema version — v1 or v2?")
-        ok("F2 --tag wall --kind scope succeeds", r.returncode == 0,
-           f"rc={r.returncode} stderr={r.stderr!r}")
+        ok("F2 (T3) --tag wall --kind scope still succeeds (report.sh never "
+           "hard-errors on an unrecognized bare token — it just isn't a flag "
+           "any more)", r.returncode == 0, f"rc={r.returncode} stderr={r.stderr!r}")
         lines = _inbox_lines(d)
-        ok("F2 the declared kind lands in slots.kind — the structured DATA path, "
-           "never prose", len(lines) == 1 and lines[0].get("tag") == "wall"
-           and lines[0].get("slots", {}).get("kind") == "scope", f"lines={lines}")
+        ok("F2 (T3) --kind is GONE: no slots.kind key anywhere — 'kind' and "
+           "'scope' are absorbed into the free-text message instead",
+           len(lines) == 1 and lines[0].get("tag") == "wall"
+           and "kind" not in lines[0].get("slots", {})
+           and "--kind scope" in lines[0].get("text", ""), f"lines={lines}")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -235,15 +244,23 @@ def ac1_no_kind_modifier_leaves_slots_unchanged_default_unaffected():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def ac1_kind_after_the_message_is_rejected_same_hard_error_as_every_other_flag():
+def ac1_kind_after_the_message_is_now_ordinary_text_block_01_37_t3():
+    # (T3) --kind is deleted from the recognized flag set entirely, so a
+    # TRAILING "--kind scope" is no longer flagged by the flags-after-
+    # message guard either (that guard only scans for the flags report.sh
+    # still recognizes) — it is simply more free-text message content,
+    # exactly like any other trailing prose would be.
     d, script = _report_sandbox()
     try:
         r = _run_report(script, "ENG-A", "--tag", "wall", "stuck", "--kind", "scope")
-        ok("F2 --kind AFTER the message is the same flags-after-message hard error",
-           r.returncode != 0 and "flags must come before" in r.stderr.lower(),
-           f"rc={r.returncode} stderr={r.stderr!r}")
-        ok("F2 the malformed --kind-after-message form never reaches the inbox",
-           _inbox_lines(d) == [], f"inbox={_inbox_lines(d)}")
+        ok("F2 (T3) a trailing --kind is no longer a hard error (it isn't a "
+           "recognized flag any more) — the report still succeeds",
+           r.returncode == 0, f"rc={r.returncode} stderr={r.stderr!r}")
+        lines = _inbox_lines(d)
+        ok("F2 (T3) the trailing '--kind scope' landed as ordinary message "
+           "text, never a structured slot",
+           len(lines) == 1 and "kind" not in lines[0].get("slots", {})
+           and "--kind scope" in lines[0].get("text", ""), f"lines={lines}")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

@@ -3994,9 +3994,18 @@ class Engine:
             self.emit("arch.reconcile", {"block": job["block"], "after": job.get("after", "")},
                       worker_id=awid)
         elif job["kind"] == "triage":
+            # block 01-37 (T11): `prompts/PMT-TRIAGE.md` is SHARED canon with
+            # the core/*.py rewrite's own verdict wire and now names a
+            # `{triage_id}` slot in its body (the exact `--triage-id`
+            # reply command). This engine's own triage job carries no such
+            # correlation id (a different, pre-existing mechanism, never
+            # wired to `--tag verdict`) — supply a cosmetic value so the
+            # SHARED template still renders; this engine never reads a
+            # `--triage-id` reply back, so the exact value is inert here.
             self.emit("arch.triage",
                       {"detail": self._triage_detail(job),
-                       "sender": job.get("sender") or "the sender"},
+                       "sender": job.get("sender") or "the sender",
+                       "triage_id": job.get("case") or "n/a"},
                       worker_id=awid)
         else:                                             # log-review -> remediation blocks
             self.emit("arch.remediation", {"type": job.get("type", "code")}, worker_id=awid)
