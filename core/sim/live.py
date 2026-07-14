@@ -78,6 +78,7 @@ import state                       # noqa: E402 — core/state.py
 import gitobs                       # noqa: E402 — core/gitobs.py, the ONE git-observation seam
 import real_tier                    # noqa: E402 — core/sim/real_tier.py, the real host-cli spawn wiring
 import architect                    # noqa: E402 — core/architect.py, ARCHITECT_WID (courier the architect too)
+import intake                        # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 from operator_proxy import tick as operator_proxy_tick   # noqa: E402 — core/sim/operator_proxy.py, moderate-tier LLM operator (ADR-0007)
 # the real-scaffold copy + live-instance seed, reused verbatim (never re-derived)
 from boot_real_scaffold_rig import copy_real_scaffold, seed_live_instance   # noqa: E402
@@ -281,13 +282,15 @@ def _courier(eng, manifest, delivered):
     Delivery must NOT depend on the LLM choosing to run `report.sh` (a real
     agent replies in prose instead — the tron-06 wall). So each loop, read
     every worker's `timeline.jsonl` `turn_done` events and append any not-yet-
-    delivered turn text to `ctx.worker_inbox` as a free-text `{text, sender}`
-    report — exactly the shape `report.sh` free-text produces, which
-    `core.classify` then resolves. A structured `report.sh --tag` line (when
-    the agent DID run it) still lands directly and its deterministic tag wins;
-    the courier is the robust fallback, never the only path. `delivered` (a
-    set of `(wid, seq)`) dedupes across loops so a turn is couriered once."""
-    inbox = eng.ctx.worker_inbox
+    delivered turn text to that worker's OWN private intake (`core.intake`,
+    block 01-38 T1 — the courier knows exactly which `wid` it is harvesting,
+    a durable engine-side record, never a claim) as a free-text `{text,
+    sender}` report — exactly the shape `report.sh` free-text produces,
+    which `core.classify` then resolves. A structured `report.sh --tag`
+    line (when the agent DID run it) still lands directly, in the SAME
+    intake, and its deterministic tag wins; the courier is the robust
+    fallback, never the only path. `delivered` (a set of `(wid, seq)`)
+    dedupes across loops so a turn is couriered once."""
     workers = manifest.get("workers") or {}
     # Harvest the persistent ARCHITECT too — it is pool-EXCLUDED (never in
     # manifest["workers"]), so a workers-only loop would never deliver its
@@ -323,9 +326,8 @@ def _courier(eng, manifest, delivered):
             if not text:
                 continue
             try:
-                with open(inbox, "a") as ib:
-                    ib.write(json.dumps({"text": text,
-                                         "sender": {"kind": "worker", "id": wid}}) + "\n")
+                intake.write(eng.ctx, wid,
+                            {"text": text, "sender": {"kind": "worker", "id": wid}})
                 couriered += 1
             except OSError:
                 pass

@@ -112,6 +112,8 @@ import casestate              # noqa: E402 — core/casestate.py, the recovery p
 import liveness                # noqa: E402 — core/liveness.py, the module under test
 import state                 # noqa: E402 — core/state.py
 import tick                  # noqa: E402 — core/tick.py, wired to call liveness.sweep after route
+import intake                 # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import vocab                    # noqa: E402 — core/vocab.py, the OPERATOR pseudo-agent-id
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -439,7 +441,7 @@ def main():
         # replacement; any legal structured tag proves liveness here
         # (`liveness.touch` only cares that a well-formed report carried
         # this agent_id, never which specific tag).
-        append_jsonl(tron_ctx.worker_inbox, {"tag": "worker.flag", "agent_id": agent_id})
+        intake.write(tron_ctx, agent_id, {"tag": "worker.flag", "agent_id": agent_id})
 
     def try_land(block, s, branch, case_id, role):
         """Run the REAL `land.sh`; on a genuine "not a fast-forward" refusal
@@ -489,7 +491,7 @@ def main():
         if w and w.get("status") == "spawning" and not s["branch_created"]:
             make_code_commit(root, branch, code_files[block], f"{block}-real-progress")
             s["branch_created"] = True
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, agent_id,
                         {"tag": "worker.online", "agent_id": agent_id, "slots": {"branch": branch}})
 
         if w is not None:
@@ -501,7 +503,7 @@ def main():
         stage = g.get("stage")
 
         if stage == gate.STAGE_LOCAL and not s["local_reported"]:
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, agent_id,
                         {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
             s["local_reported"] = True
         elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
@@ -541,7 +543,7 @@ def main():
         cur = arch.get("current_job")
         if (cur and cur.get("kind") == "triage" and cur.get("ordered")
                 and cur.get("triage_id") not in triage_answered):
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.triage_verdict",
                          "triage_id": cur["triage_id"], "verdict": "operator",
                          "agent_id": architect.ARCHITECT_WID})
@@ -577,7 +579,7 @@ def main():
         # instead of guessing a fixed extra tick count.
         if case.get("owner") != "operator":
             return
-        append_jsonl(tron_ctx.worker_inbox,
+        intake.write(tron_ctx, vocab.OPERATOR,
                     {"tag": "operator.decision",
                      "slots": {"case_id": case["case_id"], "verb": "resume"}})
         resume_sent["at_tick"] = i
@@ -810,7 +812,7 @@ def main():
 
     cases_before_injection = len(reset_manifest.get("cases") or {})
     counter_before = (reset_manifest.get("counters") or {}).get("router_catch_all", 0)
-    append_jsonl(tron_ctx.worker_inbox,
+    intake.write(tron_ctx, "not-a-real-worker",
                 {"tag": "worker.stalled", "agent_id": "not-a-real-worker",
                  "block": "not-a-real-block", "slots": {"detail": "adversarial inbound tag"}})
     tick.tick(eng)   # drains it — must never be routed as a REAL engine-declared stall

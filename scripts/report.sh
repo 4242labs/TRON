@@ -1,9 +1,25 @@
 #!/usr/bin/env bash
-# report.sh — the worker -> engine channel. A worker runs this to deliver a line
-# to TRON; the engine drains worker-inbox.jsonl every tick and classifies it.
-# There is no LLM TRON session to resume — all worker traffic lands here.
+# report.sh — the worker -> engine channel. A worker runs this to deliver a
+# line to TRON; the engine drains every agent's own PRIVATE INTAKE every
+# tick and classifies it (block 01-38 T1 — the root invariant: the single
+# shared worker-inbox.jsonl drop-box is GONE from the engine's live path,
+# deleted, not sanitized). There is no LLM TRON session to resume — all
+# worker traffic lands here.
 #
-# Usage (from a worker's handover):  report.sh "<worker-id>" "<message>"
+# Usage (from a worker's handover):  report.sh --intake <path> "<worker-id>" "<message>"
+#
+# Block 01-38 T1: `--intake <path>` is the ONE thing that decides which
+# file this line lands in — never the `<worker-id>` positional that
+# follows it (kept ONLY for the JSON payload's own `sender.id`/logging;
+# core/vocab.py's payload fallback that trusts it as identity is deleted
+# in T2, not this script). `--intake` is handed to this script BAKED INTO
+# THE COMMAND LINE the engine renders (`core/engine.py::Engine.emit`'s
+# `{report}` slot) — the canon prompt text a worker is ever taught never
+# changes (still `bash {report} {worker_id} "<message>"`); this script
+# never accepts, guesses, or falls back to any OTHER intake: `--intake` is
+# REQUIRED (a bare worker-id can no longer, by itself, name where a line
+# lands — that IS the fix). This is what "the reporting script is handed
+# only its own intake and can name no one" means in practice.
 #
 # Block 01-37 (ADR-0012 R1/R2, T2/T3): this script embeds NO vocabulary of its
 # own any more — it loads the GENERATED schema (`core/vocab.py::write_schema`,
@@ -11,17 +27,17 @@
 # vocab.schema.json`, next to this script's own `..`. Structured channel
 # (A-2, tron-13): a gate-ladder reply carries its verb as data — the engine
 # resolves it deterministically, no judgment call:
-#   report.sh "<worker-id>" --tag <verb> \
+#   report.sh --intake <path> "<worker-id>" --tag <verb> \
 #             [--block <id>] [--branch <name>] [--type <reviewer-type>] \
 #             [--triage-id <id>] [--verdict <scope_forward|answer|operator>] \
 #             "<message>"
-# Run `report.sh <worker-id> --schema` to print the legal verb set.
+# Run `report.sh --schema` (no intake/worker-id needed) to print the legal verb set.
 #
 # T1 (01-24 F-1a): flags come BEFORE the message, never after — a trailing `--tag wall`
 # on what was meant as a plain positional message (typically a branch declaration) is
 # the exact fat-finger that opens a false wall, so it is a HARD ERROR here, never
 # silently swallowed into the message text. The canonical branch declaration needs no
-# `--tag` at all: `report.sh "<worker-id>" --branch <name> "<message>"`.
+# `--tag` at all: `report.sh --intake <path> "<worker-id>" --branch <name> "<message>"`.
 #
 # T3 (block 01-37): `--kind` is DELETED — dead since 01-31 made every wall
 # architect-first; it no longer changes any routing (confirmed: no `core/*.py`
@@ -34,7 +50,7 @@
 # its own report failed and can retry, in the SAME turn, rather than
 # believing a bad report succeeded (the historical disease: "a bad --tag
 # exits 0 and is dropped downstream"). The attempted line is STILL appended
-# to the inbox (never silently discarded) — the engine's own admission door
+# to the intake (never silently discarded) — the engine's own admission door
 # (`core/classify.py`/`core/door.py`) is the SECOND, authoritative check
 # (R2: "total in both directions, enforced at both ends") and is what
 # actually RECORDS the refusal durably (full text + sender) and opens a
@@ -44,13 +60,13 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRON_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-INBOX="$TRON_DIR/worker-inbox.jsonl"
 SCHEMA="$TRON_DIR/vocab.schema.json"
 
 usage() {
-  echo "usage: report.sh <worker-id> [--tag <verb>] [--block <id>] [--branch <name>] [--type <reviewer-type>] [--triage-id <id>] [--verdict <scope_forward|answer|operator>] \"<message>\"" >&2
-  echo "       report.sh <worker-id> --schema     # print the legal --tag verb set" >&2
-  echo "flags must come BEFORE the message, never after." >&2
+  echo "usage: report.sh --intake <path> <worker-id> [--tag <verb>] [--block <id>] [--branch <name>] [--type <reviewer-type>] [--triage-id <id>] [--verdict <scope_forward|answer|operator>] \"<message>\"" >&2
+  echo "       report.sh --schema     # print the legal --tag verb set (no intake needed)" >&2
+  echo "flags must come BEFORE the message, never after. --intake is REQUIRED — this" >&2
+  echo "script never guesses or falls back to any other agent's intake." >&2
 }
 
 legal_set() {
@@ -61,6 +77,30 @@ legal_set() {
     echo "  (no generated schema at $SCHEMA — this instance was not seeded under block 01-37's door; every --tag is accepted unchecked)" >&2
   fi
 }
+
+if [ "${1:-}" = "--schema" ]; then
+  # Pure introspection — no identity needed at all (matches the pre-01-38
+  # `report.sh <worker-id> --schema` shape's own "doesn't use WID" intent,
+  # just without requiring a placeholder worker-id/intake first).
+  legal_set
+  exit 0
+fi
+
+# Block 01-38 T1 (the root invariant) — `--intake <path>` is the ONE thing
+# that decides which file this line lands in; REQUIRED, never guessed,
+# never derived from the worker-id positional that follows it.
+INTAKE=""
+if [ "${1:-}" = "--intake" ]; then
+  INTAKE="${2:-}"
+  shift 2 || true
+fi
+if [ -z "$INTAKE" ]; then
+  echo "report: --intake <path> is REQUIRED (must be the FIRST argument) — this" >&2
+  echo "script must be invoked exactly as the engine rendered it; a worker-id" >&2
+  echo "can no longer, by itself, name where a report lands." >&2
+  usage
+  exit 2
+fi
 
 WID="${1:-unknown}"
 shift || true
@@ -111,6 +151,8 @@ if [ -n "$TAG" ] && [ -f "$SCHEMA" ]; then
   fi
 fi
 
+mkdir -p "$(dirname "$INTAKE")"
+
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 jq -cn --arg id "$WID" --arg text "$MSG" --arg at "$TS" \
   --arg tag "$TAG" --arg block "$BLOCK" --arg branch "$BRANCH" --arg rtype "$RTYPE" \
@@ -124,7 +166,7 @@ jq -cn --arg id "$WID" --arg text "$MSG" --arg at "$TS" \
                + (if $rtype != "" then {type:$rtype} else {} end)
                + (if $triage_id != "" then {triage_id:$triage_id} else {} end)
                + (if $verdict != "" then {verdict:$verdict} else {} end))}
-      else {} end)' >> "$INBOX"
+      else {} end)' >> "$INTAKE"
 
 # The attempted line is ALWAYS appended above (never silently discarded —
 # the engine's own door records + cases a genuine refusal, AC-4) — but a

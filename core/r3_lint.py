@@ -1,14 +1,41 @@
 """r3_lint — R3 honesty lint (ADR-0012 §2 R3 / block 01-40 T1).
 
+KNOWN GAP OPENED BY BLOCK 01-38 T1 (the root invariant) — READ BEFORE
+TRUSTING A CLEAN RUN AS "NO FABRICATED-SENDER RIGS EXIST": T1 deleted the
+single shared `ctx.worker_inbox` drop-box from `core/`'s live read path and
+replaced every rig's direct injection with `core.intake.write(ctx,
+agent_id, obj)` — a per-agent-intake write, mechanically substituted across
+every `core/*_rig.py`/`core/sim/*.py` fixture, `core/sim/operator_proxy.py`
+(a fabricated `sender.kind="operator"` payload) included. This lint's
+`INBOX_FABRICATED_SENDER` seed (`_INBOX_ATTRS`, below) is keyed EXCLUSIVELY
+on the literal `ctx.worker_inbox`/`ctx.operator_inbox` Attribute shape — a
+call to `core.intake.write` is an entirely different AST shape (a function
+call, not an attribute-write) this taint tracker does not seed on, so it is
+now BLIND to a fabricated-sender payload routed through it, on EVERY rig in
+the tree, not just the one this module used to track (see `KNOWN_RED`,
+below — the `core/sim/operator_proxy.py` entry that used to catch exactly
+this is now STALE and removed, not because the underlying dishonesty is
+fixed, but because this lint can no longer see it). Closing this — teaching
+the SAME taint-union machinery to seed on `core.intake.write`'s own payload
+argument, with the same evasion-resistant rigor `_INBOX_ATTRS` already has
+— is block 01-38 T6's job ("Honest rigs, R3 MODEL A"), not T1's; T1 is
+additive on the identity side only. Until T6 lands, a clean run of this
+lint proves less than it used to: it still catches every `MANIFEST_DIRECT_
+WRITE` and any STRAGGLER still touching `ctx.worker_inbox`/`ctx.
+operator_inbox` directly, but NOT a fabricated sender laundered through
+`core.intake.write`.
+
 The only legal ingress into the engine is the real reporting door:
-`scripts/report.sh` writes a JSON line to `ctx.worker_inbox`, hardcoding
-`sender.kind: "worker"` — the ONLY sender kind the real door can ever
-produce. A harness that writes a report claiming any OTHER sender kind into
-that file asserts an identity nothing real produced (R6), and a rig that
-writes `ctx.operator_inbox` fabricates a channel wholesale — there is no
-real operator transport yet (R8). A harness that mutates `manifest[...]`
-directly, instead of letting the real drain (tick -> classify -> router)
-apply the effect, skips the door entirely. Three violation classes:
+`scripts/report.sh` writes a JSON line to an agent's own private intake
+(`core.intake`, block 01-38 T1 — formerly the single shared
+`ctx.worker_inbox`), hardcoding `sender.kind: "worker"` — the ONLY sender
+kind the real door can ever produce. A harness that writes a report
+claiming any OTHER sender kind into that file asserts an identity nothing
+real produced (R6), and a rig that writes `ctx.operator_inbox` fabricates a
+channel wholesale — there is no real operator transport yet (R8). A harness
+that mutates `manifest[...]` directly, instead of letting the real drain
+(tick -> classify -> router) apply the effect, skips the door entirely.
+Three violation classes:
 
   INBOX_FABRICATED_SENDER   a write to ctx.worker_inbox whose JSON payload
                              asserts sender.kind != "worker" (or is not a
@@ -274,17 +301,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # it regressed silently); a red file NOT listed here is an unlisted offender
 # (FAIL, add it with its owning block or fix it).
 KNOWN_RED = {
-    "core/sim/operator_proxy.py": {
-        "owning_block": "01-38",
-        "reason": ('_inject_decision fabricates sender.kind="operator" and appends '
-                   "it straight to eng.ctx.worker_inbox (the WORKER channel) — "
-                   "report.sh, the one real door, can only ever emit "
-                   'sender.kind="worker"; there is no real operator transport yet '
-                   "(that is R8/R6, later blocks). ADR-0012 §2 R8 names this exact "
-                   'harness: "the current harness injects into the worker channel '
-                   'and lies exactly the way the old rigs lied." Rebuilt honestly '
-                   "in 01-38 T4 once the real operator channel exists."),
-    },
+    # REMOVED 01-38 T1 (was: "core/sim/operator_proxy.py", owning_block
+    # "01-38"): `_inject_decision` used to fabricate `sender.kind="operator"`
+    # via a raw write straight to `eng.ctx.worker_inbox` (the WORKER
+    # channel) — a shape this lint's `INBOX_FABRICATED_SENDER` seed caught.
+    # T1 deleted `ctx.worker_inbox` from the live `core/` path entirely and
+    # moved that write (mechanically, like every other rig's) to
+    # `core.intake.write` — this lint's seed does not track that call shape
+    # (see the module docstring's "KNOWN GAP" section), so the fixture now
+    # comes back CLEAN under the CURRENT lint, not because the underlying
+    # dishonesty (still no real operator transport, still not routed
+    # through the real door) is fixed — that remains 01-38 T6's job. Kept
+    # here only as a comment, never re-added as a live KNOWN_RED entry,
+    # because re-adding an entry the lint cannot actually detect would be a
+    # second, worse lie (a tracked-red label the lint no longer earns).
     "core/architect_rig.py": {
         "owning_block": "01-40",
         "reason": ("RIG2-C2 (run_seq_reconcile_rig) monkeypatches "

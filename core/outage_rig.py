@@ -92,6 +92,8 @@ import switchboard                 # noqa: E402 — core/switchboard.py, THE MOD
 import knobs as knobs_mod           # noqa: E402 — core/knobs.py, THE MODULE UNDER TEST (fleet_outage_deaths)
 import state                         # noqa: E402 — core/state.py
 from engine import Engine, BootupError   # noqa: E402 — core/engine.py, real bootup/tick wiring (unedited)
+import intake                             # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import vocab                               # noqa: E402 — core/vocab.py, the OPERATOR pseudo-agent-id
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -375,7 +377,7 @@ class EngineerReactor:
             # block 01-37 T7/T10: `worker.progress` is DELETED — `worker.
             # flag` (surfaced, non-paging) replaces it as the "still alive,
             # nothing structural to report" heartbeat.
-            append_jsonl(self.tron_ctx.worker_inbox,
+            intake.write(self.tron_ctx, agent_id,
                         {"tag": "worker.flag", "agent_id": agent_id})
             branch = f"feat/{block}"
             if block not in self.spawn_tick:
@@ -384,7 +386,7 @@ class EngineerReactor:
                 make_code_commit(self.root, branch, f"src/lib/{block}.ts",
                                  f"{block}-outagerig-change")
                 self.branch_created[block] = True
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -395,7 +397,7 @@ class EngineerReactor:
             block_file_rel = f"{BLOCKS_REL}/{block}.md"
 
             if stage == gate.STAGE_LOCAL and not self.local_reported.get(block):
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 self.local_reported[block] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
@@ -419,7 +421,7 @@ class EngineerReactor:
         cur = arch.get("current_job")
         if cur and cur.get("kind") == "reconcile" and cur.get("ordered") \
                 and cur.get("block") not in self.reconciled_reported:
-            append_jsonl(self.tron_ctx.worker_inbox,
+            intake.write(self.tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.reconciled", "block": cur["block"],
                          "agent_id": architect.ARCHITECT_WID})
             self.reconciled_reported.add(cur["block"])
@@ -439,7 +441,7 @@ class EngineerReactor:
         verdict = verdict_for_source.get(cur.get("source"))
         if not verdict:
             return
-        append_jsonl(self.tron_ctx.worker_inbox,
+        intake.write(self.tron_ctx, architect.ARCHITECT_WID,
                     {"tag": "architect.triage_verdict", "triage_id": triage_id,
                      "verdict": verdict, "agent_id": architect.ARCHITECT_WID})
         self.triage_answered[triage_id] = verdict
@@ -584,7 +586,7 @@ def drive_outage():
                     and i >= outage_case["opened_tick"] + OBSERVE_TICKS):
                 pages_at_resume = len(page_counts(manifest, outage_case["id"]))
                 dying[0] = False   # the outage CLEARS — the next spawn attempt succeeds
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, vocab.OPERATOR,
                             {"tag": "operator.decision",
                              "slots": {"case_id": outage_case["id"], "verb": "resume"}})
                 resumed_tick["i"] = i

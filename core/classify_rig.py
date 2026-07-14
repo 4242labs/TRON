@@ -78,6 +78,7 @@ import door                            # noqa: E402 — core/door.py, the T3/T6 
 import vocab                            # noqa: E402 — core/vocab.py, the closed vocabulary
 import architect                         # noqa: E402 — core/architect.py, ARCHITECT_WID + triage reuse
 import casestate                          # noqa: E402 — core/casestate.py, VERBS + case-id shape
+import intake                              # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -280,9 +281,9 @@ def run_scenario_1():
     # ── the rig-as-worker forks its OWN branch, reports online via a
     #     STRUCTURED line (`{"tag": "worker.online", ...}`) ──
     make_code_commit(root, BRANCH, CODE_FILE_REL, f"{BLOCK}-classifyrig-change")
-    util.append_jsonl(tron_ctx.worker_inbox,
-                      {"tag": "worker.online", "agent_id": AGENT_ID,
-                       "slots": {"branch": BRANCH}})
+    intake.write(tron_ctx, AGENT_ID,
+                {"tag": "worker.online", "agent_id": AGENT_ID,
+                 "slots": {"branch": BRANCH}})
 
     # ── tick 2: ASSIGN — the structured report resolves via classify.py's
     #     own vocab-backed door (AC-1) — no model exists anywhere in this
@@ -303,8 +304,8 @@ def run_scenario_1():
     #     the equivalent structured JSONL line) ──
     evidence = ("npm ci --no-audit --no-fund && npx vitest run -> 9/9 green "
                "(rig-supplied local pass, delivered STRUCTURED — --tag done)")
-    util.append_jsonl(
-        tron_ctx.worker_inbox,
+    intake.write(
+        tron_ctx, AGENT_ID,
         {"tag": "done", "agent_id": AGENT_ID, "text": evidence,
          "slots": {"block": BLOCK, "verdict": "pass", "evidence": evidence},
          "sender": {"kind": "worker", "id": AGENT_ID}})
@@ -324,8 +325,8 @@ def run_scenario_1():
     # ── T7 — a worker.flag report: ledgered + batched to the architect,
     #     never opens a case, never pages, never advances/blocks anything ──
     cases_before = len((manifest3.get("cases") or {}))
-    util.append_jsonl(
-        tron_ctx.worker_inbox,
+    intake.write(
+        tron_ctx, AGENT_ID,
         {"tag": "flag", "agent_id": AGENT_ID, "text": "fyi: noisy test output, ignorable",
          "slots": {"block": BLOCK}, "sender": {"kind": "worker", "id": AGENT_ID}})
     res4 = tick.tick(eng)

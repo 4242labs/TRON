@@ -137,6 +137,7 @@ import casestate              # noqa: E402 — core/casestate.py, wave 8's parke
 import tick as core_tick       # noqa: E402 — core/tick.py, the whole per-tick pass
 import knobs as knobs_mod       # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (wave 16)
 import vocab                      # noqa: E402 — core/vocab.py, T2/T5's version handshake + emit-id set
+import intake as intake_mod        # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 
 class BootupError(RuntimeError):
@@ -372,6 +373,25 @@ class Engine:
             return True
         return jobs.runner_idle(worker_id)
 
+    # ── block 01-38 T1 (the root invariant): the `{report}` slot's value,
+    #     per call ──
+    def _report_invocation(self, worker_id):
+        """The command line `{report}` renders as, in the frozen canon
+        prompt text (`bash {report} {worker_id} ...`, `prompts/PMT-SPAWN.
+        md`/`PMT-TRIAGE.md`/`registry.yaml` — unedited, unchanged shape).
+        When this `emit` targets a specific worker, bake THAT worker's OWN
+        `--intake <path>` into the value `{report}` expands to — the
+        worker never types, chooses, or sees an alternative intake to
+        name; the `{worker_id}` token the template still renders right
+        after is now cosmetic only (report.sh's own routing no longer
+        trusts it — see `scripts/report.sh`). Absent a `worker_id` (a call
+        site not addressed at one specific agent), the bare `report.sh`
+        path is used, unchanged from before this task."""
+        path = self.ctx.p("scripts", "report.sh")
+        if not worker_id:
+            return path
+        return f"{path} --intake {intake_mod.intake_path(self.ctx, worker_id)}"
+
     # ── the ONE emit choke-point every worker-facing message goes through
     #     (mirrors `engine/fsm.py::emit`, read for shape — see that
     #     method's own docstring) ──
@@ -414,7 +434,7 @@ class Engine:
         slots = dict(slots or {})
         if worker_id:
             slots.setdefault("worker_id", worker_id)
-        slots.setdefault("report", self.ctx.p("scripts", "report.sh"))
+        slots.setdefault("report", self._report_invocation(worker_id))
         slots.setdefault("contract", self.ctx.worker_contract)
 
         if self._renderer is None:
@@ -672,6 +692,11 @@ class Engine:
         # drives core.tick.tick without ever going through Engine.start).
         arch = manifest.setdefault("architect", architect.new_state())
         if not arch.get("spawned"):
+            # Block 01-38 T1 — the root invariant: the architect's own
+            # private intake, minted the same "before any process" moment
+            # `core/switchboard.py::fill` mints a worker's (regardless of
+            # `self.dry` — a pure filesystem op, no real process implied).
+            intake_mod.create(self.ctx, architect.ARCHITECT_WID)
             self._spawn_architect()
             arch["spawned"] = True
             arch["status"] = "idle"

@@ -103,6 +103,8 @@ import gate                      # noqa: E402 — core/gate.py, the DONE ladder 
 import state                       # noqa: E402 — core/state.py
 import casestate                    # noqa: E402 — core/casestate.py, THE FLOOR's own constants + open_case
 import architect                     # noqa: E402 — core/architect.py, wave 18's triage job (KILLER 4)
+import intake                         # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import vocab                           # noqa: E402 — core/vocab.py, the OPERATOR pseudo-agent-id
 from engine import Engine, BootupError   # noqa: E402 — core/engine.py, THE MODULE UNDER TEST (real _page_operator)
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
@@ -388,7 +390,7 @@ class RunState:
         self.close_tick = {}
         self.triage_answered = set()   # wave 18 (GAP-E): triage_ids already answered
 
-    def react_architect_triage(self, manifest, inbox_path):
+    def react_architect_triage(self, manifest, ctx):
         """Wave 18 (GAP-E): both fixture blocks' walls now open ARCHITECT-
         first cases (`core/casestate.py::open_case` -> `core/architect.py::
         enqueue_triage`) — never an immediate operator page. This rig's
@@ -400,13 +402,14 @@ class RunState:
         cur = arch.get("current_job")
         if (cur and cur.get("kind") == "triage" and cur.get("ordered")
                 and cur.get("triage_id") not in self.triage_answered):
-            append_jsonl(inbox_path, {"tag": "architect.triage_verdict",
-                                      "triage_id": cur["triage_id"], "verdict": "operator",
-                                      "agent_id": architect.ARCHITECT_WID})
+            intake.write(ctx, architect.ARCHITECT_WID,
+                        {"tag": "architect.triage_verdict",
+                         "triage_id": cur["triage_id"], "verdict": "operator",
+                         "agent_id": architect.ARCHITECT_WID})
             self.triage_answered.add(cur["triage_id"])
 
-    def react(self, i, manifest, inbox_path):
-        self.react_architect_triage(manifest, inbox_path)
+    def react(self, i, manifest, ctx):
+        self.react_architect_triage(manifest, ctx)
         workers = manifest.get("workers") or {}
         gates = manifest.get("gates") or {}
         for block in ORDER:
@@ -422,8 +425,8 @@ class RunState:
                 make_code_commit(self.root, branch, f"src/lib/{block}.ts",
                                  f"{block}-gen{self.gen[block]}")
                 self.branch_created[key] = True
-                append_jsonl(inbox_path, {"tag": "worker.online", "agent_id": agent_id,
-                                          "slots": {"branch": branch}})
+                intake.write(ctx, agent_id, {"tag": "worker.online", "agent_id": agent_id,
+                                             "slots": {"branch": branch}})
 
             g = gates.get(block)
             if not g:
@@ -432,13 +435,13 @@ class RunState:
 
             if stage == gate.STAGE_LOCAL:
                 if self.gen[block] == 0 and not self.walled[block]:
-                    append_jsonl(inbox_path, {"tag": "worker.wall", "block": block,
-                                              "agent_id": agent_id,
-                                              "slots": {"detail": WALL_DETAIL[block]}})
+                    intake.write(ctx, agent_id, {"tag": "worker.wall", "block": block,
+                                                 "agent_id": agent_id,
+                                                 "slots": {"detail": WALL_DETAIL[block]}})
                     self.walled[block] = True
                 elif not self.local_reported.get(key):
-                    append_jsonl(inbox_path, {"tag": "worker.done", "block": block,
-                                              "slots": LOCAL_PASS_REPORT})
+                    intake.write(ctx, agent_id, {"tag": "worker.done", "block": block,
+                                                 "slots": LOCAL_PASS_REPORT})
                     self.local_reported[key] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
                 try_land(self.root, self.grants_dir, g["merge_case_id"], branch, self.landed_cases)
@@ -541,7 +544,7 @@ def main():
         for i in range(1, MAX_TICKS + 1):
             res = eng.tick()
             manifest = state.load(tron_ctx)
-            rs.react(i, manifest, tron_ctx.worker_inbox)
+            rs.react(i, manifest, tron_ctx)
 
             if case_d["id"] is None:
                 cd = find_open_case(manifest, BLOCK_D)
@@ -563,10 +566,10 @@ def main():
                 f_pages_at_resume = len(page_counts(manifest, case_f["id"]))
                 rs.gen[BLOCK_D] += 1
                 rs.gen[BLOCK_F] += 1
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, vocab.OPERATOR,
                             {"tag": "operator.decision",
                              "slots": {"case_id": case_d["id"], "verb": "resume"}})
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, vocab.OPERATOR,
                             {"tag": "operator.decision",
                              "slots": {"case_id": case_f["id"], "verb": "resume"}})
                 resumed_tick["i"] = i

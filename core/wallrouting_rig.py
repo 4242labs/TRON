@@ -110,6 +110,8 @@ import architect                     # noqa: E402 — core/architect.py, wave 18
 import classify                       # noqa: E402 — core/classify.py, the unclassified-triage source
 import router                          # noqa: E402 — core/router.py, ADR-0010 Invariant B (_route_wall)
 from engine import Engine, BootupError   # noqa: E402 — core/engine.py, the REAL Engine (_page_operator UNSTUBBED)
+import intake                             # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import vocab                               # noqa: E402 — core/vocab.py, the OPERATOR pseudo-agent-id
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -456,7 +458,7 @@ class RunState:
         self.triage_answered = set()   # triage_ids already answered
         self.adhoc_entry_authored = set()   # adhoc block ids already authored on their branch
 
-    def react_architect_triage(self, manifest, inbox_path):
+    def react_architect_triage(self, manifest, ctx):
         """Wave 18 (GAP-E): the architect's own scripted triage verdict —
         `scope_forward` for wall-scope-01's own case, `operator` for cap-
         operator-01's — decided purely off the CURRENT job's own `block`
@@ -474,9 +476,10 @@ class RunState:
             verdict = "operator"
         else:
             return   # not one of this rig's own cases yet (shouldn't happen)
-        append_jsonl(inbox_path, {"tag": "architect.triage_verdict",
-                                  "triage_id": cur["triage_id"], "verdict": verdict,
-                                  "agent_id": architect.ARCHITECT_WID})
+        intake.write(ctx, architect.ARCHITECT_WID,
+                    {"tag": "architect.triage_verdict",
+                     "triage_id": cur["triage_id"], "verdict": verdict,
+                     "agent_id": architect.ARCHITECT_WID})
         self.triage_answered.add(cur["triage_id"])
 
     def react_architect_scope_forward(self, manifest):
@@ -514,8 +517,8 @@ class RunState:
         own `gen[BLOCK_R] = 1` at resume time)."""
         self.gen[block] = self.gen.get(block, 0) + 1
 
-    def react(self, i, manifest, inbox_path):
-        self.react_architect_triage(manifest, inbox_path)
+    def react(self, i, manifest, ctx):
+        self.react_architect_triage(manifest, ctx)
         self.react_architect_scope_forward(manifest)
 
         # Generic over EVERY worker/gate the manifest currently holds — NOT
@@ -547,8 +550,8 @@ class RunState:
                 # conflict-free by construction.
                 make_code_commit(self.root, branch, f"src/lib/{block}.ts", f"{block}-gen{gen}")
                 self.branch_created[key] = True
-                append_jsonl(inbox_path, {"tag": "worker.online", "agent_id": agent_id,
-                                          "slots": {"branch": branch}})
+                intake.write(ctx, agent_id, {"tag": "worker.online", "agent_id": agent_id,
+                                             "slots": {"branch": branch}})
 
             g = gates.get(block)
             if not g:
@@ -557,12 +560,12 @@ class RunState:
 
             if stage == gate.STAGE_LOCAL:
                 if block == BLOCK_SCOPE and gen == 0 and not self.walled_scope:
-                    append_jsonl(inbox_path, {"tag": "worker.wall", "block": BLOCK_SCOPE,
-                                              "agent_id": agent_id, "slots": {"detail": WALL_DETAIL}})
+                    intake.write(ctx, agent_id, {"tag": "worker.wall", "block": BLOCK_SCOPE,
+                                                 "agent_id": agent_id, "slots": {"detail": WALL_DETAIL}})
                     self.walled_scope = True
                 elif not self.local_reported.get(key):
-                    append_jsonl(inbox_path, {"tag": "worker.done", "block": block,
-                                              "slots": LOCAL_PASS_REPORT})
+                    intake.write(ctx, agent_id, {"tag": "worker.done", "block": block,
+                                                 "slots": LOCAL_PASS_REPORT})
                     self.local_reported[key] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
                 if block == BLOCK_CAP and gen == 0:
@@ -646,7 +649,7 @@ def main():
         for i in range(1, MAX_TICKS + 1):
             res = eng.tick()
             manifest = state.load(tron_ctx)
-            rs.react(i, manifest, tron_ctx.worker_inbox)
+            rs.react(i, manifest, tron_ctx)
 
             cs = find_open_case(manifest, BLOCK_SCOPE, "worker.wall")
             if cs is not None:
@@ -671,7 +674,7 @@ def main():
                     case_cap["seen_architect_owned"] = True
                 if cc.get("owner") == "operator" and resumed_cap_tick["i"] is None:
                     rs.gen[BLOCK_CAP] = 1
-                    append_jsonl(tron_ctx.worker_inbox,
+                    intake.write(tron_ctx, vocab.OPERATOR,
                                 {"tag": "operator.decision",
                                  "slots": {"case_id": cc["case_id"], "verb": "resume"}})
                     resumed_cap_tick["i"] = i

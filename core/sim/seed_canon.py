@@ -8,11 +8,17 @@ and bodies) so the engine can RENDER a worker order carrying its reply
 channel; `routing.yaml` + `tron.md` so real `classify` can resolve a free-text
 report; `worker-contract.md` so the agent can learn the report verbs; and
 `scripts/report.sh` — the worker→engine channel itself, which the reply line
-names (`{report}` = `ctx.p("scripts","report.sh")`).
+names (`{report}` = `core.engine.Engine._report_invocation`'s own per-worker
+value, block 01-38 T1: the bare path PLUS a baked-in `--intake <path>` naming
+THAT worker's own private intake — `core.intake`, never a single shared file
+any more).
 
-report.sh SELF-LOCATES the engine inbox as `<its dir>/../worker-inbox.jsonl`,
-so it MUST land at `<instance>/scripts/report.sh` for that `..` to resolve to
-`<instance>/worker-inbox.jsonl` (== `ctx.worker_inbox`, what the tick drains).
+report.sh's own vocab-schema self-location is unchanged: `<its dir>/../
+vocab.schema.json`, so it MUST land at `<instance>/scripts/report.sh` for
+that `..` to resolve to `<instance>/vocab.schema.json`. Which FILE a report
+actually lands in, though, is no longer positional/self-located at all — it
+is REQUIRED as an explicit `--intake <path>` argument (T1's root invariant:
+"the reporting script is handed only its own intake").
 
 The canonical source is the TRON app root itself (`messages.yaml`, `routing.
 yaml`, `tron.md`, `worker-contract.md`, `prompts/`, `scripts/report.sh` — the

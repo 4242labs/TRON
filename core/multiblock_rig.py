@@ -69,6 +69,7 @@ import gate                  # noqa: E402 — core/gate.py, the DONE ladder core
 import state                 # noqa: E402 — core/state.py
 import tick                  # noqa: E402 — core/tick.py, the module under test (+ its wave-6 wiring)
 import session                # noqa: E402 — core/session.py, the wave-6 clean SESSION-END terminal
+import intake                  # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -394,7 +395,7 @@ def main():
                 code_tip[block] = make_code_commit(root, branch, CODE_FILE_REL,
                                                    f"{block}-multiblock-change")
                 branch_created[block] = True
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -404,7 +405,7 @@ def main():
             stage = g.get("stage")
 
             if stage == gate.STAGE_LOCAL and not local_reported[block]:
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, agent_id,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 local_reported[block] = True
 
@@ -443,7 +444,7 @@ def main():
         cur = arch.get("current_job")
         if cur and cur.get("kind") == "reconcile" and cur.get("ordered") \
                 and cur.get("block") not in reconciled_reported:
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.reconciled", "block": cur["block"],
                          "agent_id": architect.ARCHITECT_WID})
             reconciled_reported.add(cur["block"])

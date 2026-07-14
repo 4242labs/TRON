@@ -69,6 +69,8 @@ import pipeline                # noqa: E402 — core/pipeline.py, the in-flight/
 import sentry                 # noqa: E402 — core/sentry.py, the cap-escalation-opens-a-case proof
 import casestate               # noqa: E402 — core/casestate.py, the module under test
 import architect               # noqa: E402 — core/architect.py, ARCHITECT_WID (self-wall guard lock)
+import intake                   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import vocab                     # noqa: E402 — core/vocab.py, the OPERATOR pseudo-agent-id
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -387,7 +389,7 @@ def main():
         cur = arch.get("current_job")
         if (cur and cur.get("kind") == "triage" and cur.get("ordered")
                 and cur.get("triage_id") not in triage_answered):
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.triage_verdict",
                          "triage_id": cur["triage_id"], "verdict": "operator",
                          "agent_id": architect.ARCHITECT_WID})
@@ -417,7 +419,7 @@ def main():
             if w and w.get("status") == "spawning" and not branch_created.get(key):
                 make_code_commit(root, branch, CODE_FILE_REL, f"{block}-gen{gen[block]}")
                 branch_created[key] = True
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -428,17 +430,17 @@ def main():
 
             if stage == gate.STAGE_LOCAL:
                 if block == BLOCK_R and not walled[BLOCK_R]:
-                    append_jsonl(tron_ctx.worker_inbox,
+                    intake.write(tron_ctx, agent_id,
                                 {"tag": "worker.wall", "block": BLOCK_R, "agent_id": agent_id,
                                  "slots": {"detail": WALL_DETAIL_R}})
                     walled[BLOCK_R] = True
                 elif block == BLOCK_A and not walled[BLOCK_A]:
-                    append_jsonl(tron_ctx.worker_inbox,
+                    intake.write(tron_ctx, agent_id,
                                 {"tag": "worker.wall", "block": BLOCK_A, "agent_id": agent_id,
                                  "slots": {"detail": WALL_DETAIL_A}})
                     walled[BLOCK_A] = True
                 elif not local_reported.get(key):
-                    append_jsonl(tron_ctx.worker_inbox,
+                    intake.write(tron_ctx, agent_id,
                                 {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                     local_reported[key] = True
 
@@ -475,7 +477,11 @@ def main():
         return res, m
 
     def inject(obj):
-        append_jsonl(tron_ctx.worker_inbox, obj)
+        # Block 01-38 T1: `operator.decision` is the ONLY shape `inject`
+        # is ever called with in this rig (no agent identity of its own —
+        # the real operator transport is T5's scope; see `core/intake.py::
+        # drain_all`'s own note on the `vocab.OPERATOR` pseudo-agent-id).
+        intake.write(tron_ctx, vocab.OPERATOR, obj)
 
     # ══ tick 1 — SPAWN all three off the real pipeline (worker_count=3) ══
     res1, m1 = run_tick()

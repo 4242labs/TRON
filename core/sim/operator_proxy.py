@@ -50,6 +50,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import casestate                       # noqa: E402 — VERBS + the settle path's own module
+import intake                           # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 _OPERATOR_PROXY_WID = "operator-proxy"
 _DECIDE_TIMEOUT_S = 90.0               # one-shot claude call ceiling (RD)
@@ -138,14 +139,16 @@ def _claude_decide(case):
 
 
 def _inject_decision(eng, case_id, decision):
-    """Path A honest injection: append a TAGGED `operator.decision` report to the
-    engine inbox. `classify` short-circuits on the tag (no model spend) and
+    """Path A honest injection: append a TAGGED `operator.decision` report to
+    this proxy's OWN private intake (`core.intake`, block 01-38 T1 —
+    `_OPERATOR_PROXY_WID`'s own file, never the deleted shared drop-box).
+    `classify` short-circuits on the tag (no model spend) and
     `router._route_decision` -> `casestate.settle` applies it. `sender.kind ==
     "operator"` marks it a genuine operator reply, exactly as a human's would.
-    Returns True on a written line, False if the inbox append failed (mirrors the
-    courier's own tolerant append — an IO fault must not raise out of the poll
-    loop, and the caller must NOT mark a case decided on a write that never
-    landed; the case simply stays open and is retried)."""
+    Returns True on a written line, False if the intake append failed (mirrors
+    the courier's own tolerant append — an IO fault must not raise out of the
+    poll loop, and the caller must NOT mark a case decided on a write that
+    never landed; the case simply stays open and is retried)."""
     rep = {
         "tag": "operator.decision",
         "slots": {
@@ -156,10 +159,9 @@ def _inject_decision(eng, case_id, decision):
         "sender": {"kind": "operator", "id": _OPERATOR_PROXY_WID},
     }
     try:
-        with open(eng.ctx.worker_inbox, "a") as ib:
-            ib.write(json.dumps(rep) + "\n")
+        intake.write(eng.ctx, _OPERATOR_PROXY_WID, rep)
     except OSError as e:
-        eng.log("flow", f"operator-proxy: inbox write FAILED for case {case_id!r} "
+        eng.log("flow", f"operator-proxy: intake write FAILED for case {case_id!r} "
                         f"({e}) — decision NOT injected, case stays open (retried)")
         return False
     return True

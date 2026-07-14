@@ -89,6 +89,7 @@ import tick                  # noqa: E402 — core/tick.py, wave 10's cadence/lo
 import reviewers              # noqa: E402 — core/reviewers.py, the module under test
 import architect               # noqa: E402 — core/architect.py, the log-review job kind under test
 import router                  # noqa: E402 — core/router.py, the ASSIGN handshake (reviewer-skip under test)
+import intake                   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -452,7 +453,7 @@ class RunHistory:
                 make_code_commit(self.root, branch, f"src/lib/{block}.ts",
                                  f"{block}-reviewersrig-change")
                 self.branch_created[block] = True
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -463,7 +464,7 @@ class RunHistory:
             block_file_rel = f"{BLOCKS_REL}/{block}.md"
 
             if stage == gate.STAGE_LOCAL and not self.local_reported[block]:
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 self.local_reported[block] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
@@ -498,7 +499,7 @@ class RunHistory:
                 self.cadence_at_dispatch[agent_id] = dict(manifest.get("cadence") or {})
             status = w.get("status")
             if status == "reviewing" and agent_id not in self.review_first_sent:
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.review_done", "agent_id": agent_id, "type": typ,
                              "slots": {"findings": findings_first}})
                 self.review_first_sent.add(agent_id)
@@ -506,7 +507,7 @@ class RunHistory:
                 if agent_id not in self.review_hold_tick:
                     self.review_hold_tick[agent_id] = i
                 if attest and agent_id not in self.review_attest_sent:
-                    append_jsonl(self.tron_ctx.worker_inbox,
+                    intake.write(self.tron_ctx, agent_id,
                                 {"tag": "worker.review_done", "agent_id": agent_id, "type": typ,
                                  "slots": {"findings": findings_second}})
                     self.review_attest_sent.add(agent_id)
@@ -531,7 +532,7 @@ class RunHistory:
         cur = arch.get("current_job")
         if cur and cur.get("kind") == "reconcile" and cur.get("ordered") \
                 and cur.get("block") not in self.reconciled_reported:
-            append_jsonl(self.tron_ctx.worker_inbox,
+            intake.write(self.tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.reconciled", "block": cur["block"],
                          "agent_id": architect.ARCHITECT_WID})
             self.reconciled_reported.add(cur["block"])
@@ -569,7 +570,7 @@ class RunHistory:
         cur = arch.get("current_job")
         if (cur and cur.get("kind") == "triage" and cur.get("ordered")
                 and cur.get("triage_id") not in self.triage_answered):
-            append_jsonl(self.tron_ctx.worker_inbox,
+            intake.write(self.tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.triage_verdict",
                          "triage_id": cur["triage_id"], "verdict": "operator",
                          "agent_id": architect.ARCHITECT_WID})

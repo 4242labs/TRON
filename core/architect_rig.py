@@ -25,7 +25,7 @@ way:
   a `reconcile` job, once ordered (`job["ordered"]` True) — the architect
     has NO content to check in this brick (no LLM here, structured only,
     per the wave-9 spec) — reports done via a structured `architect.
-    reconciled` line on `ctx.worker_inbox`, EXACTLY once;
+    reconciled` line on its own private intake (`core.intake`), EXACTLY once;
   a `forward` job, once ordered — forks `arch/<block>-forward` off CURRENT
     trunk, writes a REAL, parseable block doc (`meta/blocks/<block>.md`,
     Status `📋 To do`), commits it; once the gate mints a grant for it
@@ -92,6 +92,7 @@ import tick                  # noqa: E402 — core/tick.py, wave 9's architect-e
 import architect              # noqa: E402 — core/architect.py, the module under test
 from engine import Engine as CoreEngine  # noqa: E402 — core/engine.py, R-A's REAL implementation
 import jobs                    # noqa: E402 — engine/jobs.py, the runner-consumption seam (HWM file)
+import intake                   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -427,7 +428,7 @@ def run_reconcile_gate_scenario():
             if w and w.get("status") == "spawning" and not branch_created[block]:
                 make_code_commit(root, br, f"src/lib/{block}.ts", f"{block}-architectrig-change")
                 branch_created[block] = True
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, aid,
                             {"tag": "worker.online", "agent_id": aid, "slots": {"branch": br}})
 
             g = gates.get(block)
@@ -436,7 +437,7 @@ def run_reconcile_gate_scenario():
             stage = g.get("stage")
 
             if stage == gate.STAGE_LOCAL and not local_reported[block]:
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, aid,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 local_reported[block] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
@@ -471,7 +472,7 @@ def run_reconcile_gate_scenario():
         cur = arch.get("current_job")
         if cur and cur.get("kind") == "reconcile" and cur.get("ordered") \
                 and cur.get("block") not in reconciled_reported:
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.reconciled", "block": cur["block"],
                          "agent_id": architect.ARCHITECT_WID})
             reconciled_reported.add(cur["block"])
@@ -652,7 +653,7 @@ def run_forward_scenario():
             if w and w.get("status") == "spawning" and not branch_created[block]:
                 make_code_commit(root, br, f"src/lib/{block}.ts", f"{block}-architectrig-change")
                 branch_created[block] = True
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, aid,
                             {"tag": "worker.online", "agent_id": aid, "slots": {"branch": br}})
 
             g = gates.get(block)
@@ -661,7 +662,7 @@ def run_forward_scenario():
             stage = g.get("stage")
 
             if stage == gate.STAGE_LOCAL and not local_reported[block]:
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, aid,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 local_reported[block] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):

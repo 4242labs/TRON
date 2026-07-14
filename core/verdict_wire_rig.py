@@ -85,6 +85,7 @@ import tick                        # noqa: E402 — core/tick.py
 import snapshot                     # noqa: E402 — core/snapshot.py
 import architect                     # noqa: E402 — core/architect.py
 import vocab                          # noqa: E402 — core/vocab.py, PROMOTED_SLOT_KEYS (the mutated lock)
+import intake                          # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 import scaffold_src                    # noqa: E402 — core/scaffold_src.py, the ONE scaffold resolver
 sys.path.insert(0, os.path.join(HERE, "sim"))
 import seed_canon                        # noqa: E402 — core/sim/seed_canon.py, the real canon installer
@@ -231,7 +232,13 @@ class MiniEng:
         slots = dict(slots or {})
         if worker_id:
             slots.setdefault("worker_id", worker_id)
-        slots.setdefault("report", self.ctx.p("scripts", "report.sh"))
+        # Block 01-38 T1 (the root invariant): mirrors `core.engine.Engine.
+        # _report_invocation` — bake THIS worker's own `--intake <path>`
+        # into the `{report}` slot value, never the bare path alone.
+        report_path = self.ctx.p("scripts", "report.sh")
+        if worker_id:
+            report_path = f"{report_path} --intake {intake.intake_path(self.ctx, worker_id)}"
+        slots.setdefault("report", report_path)
         slots.setdefault("contract", self.ctx.worker_contract)
         try:
             line = self._renderer.render(template_id, slots)
@@ -264,10 +271,18 @@ class MiniEng:
 def report_sh(ctx, worker_id, *flag_pairs_and_msg):
     """Invoke the REAL `report.sh` installed at `ctx.p('scripts',
     'report.sh')` as a genuine `bash` subprocess — the exact channel a real
-    architect/worker uses, never a hand-written JSONL append."""
+    architect/worker uses, never a hand-written JSONL append. Block 01-38
+    T1 (the root invariant): `--intake <path>` is REQUIRED and is computed
+    HERE, from `worker_id`, exactly the way `core.engine.Engine.
+    _report_invocation` bakes it into the real rendered `{report}` slot —
+    this helper's own `worker_id` argument was always cosmetic-adjacent
+    (the JSON payload's own `sender.id`), never what decided the target
+    file, even before this task; now that's explicit."""
     script = ctx.p("scripts", "report.sh")
-    r = subprocess.run(["bash", script, worker_id, *flag_pairs_and_msg],
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        ["bash", script, "--intake", intake.intake_path(ctx, worker_id),
+         worker_id, *flag_pairs_and_msg],
+        capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
 

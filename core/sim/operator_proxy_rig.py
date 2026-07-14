@@ -51,6 +51,7 @@ import casestate                       # noqa: E402 — core/casestate.py, the r
 import classify                        # noqa: E402 — core/classify.py, the real structured bypass
 import router                          # noqa: E402 — core/router.py, the real operator.decision route
 import operator_proxy as op            # noqa: E402 — core/sim/operator_proxy.py, unit under test
+import intake                          # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 _results = []
 
@@ -61,16 +62,23 @@ def ok(name, cond, detail=""):
 
 
 class _DuckCtx:
-    def __init__(self, inbox):
-        self.worker_inbox = inbox
+    """Real-shaped enough for `core.intake` (block 01-38 T1): just `.p()`,
+    resolving under a fresh scratch root — no other `Ctx` surface is
+    touched by `_inject_decision`/`core.intake.write`."""
+    def __init__(self, root):
+        self.dir = root
+
+    def p(self, *parts):
+        return os.path.join(self.dir, *parts)
 
 
 class _DuckEng:
     """The minimum `eng` surface `_inject_decision` + `settle` (resume/abandon)
-    touch: an inbox path, `.dry`, and a `.log` sink."""
-    def __init__(self, inbox):
+    touch: a real-shaped ctx (ONLY for `core.intake`'s own `.p()` — no other
+    `Ctx` surface), `.dry`, and a `.log` sink."""
+    def __init__(self, root):
         self.dry = True
-        self.ctx = _DuckCtx(inbox)
+        self.ctx = _DuckCtx(root)
         self.logs = []
 
     def log(self, channel, msg):
@@ -87,19 +95,26 @@ def _op_case(cid, block="01-02", owner="operator", decision=None):
     }
 
 
-def _fresh_inbox():
-    fd, path = tempfile.mkstemp(prefix="opproxy_inbox_", suffix=".jsonl")
-    os.close(fd)
-    return path
+def _fresh_ctxroot():
+    """A fresh scratch dir — block 01-38 T1's `core.intake` mints
+    `_OPERATOR_PROXY_WID`'s own private intake underneath it on first
+    write, never a bare pre-created inbox FILE (there is no shared one
+    any more)."""
+    return tempfile.mkdtemp(prefix="opproxy_ctxroot_")
 
 
-def _last_line(path):
+def _last_line(ctx):
+    path = intake.intake_path(ctx, op._OPERATOR_PROXY_WID)
+    if not os.path.exists(path):
+        return None
     with open(path) as f:
         lines = [ln for ln in f.read().splitlines() if ln.strip()]
     return json.loads(lines[-1]) if lines else None
 
 
 def _count_lines(path):
+    if not os.path.exists(path):
+        return 0
     with open(path) as f:
         return len([ln for ln in f.read().splitlines() if ln.strip()])
 
@@ -126,10 +141,10 @@ def main():
        op._parse_decision("") is None)
 
     # ── P5: injection shape (the real router reads tag + slots) ──
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     op._inject_decision(eng, "CASE-9", {"verb": "resume", "note": "unblock it"})
-    line = _last_line(inbox)
+    line = _last_line(eng.ctx)
     ok("P5: _inject_decision writes a tagged operator.decision with operator sender + slots",
        line and line.get("tag") == "operator.decision"
        and line.get("sender", {}).get("kind") == "operator"
@@ -137,8 +152,8 @@ def main():
        f"line={line}")
 
     # ── T1/T2: inject once, then idempotent ──
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-1": _op_case("CASE-1")}}
     decided, attempts = set(), {}
     calls = {"n": 0}
@@ -149,14 +164,14 @@ def main():
 
     n1 = op.tick(eng, manifest, decided, attempts, decide_fn=stub_resume)
     ok("T1: tick injects exactly one decision for one operator-owned open case, marks it decided",
-       n1 == 1 and "CASE-1" in decided and _count_lines(inbox) == 1, f"n1={n1} decided={decided}")
+       n1 == 1 and "CASE-1" in decided and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 1, f"n1={n1} decided={decided}")
     n2 = op.tick(eng, manifest, decided, attempts, decide_fn=stub_resume)
     ok("T2: tick is idempotent — a case already decided this run is a no-op (no second line)",
-       n2 == 0 and _count_lines(inbox) == 1 and calls["n"] == 1, f"n2={n2} calls={calls['n']}")
+       n2 == 0 and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 1 and calls["n"] == 1, f"n2={n2} calls={calls['n']}")
 
     # ── T3: an ARCHITECT-owned case is never touched, decide_fn never called ──
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-A": _op_case("CASE-A", owner="architect")}}
     ac = {"n": 0}
 
@@ -166,21 +181,21 @@ def main():
 
     n3 = op.tick(eng, manifest, set(), {}, decide_fn=stub_counted)
     ok("T3: tick never acts on an ARCHITECT-owned case (no inject, decide_fn NEVER called)",
-       n3 == 0 and _count_lines(inbox) == 0 and ac["n"] == 0, f"n3={n3} decide_calls={ac['n']}")
+       n3 == 0 and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 0 and ac["n"] == 0, f"n3={n3} decide_calls={ac['n']}")
 
     # ── T4: a malformed decision (None) never injects, counts an attempt, no crash ──
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-M": _op_case("CASE-M")}}
     decided, attempts = set(), {}
     n4 = op.tick(eng, manifest, decided, attempts, decide_fn=lambda c: None)
     ok("T4: a malformed (None) decision -> no inject, case NOT marked decided, attempt counted",
-       n4 == 0 and _count_lines(inbox) == 0 and "CASE-M" not in decided
+       n4 == 0 and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 0 and "CASE-M" not in decided
        and attempts.get("CASE-M") == 1, f"n4={n4} attempts={attempts}")
 
     # ── T5: repeated failure is capped at _MAX_ATTEMPTS decide_fn calls ──
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-C": _op_case("CASE-C")}}
     decided, attempts = set(), {}
     fc = {"n": 0}
@@ -192,29 +207,29 @@ def main():
     for _ in range(op._MAX_ATTEMPTS + 3):
         op.tick(eng, manifest, decided, attempts, decide_fn=stub_fail)
     ok("T5: a persistently-failing decide_fn is capped at _MAX_ATTEMPTS calls (no infinite retry, no inject)",
-       fc["n"] == op._MAX_ATTEMPTS and _count_lines(inbox) == 0,
+       fc["n"] == op._MAX_ATTEMPTS and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 0,
        f"decide_calls={fc['n']} cap={op._MAX_ATTEMPTS}")
 
     # ── T6: mixed manifest — only the operator-owned OPEN case is injected ──
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {
         "OP-OPEN": _op_case("OP-OPEN", block="01-02"),
         "ARCH": _op_case("ARCH", block="01-03", owner="architect"),
         "SETTLED": _op_case("SETTLED", block="01-04", decision="resume"),
     }}
     n6 = op.tick(eng, manifest, set(), {}, decide_fn=stub_resume)
-    injected = _last_line(inbox)
+    injected = _last_line(eng.ctx)
     ok("T6: over a mixed manifest, ONLY the operator-owned open case is injected",
-       n6 == 1 and _count_lines(inbox) == 1 and injected["slots"]["case_id"] == "OP-OPEN",
+       n6 == 1 and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 1 and injected["slots"]["case_id"] == "OP-OPEN",
        f"n6={n6} injected={injected and injected['slots']['case_id']}")
 
     # ══ E1: THE HONEST PATH — injected {resume} routed by REAL classify+router+settle ══
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-E1": _op_case("CASE-E1")}}
     op.tick(eng, manifest, set(), {}, decide_fn=lambda c: {"verb": "resume", "note": "unblock"})
-    msg = _last_line(inbox)
+    msg = _last_line(eng.ctx)
     tag, slots = classify.classify(eng, msg, manifest)
     ok("E1a: the injected line classifies as operator.decision via the real structured bypass",
        tag == "operator.decision" and slots.get("case_id") == "CASE-E1" and slots.get("verb") == "resume",
@@ -224,11 +239,11 @@ def main():
        "CASE-E1" not in manifest.get("cases", {}), f"cases={list(manifest.get('cases', {}))}")
 
     # ══ E2: injected {abandon} — settled AND block abandoned, via the real path ══
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-E2": _op_case("CASE-E2", block="01-07")}}
     op.tick(eng, manifest, set(), {}, decide_fn=lambda c: {"verb": "abandon", "note": "out of scope"})
-    msg = _last_line(inbox)
+    msg = _last_line(eng.ctx)
     tag, slots = classify.classify(eng, msg, manifest)
     router._route_decision(eng, manifest, {"tag": tag, "slots": slots})
     ok("E2: injected abandon settles via the real path — case cleared AND block in abandoned_blocks",
@@ -237,8 +252,8 @@ def main():
        f"cases={list(manifest.get('cases', {}))} abandoned={manifest.get('abandoned_blocks')}")
 
     # ══ E3: HONEST negative — a bad-verb decision never settles; the case stays OPEN ══
-    inbox = _fresh_inbox()
-    eng = _DuckEng(inbox)
+    ctxroot = _fresh_ctxroot()
+    eng = _DuckEng(ctxroot)
     manifest = {"cases": {"CASE-E3": _op_case("CASE-E3")}}
     n = op.tick(eng, manifest, set(), {}, decide_fn=lambda c: {"verb": "nuke"})
     ok("E3: a bad-verb decision injects nothing and leaves the case OPEN (a malformed op reply never greens)",
@@ -250,7 +265,7 @@ def main():
     # case must stay OPEN because `casestate.settle` itself refuses a non-VERB verb
     # (proves the two layers are independent — a mutation deleting settle's own
     # check would be caught here, not masked by the proxy's filter always firing first).
-    eng = _DuckEng(_fresh_inbox())
+    eng = _DuckEng(_fresh_ctxroot())
     manifest = {"cases": {"CASE-E4": _op_case("CASE-E4")}}
     router._route_decision(eng, manifest, {"tag": "operator.decision",
                                            "slots": {"case_id": "CASE-E4", "verb": "nuke"}})

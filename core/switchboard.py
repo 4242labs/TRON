@@ -83,6 +83,7 @@ import pipeline   # noqa: E402 — core/pipeline.py, the dispatch-eligible read 
 import reviewers  # noqa: E402 — core/reviewers.py, wave 10's cadence-PULL reviewer dispatch
 import casestate  # noqa: E402 — core/casestate.py, wave 18's architect-first raise-and-defer (unedited)
 import knobs as knobs_mod   # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (fleet_outage_deaths)
+import intake as intake_mod   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 
 def _agent_id(block):
@@ -240,6 +241,13 @@ def fill(eng, snapshot, view=None):
             "status": "spawning",
             "branch": None,
         }
+        # Block 01-38 T1 — the root invariant: the intake IS the identity,
+        # minted BEFORE any process (same "mint + record before any
+        # process" discipline as the manifest write immediately above) so
+        # a crash between here and `eng._spawn_worker` still leaves a real
+        # intake a later tick's drain can read from cleanly (empty, never
+        # "no such file").
+        intake_mod.create(eng.ctx, agent_id)
         try:
             eng._spawn_worker(agent_id, block["id"])   # STUBBED — no real process
         except Exception as exc:

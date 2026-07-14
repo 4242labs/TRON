@@ -25,7 +25,7 @@ each tick (never off this process's own memory of what it "meant" to do):
     yet reacted to) — the rig-as-worker forks its OWN branch (`feat/01-02` —
     ITS choice; the engine never guessed this name) off trunk, makes a REAL
     code commit, and reports online + that branch via a structured
-    `worker.online` line on `ctx.worker_inbox` (`{"tag": "worker.online",
+    `worker.online` line on its own private intake (`core.intake`) (`{"tag": "worker.online",
     "agent_id": ..., "slots": {"branch": ...}}` — a `worker.branch`-shaped
     slot, NO LLM/classify);
   at `gate.local` — reports a well-formed local-pass line;
@@ -55,6 +55,7 @@ from ctx import Ctx          # noqa: E402 — engine/ctx.py, the real runtime-co
 import gate                  # noqa: E402 — core/gate.py, the DONE ladder core.tick drives
 import state                 # noqa: E402 — core/state.py
 import tick                  # noqa: E402 — core/tick.py, the module under test (+ its wave-5 wiring)
+import intake                 # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -335,7 +336,7 @@ def main():
         if w and w.get("status") == "spawning" and not branch_created:
             code_tip = make_code_commit(root, BRANCH, CODE_FILE_REL, f"{BLOCK}-dispatch-change")
             branch_created = True
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, AGENT_ID,
                         {"tag": "worker.online", "agent_id": AGENT_ID,
                          "slots": {"branch": BRANCH}})
 
@@ -345,7 +346,7 @@ def main():
         stage = g.get("stage")
 
         if stage == gate.STAGE_LOCAL and not local_reported:
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, AGENT_ID,
                         {"tag": "worker.done", "block": BLOCK, "slots": LOCAL_PASS_REPORT})
             local_reported = True
 

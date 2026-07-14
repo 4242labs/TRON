@@ -104,6 +104,7 @@ from ctx import Ctx          # noqa: E402 — engine/ctx.py, the real runtime-co
 import gate                  # noqa: E402 — core/gate.py, the DONE ladder core.tick drives
 import state                 # noqa: E402 — core/state.py
 import tick                  # noqa: E402 — core/tick.py, the WAKE daemon this rig drives via
+import intake                 # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -433,7 +434,7 @@ def main():
                 s["code_tip"] = make_code_commit(root, branch, code_files[block],
                                                  f"{block}-real-progress")
                 s["branch_created"] = True
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -443,7 +444,7 @@ def main():
             stage = g.get("stage")
 
             if stage == gate.STAGE_LOCAL and not s["local_reported"]:
-                append_jsonl(tron_ctx.worker_inbox,
+                intake.write(tron_ctx, agent_id,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 s["local_reported"] = True
 

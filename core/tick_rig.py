@@ -20,7 +20,8 @@ result, never a faked manifest reload.
 
 The rig plays TWO roles a real deployment splits across two processes: the
 WAKE daemon (calls `core.tick.tick(eng)` on a loop) and the worker (writes a
-structured local-pass report to `ctx.worker_inbox`, runs the REAL `land.sh`
+structured local-pass report to its own private intake (`core.intake`, block
+01-38 T1), runs the REAL `land.sh`
 when a gate mints a grant, tears down its branch when ordered to close) —
 exactly the same "rig stands in for the real OS process" convention
 `core/gate_full_rig.py` / `core/gate_rig.py` / `core/landing_rig.py` already
@@ -83,6 +84,7 @@ from ctx import Ctx          # noqa: E402 — engine/ctx.py, the real runtime-co
 import gate                  # noqa: E402 — core/gate.py, the DONE ladder core.tick drives
 import state                 # noqa: E402 — core/state.py, the module under test (with core.tick)
 import tick                  # noqa: E402 — core/tick.py, the module under test
+import intake                 # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -252,7 +254,8 @@ class MiniEng:
     `core/gate.py` need, PLUS `.ctx` is a REAL `engine.ctx.Ctx` (not a rig
     stub) pointing at a real instance dir, so `core.tick`/`core.state`/
     `core.snapshot` exercise the REAL path-resolver contract end to end
-    (`.state`, `.worker_inbox`, `.grants_dir`, `.scratch_dir`).
+    (`.state`, `.grants_dir`, `.scratch_dir`, and — via `core.intake` — the
+    per-agent intake dir).
 
     Wave 5 (`core/switchboard.py`) added a SPAWN arm to `core.tick.tick`
     itself: it fires whenever a worker slot is free, reading
@@ -381,7 +384,7 @@ def main():
        "persisted through the tick host)",
        len([o for o in eng.orders if o[2] == "gate.local"]) == 1, f"orders={eng.orders}")
 
-    append_jsonl(tron_ctx.worker_inbox,
+    intake.write(tron_ctx, WID,
                 {"tag": "worker.done", "block": BLOCK, "slots": LOCAL_PASS_REPORT})
     res2, o2, d2 = wake("t2")
     manifest2 = state.load(tron_ctx)
@@ -390,11 +393,14 @@ def main():
        "local-pass report, advancing gate.local -> gate.merge",
        o2 == "local_passed" and manifest2["gates"][BLOCK]["stage"] == gate.STAGE_MERGE,
        f"outcome={o2} detail={d2}")
-    ok("T2b: the drained inbox sidecar was released after a clean persist "
-       "(no leftover .proc — the persist-gated at-least-once discipline)",
-       not os.path.exists(tron_ctx.worker_inbox + ".proc")
-       and not os.path.exists(tron_ctx.worker_inbox),
-       f"inbox={tron_ctx.worker_inbox} proc-exists={os.path.exists(tron_ctx.worker_inbox + '.proc')}")
+    _own_intake = intake.intake_path(tron_ctx, WID)
+    ok("T2b: the drained intake sidecar was released after a clean persist "
+       "(no leftover .proc — the persist-gated at-least-once discipline; "
+       "block 01-38 T1 — WID's OWN private intake, never the deleted "
+       "shared worker-inbox.jsonl)",
+       not os.path.exists(_own_intake + ".proc")
+       and not os.path.exists(_own_intake),
+       f"intake={_own_intake} proc-exists={os.path.exists(_own_intake + '.proc')}")
 
     # ══ T3: gate.merge mints + orders (real land not yet run) ══
     res3, o3, d3 = wake("t3")

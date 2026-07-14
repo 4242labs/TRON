@@ -49,6 +49,7 @@ if _CORE_DIR not in sys.path:
 
 import gate   # noqa: E402 — core/gate.py, the DONE-ladder stage constants (read-only vocabulary)
 import architect   # noqa: E402 — core/architect.py, ARCHITECT_WID (door minters identity, block 01-37 T9)
+import intake   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 MAIN = "main"
 PIPELINE_REL = "meta/pipeline.md"
@@ -337,7 +338,7 @@ class ScriptedDriver:
                 rel_path, content = self.transcript.code_for(block)
                 make_code_commit(self.root, branch, rel_path, content)
                 self.branch_created[block] = True
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -348,7 +349,7 @@ class ScriptedDriver:
             block_file_rel = f"{self.blocks_rel}/{block}.md"
 
             if stage == gate.STAGE_LOCAL and not self.local_reported[block]:
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 self.local_reported[block] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
@@ -386,7 +387,7 @@ class ScriptedDriver:
                 self.reviewer_seen[agent_id] = i
             status = w.get("status")
             if status == "reviewing" and agent_id not in self.review_first_sent:
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.review_done", "agent_id": agent_id, "type": typ,
                              "slots": {"findings": [self.transcript.finding]}})
                 self.review_first_sent.add(agent_id)
@@ -398,7 +399,7 @@ class ScriptedDriver:
                     # back to the stashed first-hand-back finding
                     # (`core/reviewers.py::on_review_done`'s own documented
                     # fallback).
-                    append_jsonl(self.tron_ctx.worker_inbox,
+                    intake.write(self.tron_ctx, agent_id,
                                 {"tag": "worker.review_done", "agent_id": agent_id, "type": typ,
                                  "slots": {}})
                     self.review_attest_sent.add(agent_id)
@@ -411,7 +412,7 @@ class ScriptedDriver:
         cur = arch.get("current_job")
         if cur and cur.get("kind") == "reconcile" and cur.get("ordered") \
                 and cur.get("block") not in self.reconciled_reported:
-            append_jsonl(self.tron_ctx.worker_inbox,
+            intake.write(self.tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.reconciled", "block": cur["block"],
                          "agent_id": architect.ARCHITECT_WID})
             self.reconciled_reported.add(cur["block"])

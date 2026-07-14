@@ -98,6 +98,7 @@ import gate                  # noqa: E402 — core/gate.py, the DONE ladder (nev
 import sentry                 # noqa: E402 — core/sentry.py, the module under test
 import state                 # noqa: E402 — core/state.py
 import tick                  # noqa: E402 — core/tick.py, wired to call sentry.pace
+import intake                 # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
 
@@ -418,7 +419,7 @@ def main():
         cur = arch.get("current_job")
         if (cur and cur.get("kind") == "triage" and cur.get("ordered")
                 and cur.get("triage_id") not in triage_answered):
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.triage_verdict",
                          "triage_id": cur["triage_id"], "verdict": "operator",
                          "agent_id": architect.ARCHITECT_WID})
@@ -437,7 +438,7 @@ def main():
 
         gs = gates.get(BLOCK_S)
         if gs and gs.get("stage") == gate.STAGE_LOCAL and not local_reported[BLOCK_S]:
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, WID_S,
                         {"tag": "worker.done", "block": BLOCK_S, "slots": LOCAL_PASS_REPORT})
             local_reported[BLOCK_S] = True
 
@@ -446,7 +447,7 @@ def main():
             return
         stage = gh.get("stage")
         if stage == gate.STAGE_LOCAL and not local_reported[BLOCK_H]:
-            append_jsonl(tron_ctx.worker_inbox,
+            intake.write(tron_ctx, WID_H,
                         {"tag": "worker.done", "block": BLOCK_H, "slots": LOCAL_PASS_REPORT})
             local_reported[BLOCK_H] = True
         elif stage == gate.STAGE_MERGE and gh.get("merge_case_id"):

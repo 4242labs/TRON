@@ -2,12 +2,21 @@
 
 `build(eng) -> Snapshot` performs the WHOLE observe phase in one call
 (contracts/blueprint-contracts.md §5's "load MANIFEST → ... → build
-snapshot"): `core.state.load` (fresh manifest off disk), drain
-`ctx.worker_inbox` (`tag`+`slots` structured JSON lines — a tag-less line
-declaring a `branch` is the one other structural shape, T3), then one
-`core.gitobs` trunk-tip read. Nothing here is retained between ticks —
-`core.tick.tick` discards the `Snapshot` at tick end; this module keeps no
-module-level state of its own.
+snapshot"): `core.state.load` (fresh manifest off disk), drain EVERY
+agent's own private intake (`core.intake.drain_all` — `tag`+`slots`
+structured JSON lines; a tag-less line declaring a `branch` is the one
+other structural shape, T3), then one `core.gitobs` trunk-tip read.
+Nothing here is retained between ticks — `core.tick.tick` discards the
+`Snapshot` at tick end; this module keeps no module-level state of its
+own.
+
+Block 01-38 T1 (the root invariant): the single shared `ctx.worker_inbox`
+drop-box is GONE from this path — deleted, not sanitized. Every drained
+line is now paired with an `Origin` (`core.intake.Origin`) the drain
+resolves from WHICH agent's intake it came from, never from anything the
+line itself claims; `_classify_reports`, below, threads that `Origin`
+onto the resolved report as `out["origin"]` (an engine-computed field no
+vocab slot/report.sh flag can ever set — the sole write site is here).
 
 Block 01-37 (T3/T8): EVERY drained line is resolved to its `(tag, slots)`
 HERE, in this SAME observe pass, via `classify.classify(eng, rep,
@@ -49,7 +58,6 @@ No git/subprocess of any kind here beyond `core.gitobs`'s one delegated
 call; the `.proc` rotate/read/remove is plain (non-git) file IO.
 """
 import collections
-import json
 import os
 import sys
 
@@ -69,52 +77,12 @@ import state    # noqa: E402 — core/state.py
 import gitobs   # noqa: E402 — core/gitobs.py, the ONE git-observation seam
 import classify # noqa: E402 — core/classify.py, the structured-only door resolver, run HERE (observe)
 import vocab    # noqa: E402 — core/vocab.py, PROMOTED_SLOT_KEYS (block 01-37, T9)
+import intake   # noqa: E402 — core/intake.py, block 01-38 T1's per-agent drain + Origin
 
 
 Snapshot = collections.namedtuple(
     "Snapshot", ["manifest", "gates", "trunk_tip", "worker_reports", "local_reports",
-                "inbox_sidecar"])
-
-
-def _drain_inbox(ctx, log):
-    """Rotate `ctx.worker_inbox` to a `.proc` sidecar (or re-read a `.proc`
-    a crashed prior tick already rotated — at-least-once). Returns
-    `(reports, sidecar_path_or_None)`. A malformed/structurally-invalid line
-    is logged and skipped — one poison line must never sink the whole tick.
-    A well-formed line is either ALREADY structured (carries its own `tag`)
-    or genuinely free-text (carries `text` — `classify_message`'s own input
-    shape, `{text, sender}`); `build()`, below, resolves EVERY one of these
-    to a tag via `core.classify.classify` before this tick's `route`/`act`
-    ever sees it — a line with NEITHER key is the only shape still dropped
-    here as structurally invalid."""
-    path = ctx.worker_inbox
-    proc = path + ".proc"
-    if not os.path.exists(proc):
-        if not os.path.exists(path):
-            return [], None
-        try:
-            os.rename(path, proc)
-        except OSError as e:
-            log("flow", f"snapshot: inbox rotate failed ({e}); draining nothing this tick")
-            return [], None
-
-    reports = []
-    with open(proc, "r") as fh:
-        lines = fh.readlines()
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError as e:
-            log("flow", f"snapshot: dropped a malformed worker-inbox line: {e}")
-            continue
-        if not isinstance(rec, dict) or ("tag" not in rec and "text" not in rec):
-            log("flow", f"snapshot: dropped a structurally invalid worker-inbox line: {line!r}")
-            continue
-        reports.append(rec)
-    return reports, proc
+                "inbox_sidecars"])
 
 
 def _classify_reports(eng, manifest, raw_reports):
@@ -137,14 +105,23 @@ def _classify_reports(eng, manifest, raw_reports):
     classify-derived report reads identically to a hand-written structured
     one to every downstream reader (`local_reports` below, `core/router.py`
     's own per-tag handlers — `_route_architect_triage_verdict` included,
-    which reads `triage_id`/`verdict` at TOP level)."""
+    which reads `triage_id`/`verdict` at TOP level).
+
+    Block 01-38 T1: `raw_reports` is now a list of `(Origin, dict)` pairs
+    (`core.intake.drain_all`'s own return shape) — an admitted report is
+    stamped `out["origin"] = origin` (engine-computed, the ONE write site
+    for this key; no vocab slot/report.sh flag can ever set it), threaded
+    out-of-band alongside the still-unchanged `sender`/`agent_id`/
+    `worker_id` fields below (T2's job is deleting those — not this
+    task's)."""
     resolved = []
-    for rep in raw_reports:
+    for origin, rep in raw_reports:
         tag, slots = classify.classify(eng, rep, manifest)
         if tag is None:
             continue   # door-refused (T3/T8) — already fully handled, never routed
         out = dict(rep)
         out["tag"] = tag
+        out["origin"] = origin
         merged_slots = {**(rep.get("slots") or {}), **(slots or {})}
         out["slots"] = merged_slots
         for key in vocab.PROMOTED_SLOT_KEYS:
@@ -160,7 +137,8 @@ def _classify_reports(eng, manifest, raw_reports):
         # this bridge a real report is dropped as "malformed" (the T2-01
         # wall). Promote `sender.id` -> both keys when absent; every scripted
         # rig writes a top-level `agent_id` directly, so this is inert for
-        # them.
+        # them. (T2 deletes this bridge once every reader is converted to
+        # `origin` instead — T3's job, not this one.)
         sender_id = (rep.get("sender") or {}).get("id")
         if sender_id:
             out.setdefault("agent_id", sender_id)
@@ -171,13 +149,15 @@ def _classify_reports(eng, manifest, raw_reports):
 
 def build(eng):
     """Assemble this tick's immutable view — the whole observe phase, in one
-    call: fresh manifest (`core.state.load`), this tick's inbox drain
-    resolved to tagged reports (`_classify_reports`, wave 13 — the ONE
-    place `core/classify.py` runs, see module docstring), and one real
-    trunk-tip read (`core.gitobs.tip_sha`, never a raw git call)."""
+    call: fresh manifest (`core.state.load`), this tick's PER-AGENT intake
+    drain (`core.intake.drain_all` — block 01-38 T1; the single shared
+    `ctx.worker_inbox` is gone from this path) resolved to tagged reports
+    (`_classify_reports`, wave 13 — the ONE place `core/classify.py` runs,
+    see module docstring), and one real trunk-tip read
+    (`core.gitobs.tip_sha`, never a raw git call)."""
     ctx = eng.ctx
     manifest = state.load(ctx)
-    raw_reports, sidecar = _drain_inbox(ctx, eng.log)
+    raw_reports, sidecars = intake.drain_all(ctx, eng.log)
     worker_reports = _classify_reports(eng, manifest, raw_reports)
 
     root = eng.paths["root"]
@@ -215,18 +195,18 @@ def build(eng):
 
     return Snapshot(manifest=manifest, gates=gates, trunk_tip=trunk_tip,
                     worker_reports=worker_reports, local_reports=local_reports,
-                    inbox_sidecar=sidecar)
+                    inbox_sidecars=sidecars)
 
 
 def release(snap):
-    """Drop the drained inbox sidecar — ONLY ever called by `core.tick.tick`
-    AFTER `core.state.save` has succeeded (at-least-once: a crash before
-    this leaves the sidecar for the next tick to re-drain, same discipline
-    as `engine/fsm.py::_release_claimed`)."""
-    sidecar = snap.inbox_sidecar
-    if not sidecar:
-        return
-    try:
-        os.remove(sidecar)
-    except OSError:
-        pass
+    """Drop every drained intake sidecar — ONLY ever called by
+    `core.tick.tick` AFTER `core.state.save` has succeeded (at-least-once:
+    a crash before this leaves each sidecar for the next tick to re-drain,
+    same discipline as `engine/fsm.py::_release_claimed`). Plural now
+    (block 01-38 T1): one sidecar per agent intake actually drained this
+    tick, never a single shared one."""
+    for sidecar in snap.inbox_sidecars or ():
+        try:
+            os.remove(sidecar)
+        except OSError:
+            pass

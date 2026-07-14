@@ -88,6 +88,7 @@ from ctx import Ctx             # noqa: E402 — engine/ctx.py, the real runtime
 import gate                      # noqa: E402 — core/gate.py, the DONE ladder (stage constants only)
 import architect                  # noqa: E402 — core/architect.py, ARCHITECT_WID
 import state                       # noqa: E402 — core/state.py
+import intake                       # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 from engine import Engine, BootupError   # noqa: E402 — core/engine.py, THE MODULE UNDER TEST
 
 import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
@@ -507,7 +508,7 @@ class RunHistory:
                 make_code_commit(self.root, branch, f"src/lib/{block}.ts",
                                  f"{block}-enginerig-change")
                 self.branch_created[block] = True
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.online", "agent_id": agent_id,
                              "slots": {"branch": branch}})
 
@@ -518,7 +519,7 @@ class RunHistory:
             block_file_rel = f"{BLOCKS_REL}/{block}.md"
 
             if stage == gate.STAGE_LOCAL and not self.local_reported[block]:
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.done", "block": block, "slots": LOCAL_PASS_REPORT})
                 self.local_reported[block] = True
             elif stage == gate.STAGE_MERGE and g.get("merge_case_id"):
@@ -552,7 +553,7 @@ class RunHistory:
                 self.reviewer_seen[agent_id] = i
             status = w.get("status")
             if status == "reviewing" and agent_id not in self.review_first_sent:
-                append_jsonl(self.tron_ctx.worker_inbox,
+                intake.write(self.tron_ctx, agent_id,
                             {"tag": "worker.review_done", "agent_id": agent_id, "type": typ,
                              "slots": {"findings": [FINDING]}})
                 self.review_first_sent.add(agent_id)
@@ -565,7 +566,7 @@ class RunHistory:
                     # (`core/reviewers.py::on_review_done`'s own documented
                     # fallback), exactly like a real reviewer confirming
                     # coverage without re-stating what it already reported.
-                    append_jsonl(self.tron_ctx.worker_inbox,
+                    intake.write(self.tron_ctx, agent_id,
                                 {"tag": "worker.review_done", "agent_id": agent_id, "type": typ,
                                  "slots": {}})
                     self.review_attest_sent.add(agent_id)
@@ -578,7 +579,7 @@ class RunHistory:
         cur = arch.get("current_job")
         if cur and cur.get("kind") == "reconcile" and cur.get("ordered") \
                 and cur.get("block") not in self.reconciled_reported:
-            append_jsonl(self.tron_ctx.worker_inbox,
+            intake.write(self.tron_ctx, architect.ARCHITECT_WID,
                         {"tag": "architect.reconciled", "block": cur["block"],
                          "agent_id": architect.ARCHITECT_WID})
             self.reconciled_reported.add(cur["block"])

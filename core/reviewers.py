@@ -133,6 +133,7 @@ if _HERE not in sys.path:
 
 import architect   # noqa: E402 — core/architect.py, the log-review queue this gate feeds on attest
 import knobs as knobs_mod   # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (wave 16)
+import intake as intake_mod   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 
 
 def review_block(typ):
@@ -224,6 +225,7 @@ def dispatch(eng, manifest, typ):
     # the re-order to the right worker without a reviewer-specific branch.
     workers[agent_id] = {"block": review_block(typ), "type": typ, "status": "reviewing",
                          "wid": agent_id}
+    intake_mod.create(eng.ctx, agent_id)   # block 01-38 T1 — the intake IS the identity
 
     manifest.setdefault("cadence", {})[typ] = 0   # consumed on dispatch
 
