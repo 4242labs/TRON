@@ -63,6 +63,26 @@ case can only cause a false RED, never a false GREEN. Proves, live:
              explicit pending row, not fixed here: the fix is gated on an
              outstanding operator ruling (MODEL A deletes the payload
              prover entirely; MODEL B would extend it to trace mutations).
+             (Do not confuse with fixtures 43/44 below — those are a
+             CONTAINER-MUTATION taint gap, receiver identity, not payload
+             SHAPE; unrelated axis, unrelated fix, already closed.)
+  RED (x4)   the block 01-40 T1 SECOND hostile-review's CONTAINER-MUTATION
+             evasions (fixtures 37-40): `.append`/`.insert`/`.extend`/a
+             `Subscript`-STORE mutating an already-bound `argv`/`env`
+             receiver in place, invisible to the taint UNION's binding
+             walk until rule 6 (container_bindings) was added.
+  RED (x2)   THIS round's finding (fixtures 43/44): `.update()` (dict
+             merge) was NOT a container-mutation taint SOURCE at all —
+             `env.update({"P": eng.ctx.worker_inbox})` was as ordinary a
+             GREEN miss as `.append` for an argv list, same class as the
+             four fixtures immediately above, just a different method
+             name. `env |= {...}` (fixture 44) is a REGRESSION-confirming
+             control, not a new fix — an `AugAssign` to a bare `Name` was
+             already routed through the taint union unconditionally,
+             before this round, for every operator including `|=`.
+  GREEN      an ordinary `.update()`/`|=` whose value carries no
+             WORKER/OPERATOR/MANIFEST taint at all stays clean — the fix
+             is value-conditioned, never a blanket red on the method name.
   GREEN/tree the real `core/` proof-harness tree is clean except the
              explicit, visible KNOWN_RED list (core/sim/operator_proxy.py
              + core/architect_rig.py, at minimum — see core/r3_lint.py's
@@ -523,6 +543,32 @@ def bad(eng):
     env["P"] = eng.ctx.worker_inbox
     subprocess.run(["cat"], env=env)
 ''',
+
+    # ── block 01-40 T1, THIS round's finding — `.update()` (dict merge) is
+    #     the SAME container-mutation taint miss as fixtures 37-40 (a
+    #     tainted VALUE mutated into an already-bound receiver, never a
+    #     fresh binding of the receiver's own name), just via `.update`
+    #     instead of `.append`/`.extend`/`.insert`/`.add`/subscript-store —
+    #     `env={}; env.update({"P": eng.ctx.worker_inbox});
+    #     subprocess.run(env=env)` was as ordinary a GREEN miss as
+    #     `.append` for an argv list. ──
+    "43_container_mutation_update_dict_literal": '''
+import subprocess
+
+def bad(eng):
+    env = {}
+    env.update({"P": eng.ctx.worker_inbox})
+    subprocess.run(["cat"], env=env)
+''',
+
+    "44_container_mutation_bitor_augassign": '''
+import subprocess
+
+def bad(eng):
+    env = {}
+    env |= {"P": eng.ctx.worker_inbox}
+    subprocess.run(["cat"], env=env)
+''',
 }
 
 # ── ROUND-5 PoCs (Opus design review, pending the operator's MODEL A/B
@@ -563,6 +609,20 @@ def bad(eng):
 }
 
 # ─────────────────────── legal shapes (must stay GREEN) ───────────────────────
+
+# No-false-RED control for fixture 43/44's fix: an ordinary `.update()`/`|=`
+# whose VALUE never carries WORKER/OPERATOR/MANIFEST taint at all must stay
+# clean — the fix taints the RECEIVER only when a real marker flows in, never
+# unconditionally on sight of the method name.
+CLEAN_CONTAINER_UPDATE_FIXTURE = '''
+import subprocess
+
+def fine(eng):
+    env = {}
+    env.update({"PATH": "/usr/bin"})
+    env |= {"LANG": "C"}
+    subprocess.run(["cat"], env=env)
+'''
 
 DOOR_ONLY_FIXTURE = '''
 from util import append_jsonl
@@ -645,6 +705,21 @@ def main():
         print("GREEN proof (fixture) confirmed: legal helper indirection (safe payload "
               "at every call site) is clean — the lint judges call sites, not the mere "
               "presence of indirection.")
+
+    # ── control: `.update()`/`|=` with an UNTAINTED value must stay clean —
+    #     fixture 43/44's fix taints the receiver only when a real marker
+    #     flows in, never unconditionally on sight of the method/operator ──
+    clean_update_violations = r3_lint.lint_source(
+        CLEAN_CONTAINER_UPDATE_FIXTURE, path="<clean-container-update-fixture>")
+    if clean_update_violations:
+        print("AC-2 REGRESSION: an ordinary `.update()`/`|=` with no WORKER/OPERATOR/"
+              f"MANIFEST-tainted value was flagged: "
+              f"{[str(v) for v in clean_update_violations]}", file=sys.stderr)
+        failed = True
+    else:
+        print("GREEN proof (fixture) confirmed: `.update()`/`|=` with an untainted "
+              "value stays clean — container-mutation taint is value-conditioned, "
+              "not name-conditioned.")
 
     # ── GREEN on tree, modulo the explicit KNOWN_RED list ──
     result = r3_lint.run()

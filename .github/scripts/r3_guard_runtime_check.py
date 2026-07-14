@@ -48,6 +48,27 @@ the way `scripts/l1.sh` wires it (via `materialize_site_dir` +
            r3_honesty_lint_check.py` fixture 36). The TRUE residual is a
            child invocation built from NO tainted argument at all — see
            both docstrings' honest-limits sections.
+  DIES     (block 01-40 T1, EIGHTH hostile review — THE TERMINAL FIX) —
+           `os.utime`, `os.setxattr`, `os.removexattr` against the
+           protected path (THIS round's three named gaps: none of them
+           had a branch in the OLD per-event elif enumeration, so all
+           three sailed through and mutated a protected file unguarded),
+           AND `os.mkdir` directly AT the protected path — an event this
+           module has NEVER special-cased, on EITHER side of the rewrite,
+           in any of the eight review rounds, proving the CLASS fix (a
+           brand-new unenumerated mutating event is denied by
+           CONSTRUCTION), not just these three names. `core/r3_guard.py`
+           was rewritten from a per-event elif enumeration (additive-by-
+           discovery — every round found the next named gap) to
+           DENY-BY-DEFAULT over every audit event except a small, tight,
+           empirically-verified ALLOW-list (see its module docstring).
+  SURVIVES (no-false-RED, THIS round) — `os.utime`/`os.setxattr`/
+           `os.removexattr`/`os.mkdir` against a genuinely UNPROTECTED
+           path still work; `os.listdir`/`os.scandir`/
+           `pathlib.Path.glob` — three ALLOW-listed events — still work
+           when run against the DIRECTORY that itself contains the
+           protected file (the real shape: a rig listing its own
+           instance dir, which also holds operator-inbox.jsonl).
 
 Exit 0 only if every one of the above holds.
 """
@@ -318,6 +339,51 @@ import os
 os.chown({protected!r}, os.getuid(), os.getgid())
 """)
 
+    # ── DIES (block 01-40 T1, EIGHTH hostile review — THIS round's named
+    #     gaps): os.utime, os.setxattr, os.removexattr all sailed straight
+    #     through the OLD per-event elif enumeration and mutated/touched a
+    #     protected file, unguarded, because no branch ever named them —
+    #     the exact "additive-by-discovery" failure the deny-by-default
+    #     rewrite exists to end. Each of these three now dies via the
+    #     GENERIC branch 3 dispatch (module docstring), never a new
+    #     per-event elif. ──
+    expect_dies("os_utime_touches_protected", f"""
+import os
+os.utime({protected!r}, (0, 0))
+""")
+
+    expect_dies("os_setxattr_mutates_protected", f"""
+import os
+os.setxattr({protected!r}, "user.r3guard_test", b"pwned-xattr")
+""")
+
+    expect_dies("os_removexattr_mutates_protected", f"""
+import os
+os.removexattr({protected!r}, "user.does_not_need_to_exist")
+""")
+
+    # ── DIES (BELT-AND-SUSPENDERS completeness proof, block 01-40 T1,
+    #     EIGHTH hostile review) — os.mkdir is an op this module has NEVER
+    #     special-cased, on EITHER side of the deny-by-default rewrite, in
+    #     any of the eight review rounds. It is not os.utime/os.setxattr/
+    #     os.removexattr (this round's THREE named findings, proven
+    #     individually above) — it is deliberately something else again,
+    #     to prove the CLASS fix, not just these three names: creating a
+    #     directory exactly at the protected path (the file already exists
+    #     there, so an UNGUARDED mkdir would fail with the OS's own
+    #     FileExistsError, never `r3_guard`'s PermissionError — this test
+    #     asserts the GUARD fires FIRST, before the OS ever gets a chance
+    #     to raise its own unrelated error, which is exactly what
+    #     `expect_dies`'s "PermissionError in stderr" check distinguishes).
+    #     If a FUTURE CPython release, or an op nobody has tried yet, adds
+    #     one more unenumerated mutating event, THIS is the case that
+    #     proves it would die too — without needing a ninth hostile review
+    #     to find it by name first. ──
+    expect_dies("os_mkdir_never_special_cased_anywhere", f"""
+import os
+os.mkdir({protected!r})
+""")
+
     # ── SURVIVES (THIRD pass, no-false-RED proof): a symlink/hardlink
     #     between two genuinely UNPROTECTED paths — and a chmod of an
     #     unprotected file — must still work; these new branches guard the
@@ -334,6 +400,26 @@ os.chmod(a, 0o644)
 print("unprotected alias ops ok")
 """, check=lambda r: "unprotected alias ops ok" in r.stdout)
 
+    # ── SURVIVES (block 01-40 T1, EIGHTH hostile review, no-false-RED
+    #     proof for THIS round's deny-by-default rewrite): os.utime,
+    #     os.setxattr, os.removexattr, AND os.mkdir must all still work on
+    #     a genuinely UNPROTECTED path — deny-by-default guards ANY
+    #     candidate argument that names a PROTECTED path, never every
+    #     candidate argument unconditionally; a rig that legitimately
+    #     touches its OWN unprotected files this way must not be
+    #     collaterally broken. ──
+    expect_survives("unprotected_utime_setxattr_removexattr_mkdir_survive", f"""
+import os
+d = {unprotected!r} + ".utime_xattr_mkdir_dir"
+f = {unprotected!r} + ".utime_xattr_mkdir_file"
+open(f, "w").write("x")
+os.utime(f, (0, 0))
+os.setxattr(f, "user.r3guard_test", b"fine")
+os.removexattr(f, "user.r3guard_test")
+os.mkdir(d)
+print("unprotected utime/xattr/mkdir ops ok")
+""", check=lambda r: "unprotected utime/xattr/mkdir ops ok" in r.stdout)
+
     # ── SURVIVES: read-mode open of the protected path ──
     expect_survives("read_mode_open_survives", f"""
 data = open({protected!r}, "r").read()
@@ -346,6 +432,30 @@ print("read ok")
 open({unprotected!r}, "w").write("fine")
 print("unprotected ok")
 """, check=lambda r: "unprotected ok" in r.stdout)
+
+    # ── SURVIVES (block 01-40 T1, EIGHTH hostile review, ALLOW-LIST
+    #     no-false-RED proof): os.listdir/os.scandir/pathlib.Path.glob —
+    #     three ALLOW-listed events — must all still work when run against
+    #     the DIRECTORY that itself CONTAINS the protected file (exactly
+    #     the real-world shape: a rig's own instance dir, listed/globbed
+    #     for its OWN files, also happens to hold operator-inbox.jsonl).
+    #     None of these pass the protected FILE's own path as an argument
+    #     (only the containing DIRECTORY path is an argument), so they
+    #     were never at risk from deny-by-default's generic scan — this
+    #     proves that empirically, not just by argument-shape reasoning. ──
+    expect_survives("allowlisted_listdir_scandir_glob_survive_over_protected_dir", f"""
+import os
+import pathlib
+d = os.path.dirname({protected!r})
+names = os.listdir(d)
+with os.scandir(d) as it:
+    names2 = [e.name for e in it]
+hits = list(pathlib.Path(d).glob("*"))
+assert os.path.basename({protected!r}) in names
+assert os.path.basename({protected!r}) in names2
+assert any(p.name == os.path.basename({protected!r}) for p in hits)
+print("allowlisted read-only traversal over protected dir ok")
+""", check=lambda r: "allowlisted read-only traversal over protected dir ok" in r.stdout)
 
     # ── SUCCEEDS (documented hole): a subprocess child, spawned by a
     #     GUARDED parent, without the guard's env wired into it, writes the

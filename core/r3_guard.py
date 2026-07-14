@@ -50,71 +50,162 @@ the one piece of the R3 pivot still awaiting an operator ruling on MODEL
 A/B). Flipping that policy later is a ONE-LINE CHANGE to what `l1.sh`
 exports into `R3_GUARD_PROTECT` — never a code change here.
 
-GUARDED EVENTS (audit hook, not monkeypatching — every documented way
-CPython raises 'a write is about to happen', including ones a
-future stdlib idiom this module's author never enumerated will likely
-still raise, since these are the SAME finite set of low-level events every
-higher-level write (`open().write`, `Path.write_text`, `csv.writer`,
-`json.dump`, ...) ultimately funnels through):
+DESIGN: DENY-BY-DEFAULT OVER EVERY AUDIT EVENT — THE TERMINAL FIX (block
+01-40 T1, EIGHTH hostile review). Every one of the seven prior review
+rounds added ANOTHER individually-named branch to this hook — 'open',
+then 'os.rename', 'os.truncate', 'os.link', 'os.symlink', 'os.chmod',
+'os.chown', 'os.remove', 'os.rmdir' — and every round after that found
+the NEXT ordinary `os.*` mutating call this module had simply never
+enumerated (THIS round: `os.utime`, `os.setxattr`, `os.removexattr` all
+sailed straight through and mutated a protected file, unguarded, because
+no branch named them). That is an ADDITIVE-BY-DISCOVERY coverage model —
+structurally guaranteed to have a next gap, because CPython's own
+audit-event surface is neither closed nor stable, and each round was
+betting it could out-enumerate that surface one hostile review at a time.
+It cannot. This round replaces the enumeration with the CLASS fix:
 
-  'open'         write-intent from EITHER the mode string containing any
-                 of w/a/x/+ (builtin `open`/`io.open`/`Path.open`, which
-                 `Path.write_text`/`write_bytes`/`csv.writer(open(...))`
-                 all fall through to) OR — when mode is None, as with
-                 `os.open` — the raw flags int carrying any of
-                 O_WRONLY|O_RDWR|O_APPEND|O_CREAT|O_TRUNC. DENY BY DEFAULT
-                 on an unresolvable flags value.
-  'os.rename'    covers `os.replace` too (verified empirically — CPython
-                 raises the SAME 'os.rename' audit event for `os.replace`,
-                 there is no separate 'os.replace' event); guards BOTH
-                 args[0] (src) AND args[1] (dst) — dst catches the
-                 write-tmp-then-atomic-rename-onto-the-real-path evasion
-                 (at the rename, not the legal tmp-file open); src catches
-                 a rig renaming the PROTECTED file itself away to an
-                 unprotected path (destruction-by-move-away — the bytes
-                 under the protected name are gone either way).
-  'os.truncate'  guards args[0] (path).
-  'os.link'      guards BOTH args[1] (dst — a hardlink is a second
-                 directory entry for the SAME inode; blocking it stops a
-                 rig from aliasing a fresh path onto the protected file's
-                 bytes) AND args[0] (src — block 01-40 T1, hostile-review
-                 closure: hardlinking the PROTECTED file itself under a
-                 fresh, unprotected name has no legitimate use and would
-                 otherwise create an alias invisible to a naive
-                 string-only spec match).
-  'os.symlink'   guards BOTH args[1] (dst, same reasoning as os.link, one
-                 level of indirection) AND args[0] (src — block 01-40 T1,
-                 hostile-review closure: the dir_fd/openat bypass
-                 `os.symlink("operator-inbox.jsonl", "sneaky.tmp",
-                 dir_fd=dfd)` creates a link whose OWN name never matches
-                 any protected basename/glob, but POINTS AT a protected
-                 file; a later `os.open("sneaky.tmp", O_WRONLY,
-                 dir_fd=dfd)` realpath-resolves against the wrong base
-                 (this process's CWD, not dfd's real directory) and misses
-                 the write entirely even though it lands on the protected
-                 file's bytes. Denied at link-CREATION instead, before any
-                 open can reach it — a rig has no legitimate reason to
-                 symlink anything AT a protected ingress file).
-  'os.chmod'     guards args[0] (path).
-  'os.chown'     guards args[0] (path). Both added block 01-40 T1, second
-                 hostile review: `os.chmod(protected, 0o000)` is a
-                 channel-breaking DoS that leaves CONTENT and EXISTENCE
-                 both unchanged (the exact two properties every other DIES
-                 proof in this module treats as "the write never landed")
-                 — with no branch here it would permanently lock even the
-                 real door (scripts/report.sh) out of the path, invisible
-                 to every existing content/existence-snapshot proof.
-  'os.remove'    guards args[0] (path). CPython raises the SAME
-                 'os.remove' audit event for `os.unlink` (verified
-                 empirically — `os.unlink` is a bare alias for
-                 `os.remove`, no separate event exists), so this one
-                 branch covers both spellings, plus `shutil.move`'s
-                 cross-device fallback (`copy2` then `os.unlink(src)`
-                 when rename can't cross filesystems) — the unlink half of
-                 that fallback dies here even though the copy2 half writes
-                 an UNPROTECTED destination.
-  'os.rmdir'     guards args[0] (path) — a protected DIRECTORY spec's own
-                 root, or an ancestor a glob/dir spec still matches.
+  hook(event, args):
+    1. event == "open"                    → UNCHANGED special case (see
+                                             `_is_write_open`, below): the
+                                             ONE event that is
+                                             legitimately BOTH a read AND
+                                             a write depending on
+                                             mode/flags — SURVIVES a
+                                             read-mode open of a
+                                             protected path, DENIES a
+                                             write-mode one.
+    2. event in `_SAFE_EVENTS`, or
+       event starts with a
+       `_SAFE_EVENT_PREFIXES` entry        → ALLOWED UNCONDITIONALLY —
+                                             the allow-list below is now
+                                             THE ONLY EXEMPTION SURFACE IN
+                                             THE ENTIRE MODULE.
+    3. every other event, WHATEVER ITS
+       NAME                                → DENY BY DEFAULT the moment
+                                             ANY of its raw arguments
+                                             resolves to a protected
+                                             candidate — string/bytes/
+                                             `os.PathLike` checked as a
+                                             path, `int` checked as an
+                                             open fd via `/proc/self/fd`
+                                             (the SAME `_resolve_path`
+                                             this module already used for
+                                             every hand-named branch) —
+                                             through the exact same
+                                             `_protected()` (fail-closed
+                                             relative-basename rule, then
+                                             realpath, then inode-identity
+                                             alias match) every
+                                             previously hand-named branch
+                                             already called. A brand-new
+                                             `os.*` mutating call this
+                                             module's author has STILL
+                                             never heard of — the NEXT
+                                             hostile-review discovery — is
+                                             denied the moment it touches
+                                             a protected path, BY
+                                             CONSTRUCTION, with ZERO code
+                                             change here. The enumeration
+                                             gap is closed structurally,
+                                             never by listing one more op.
+
+ALLOW-LIST IS THE ONLY EXEMPTION SURFACE (`_SAFE_EVENTS` /
+`_SAFE_EVENT_PREFIXES`) — kept intentionally TIGHT, every entry verified
+EMPIRICALLY on this interpreter (a throwaway `sys.addaudithook` probe
+script, not guessed from documentation) to (a) actually fire as its own
+distinct audit event at all, and (b) never itself write/mutate/alias a
+path — only read or execute:
+
+  os.listdir / os.scandir / os.walk / os.fwalk    directory LISTING /
+                                                    TRAVERSAL — read-only.
+  glob.glob / glob.glob/2 / pathlib.Path.glob /
+  pathlib.Path.rglob / pathlib.Path.walk           pattern-matching
+                                                    traversal, built on
+                                                    the same read-only
+                                                    scandir underneath.
+  os.getxattr / os.listxattr                       extended-attribute
+                                                    READS — contrast
+                                                    `os.setxattr` /
+                                                    `os.removexattr`,
+                                                    which MUTATE and are
+                                                    deliberately NOT
+                                                    allow-listed (THIS
+                                                    round's own finding —
+                                                    see below).
+  import / compile / exec                          code loading /
+                                                    execution — never
+                                                    itself a filesystem
+                                                    write, whatever
+                                                    filename LABEL is
+                                                    attached to the code
+                                                    object (`compile`'s
+                                                    `filename` arg is an
+                                                    inert label, not a
+                                                    write target —
+                                                    `compile()` cannot
+                                                    write a file
+                                                    regardless of its
+                                                    content); the actual
+                                                    bytecode-cache WRITE a
+                                                    fresh `import`
+                                                    performs goes through
+                                                    a SEPARATE,
+                                                    already-guarded 'open'
+                                                    event.
+  socket.*  (PREFIX, the one prefix rule
+             in this list)                         network transport —
+                                                    never a filesystem
+                                                    write to a protected
+                                                    path; enumerating
+                                                    every `socket.*` event
+                                                    name (`connect`,
+                                                    `bind`, `__new__`,
+                                                    `sendmsg`, ...) one at
+                                                    a time would be
+                                                    exactly the additive-
+                                                    enumeration mistake
+                                                    this rewrite exists to
+                                                    stop — the CATEGORY,
+                                                    not the individual
+                                                    event name, is what
+                                                    makes these safe.
+
+  (`os.stat`/`os.lstat`/`os.access`/`os.mkfifo`/`os.mknod` do not appear
+  above: empirically, THIS interpreter raises no audit event for them at
+  all — they never reach `hook()` in the first place, allow-listed or
+  not; noted here so a future reader does not go looking for a branch
+  that was never needed.)
+
+Anything NOT in this list — including an `os.*` mutating call invented in
+a future CPython release, or one that simply existed all along and nobody
+tried yet — is denied by default the instant it names a protected
+candidate. `.github/scripts/r3_guard_runtime_check.py` proves this
+CONSTRUCTIVELY, not just for the three named gaps THIS round found
+(`os.utime`, `os.setxattr`, `os.removexattr`): one case drives `os.mkdir`
+— an event this module has NEVER special-cased, in any of the eight
+rounds, on either side of this rewrite — directly at a protected path and
+asserts `PermissionError`, so a regression in the allow-list (or a return
+to per-event enumeration) surfaces in CI the moment it reintroduces a
+gap, without needing a NINTH hostile review to find the next named op
+first.
+
+WHAT THE OLD PER-EVENT BRANCHES USED TO SAY, now subsumed: 'os.rename'
+(covers `os.replace` too — CPython raises the SAME event for both, no
+separate `os.replace` event exists) guarded both `args[0]`/src (a rig
+renaming the PROTECTED file itself away — destruction-by-move-away) and
+`args[1]`/dst (write-tmp-then-atomic-rename-onto-the-real-path); 'os.link'
+and 'os.symlink' guarded both slots the same way (source-side closure:
+aliasing the protected file's bytes under a fresh, unprotected name has
+no legitimate use); 'os.chmod'/'os.chown' guarded a channel-breaking DoS
+that leaves CONTENT and EXISTENCE both unchanged (`os.chmod(protected,
+0o000)` would otherwise permanently lock even the real door,
+scripts/report.sh, out of the path, invisible to every content/existence
+snapshot proof); 'os.remove' covered `os.unlink` too (a bare alias, no
+separate event) plus the unlink half of `shutil.move`'s cross-device
+`copy2`+unlink fallback; 'os.rmdir' guarded a protected DIRECTORY spec's
+own root. Every one of these is now just a NAME that happens to fall into
+branch 3 above — the specific per-event reasoning is preserved here for
+context, not because any of it is special-cased in code anymore.
 
 DIR_FD / OPENAT FAIL-CLOSED RULE: `os.open(basename, flags,
 dir_fd=some_open_dir_fd)` hands the 'open' audit event ONLY the bare
@@ -193,6 +284,35 @@ this module could, and this module's own hook does not propagate through
 the runtime half of this hole EXPLICITLY (a guarded parent spawns an
 unguarded child that writes the protected path, and the proof asserts
 that SUCCEEDS) — an acknowledged gap, never a silently-assumed one.
+
+THE TRUE RESIDUAL, HONESTLY, AFTER THE DENY-BY-DEFAULT REWRITE — stated
+plainly rather than left implicit, because deny-by-default over "every
+audit event" is still bounded by what CPython's audit subsystem itself
+sees:
+
+  - `ctypes` / raw syscalls. `ctypes.CDLL("libc.so.6").open(...)` (or
+    any direct FFI call into libc) calls into the kernel BELOW CPython's
+    own `os`/`io` layer entirely — no audit event fires for it, ever, on
+    any branch of this hook, allow-listed or not. This is a CPython
+    architectural fact (audit hooks are woven into CPython's own C
+    implementations of `os.*`/`io.*`, not into the syscall boundary
+    itself), not something this module — or any pure-Python audit-hook
+    mechanism — can close.
+  - `fchmod`/similar fd-based ops on an fd whose OWN `open()` was itself
+    unguarded. This sounds like a gap but is adversarial-only in
+    practice: the fd has to come from SOMEWHERE, and the `open()` (or
+    `os.open()`) call that MINTED that fd is itself always guarded in
+    THIS process (branch 1 above) — the only way to hold an fd this
+    hook never saw opened is to receive it from an unguarded process
+    (the child-process hole immediately above, `os.pipe`/`socket.
+    socketpair` fd-passing via `sendmsg`/`SCM_RIGHTS`, or an
+    already-open fd inherited at process start, e.g. fd 3+ passed by a
+    parent) — a deliberately adversarial setup, not an ordinary rig
+    mistake.
+
+Both are real, both are stated here rather than silently assumed —
+consistent with every other honest-limits section in this module and in
+`core/r3_lint.py`.
 """
 import fnmatch
 import glob as glob_mod
@@ -206,6 +326,33 @@ _installed = False
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 _WRITE_MODE_CHARS = "wax+"
+
+# THE ONLY EXEMPTION SURFACE in this module (module docstring's "DESIGN:
+# DENY-BY-DEFAULT" section) — every entry verified EMPIRICALLY, on this
+# interpreter, to (a) fire as its own real audit event and (b) never
+# itself write/mutate/alias a filesystem path. Adding to this set is a
+# real security decision (it is the ONE way to exempt an event from
+# deny-by-default) — never add an event here without the same empirical
+# verification (a throwaway `sys.addaudithook` probe), and never add one
+# "to make a rig pass" without first confirming the event genuinely never
+# writes.
+_SAFE_EVENTS = frozenset({
+    # directory listing / traversal — read-only.
+    "os.listdir", "os.scandir", "os.walk", "os.fwalk",
+    "glob.glob", "glob.glob/2",
+    "pathlib.Path.glob", "pathlib.Path.rglob", "pathlib.Path.walk",
+    # extended-attribute READS — contrast os.setxattr/os.removexattr
+    # (MUTATE, deliberately NOT here; this round's own finding).
+    "os.getxattr", "os.listxattr",
+    # code loading/execution — never itself a filesystem write, whatever
+    # filename LABEL is attached to the code object.
+    "import", "compile", "exec",
+})
+# network transport — never a filesystem write to a protected path. A
+# PREFIX rule (the only one in this module) because enumerating every
+# `socket.*` event name one at a time would be exactly the
+# additive-enumeration mistake this rewrite exists to stop.
+_SAFE_EVENT_PREFIXES = ("socket.",)
 
 
 def _parse_specs(raw):
@@ -425,6 +572,10 @@ def install():
         )
 
     def hook(event, args):
+        # 1. 'open' — the ONE event that is legitimately BOTH a read and a
+        #    write depending on mode/flags; kept as its own special case
+        #    (module docstring's DESIGN section, step 1) so a read-mode
+        #    open of a protected path keeps surviving.
         if event == "open":
             path, mode, flags = args
             if not _is_write_open(mode, flags):
@@ -432,79 +583,33 @@ def install():
             matched, display = _protected(specs, path)
             if matched:
                 _deny("open() for write", display)
-        elif event == "os.rename":
-            # guard BOTH slots: dst (write-tmp-then-atomic-rename-onto-the-
-            # real-path evasion) AND src (rig renames the protected file
-            # itself AWAY — destruction by move-away).
-            matched, display = _protected(specs, args[1])
+            return
+        # 2. the ONLY exemption surface in this module — see
+        #    `_SAFE_EVENTS`/`_SAFE_EVENT_PREFIXES` and the module
+        #    docstring's ALLOW-LIST section for why each entry is safe.
+        if event in _SAFE_EVENTS or event.startswith(_SAFE_EVENT_PREFIXES):
+            return
+        # 3. DENY BY DEFAULT — every other event, WHATEVER ITS NAME,
+        #    including one this module has never seen or named before:
+        #    scan every raw argument (never a per-event slot list — that
+        #    enumeration is exactly what seven prior rounds kept losing
+        #    to) through the SAME `_protected()` resolver every previously
+        #    hand-named branch already used, and deny the instant ANY
+        #    argument names a protected candidate. `bool` is excluded
+        #    (True/False are technically `int` in Python but are never a
+        #    meaningful fd number); every other `str`/`bytes`/`bytearray`/
+        #    `os.PathLike`/`int` argument is a candidate — `_protected()`
+        #    (via `_resolve_path`) already no-ops cleanly on an
+        #    unresolvable one (a bare int that is not actually an open fd
+        #    simply fails to resolve and is never treated as a match).
+        for raw in args:
+            if isinstance(raw, bool):
+                continue
+            if not isinstance(raw, (str, bytes, bytearray, int)) and not hasattr(raw, "__fspath__"):
+                continue
+            matched, display = _protected(specs, raw)
             if matched:
-                _deny("os.rename/os.replace onto", display)
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny("os.rename/os.replace (move-away) of", display)
-        elif event == "os.truncate":
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny("os.truncate", display)
-        elif event == "os.link":
-            # guard BOTH slots: dst (a fresh directory entry aliased ONTO
-            # the protected file) AND src (block 01-40 T1, hostile-review
-            # closure — a rig hardlinking a protected file's bytes under a
-            # FRESH, unprotected name has no legitimate reason to; the
-            # created alias would otherwise be invisible to every check
-            # downstream that resolves the NEW name instead of the
-            # protected one — see `_glob_inode_match` for the general,
-            # inode-identity backstop for aliases this process never saw
-            # created at all).
-            matched, display = _protected(specs, args[1])
-            if matched:
-                _deny("os.link (hardlink) onto", display)
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny("os.link (hardlink) of protected source", display)
-        elif event == "os.symlink":
-            # guard BOTH slots: dst (a fresh symlink ONTO the protected
-            # path) AND src (block 01-40 T1, hostile-review closure — the
-            # dir_fd/openat bypass: `os.symlink("operator-inbox.jsonl",
-            # "sneaky.tmp", dir_fd=dfd)` creates a link whose OWN name
-            # ("sneaky.tmp") never matches any protected basename/glob, but
-            # POINTS AT a protected ingress file; a subsequent
-            # `os.open("sneaky.tmp", O_WRONLY, dir_fd=dfd)` then realpath-
-            # resolves against the wrong base (this process's CWD, not
-            # dfd's real directory) and misses entirely, even though the
-            # write lands on the protected file's bytes via the dir_fd's
-            # real directory. A rig creating a symlink that POINTS AT a
-            # protected ingress file has no legitimate reason to — denied
-            # at link-creation, before any open can ever reach it).
-            matched, display = _protected(specs, args[1])
-            if matched:
-                _deny("os.symlink onto", display)
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny("os.symlink pointing at protected target", display)
-        elif event in ("os.chmod", "os.chown"):
-            # block 01-40 T1, second hostile review: os.chmod(protected,
-            # 0o000) is a channel-breaking DoS that leaves CONTENT and
-            # EXISTENCE both unchanged — the exact two properties every
-            # other DIES proof in this module asserts as "unharmed" — so it
-            # would otherwise permanently lock even the real door
-            # (scripts/report.sh) out of a protected ingress path with no
-            # write/rename/unlink event ever firing. args[0] is the path
-            # slot for BOTH events.
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny(f"{event} of", display)
-        elif event == "os.remove":
-            # covers os.unlink too (same audit event — see module
-            # docstring) — also the unlink half of shutil.move's
-            # cross-device copy2+unlink fallback.
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny("os.remove/os.unlink of", display)
-        elif event == "os.rmdir":
-            matched, display = _protected(specs, args[0])
-            if matched:
-                _deny("os.rmdir of", display)
+                _deny(event, display)
 
     sys.addaudithook(hook)
 

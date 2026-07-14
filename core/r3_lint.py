@@ -76,27 +76,36 @@ case can only cause a false RED, never a false GREEN.
      `sender.kind == "worker"`. A manifest-rooted subscript store/
      augstore, or a write-sink call on manifest-rooted state, is always
      illegal.
-  6. CONTAINER MUTATION (block 01-40 T1, second hostile review) — rule 2's
-     binding forms only ever recorded taint for a name FRESHLY bound to a
-     tainted value; a name whose already-bound container was MUTATED in
-     place afterward (`.append`/`.extend`/`.insert`/`.add`, or a
-     `Subscript` STORE `d[k] = v`) read as permanently clean forever —
-     `argv = []; argv.append(eng.ctx.worker_inbox); subprocess.run(argv)`
-     was a GREEN miss (`argv` never "bound" to anything tainted; the
-     taint arrived via mutation, invisible to rule 2's binding walk). Now
-     closed: each such mutation registers its VALUE as an ADDITIONAL
-     taint source for the receiver's key, in a SEPARATE substrate
-     (`container_bindings`, folded into the same monotone fixed point)
-     that contributes ONLY `{"worker", "operator"}` — deliberately NEVER
-     `"manifest"`. Manifest's own sink checks (`_CONTAINER_MUTATE_ATTRS`
-     in rule 5, and `_check_manifest_stores`) are about receiver ALIASING
-     ("is this container itself manifest-rooted state" — rule 1's seed
-     plus rule 4's subscript-READ aliasing, both of which stay real
-     Python reference semantics), never about "did some element/value
-     ever pass through it" — conflating the two (tried, then reverted,
-     in this same fix) false-REDs every ordinary `results.append(some_
-     manifest_derived_summary)` reporting/iteration pattern across nearly
-     every `core/*_rig.py`, none of which is a manifest write at all.
+  6. CONTAINER MUTATION (block 01-40 T1, second hostile review; extended
+     THIS round) — rule 2's binding forms only ever recorded taint for a
+     name FRESHLY bound to a tainted value; a name whose already-bound
+     container was MUTATED in place afterward (`.append`/`.extend`/
+     `.insert`/`.add`/`.update`, or a `Subscript` STORE `d[k] = v`) read as
+     permanently clean forever — `argv = []; argv.append(eng.ctx.
+     worker_inbox); subprocess.run(argv)` was a GREEN miss (`argv` never
+     "bound" to anything tainted; the taint arrived via mutation, invisible
+     to rule 2's binding walk). Now closed: each such mutation registers
+     its VALUE (for `.update`, EVERY positional arg AND every keyword's
+     VALUE — `env.update({"P": eng.ctx.worker_inbox})` and
+     `env.update(P=eng.ctx.worker_inbox)` both mutate `env`, so both are
+     sources) as an ADDITIONAL taint source for the receiver's key, in a
+     SEPARATE substrate (`container_bindings`, folded into the same
+     monotone fixed point) that contributes ONLY `{"worker", "operator"}`
+     — deliberately NEVER `"manifest"`. `d |= other` (dict/set augmented
+     BitOr) needs NO separate handling at all: an `AugAssign` to a bare
+     `Name` was ALREADY routed through rule 2's own generic `add()` call
+     (unconditionally, for every operator, not just `|=`) before this
+     round — verified empirically, not assumed (see
+     `.github/scripts/r3_honesty_lint_check.py` fixture 44). Manifest's own
+     sink checks (`_CONTAINER_MUTATE_ATTRS` in rule 5, and
+     `_check_manifest_stores`) are about receiver ALIASING ("is this
+     container itself manifest-rooted state" — rule 1's seed plus rule 4's
+     subscript-READ aliasing, both of which stay real Python reference
+     semantics), never about "did some element/value ever pass through
+     it" — conflating the two (tried, then reverted, in this same fix)
+     false-REDs every ordinary `results.append(some_manifest_derived_
+     summary)` reporting/iteration pattern across nearly every
+     `core/*_rig.py`, none of which is a manifest write at all.
 
 The fixture suite in `.github/scripts/r3_honesty_lint_check.py` — every
 evasion four hostile reviews produced, plus the required-GREEN controls —
@@ -175,21 +184,32 @@ these a false-RED risk, never a false-GREEN one):
     bindings are no longer the same key at all. False-RED (an occasional
     forced rename) is the accepted cost; false-GREEN is not.
   - CONTAINER MUTATION (rule 6) is now tracked for `.append`/`.extend`/
-    `.insert`/`.add` and `Subscript`-STORE — a container is no longer
-    silently clean forever after a tainted element/value passes through
-    it. Two deliberate, honest scope limits remain: (1) `.update(...)`
-    (dict merge) is NOT a container-mutation taint SOURCE — only used, as
-    before, by the pre-existing manifest-receiver sink check (rule 5) —
-    so `d.update({"k": eng.ctx.worker_inbox})` does not itself taint `d`
-    for a LATER `subprocess.run(d)`-style use (a genuine, narrow gap,
-    same shape as the four fixed PoCs but via `.update` instead of
-    `.append`/`.extend`/`.insert`/`.add`; not closed here — scope was the
-    four hostile-review PoCs exactly). (2) a nested-subscript store
-    (`x[a][b] = v`) taints only the ROOT container `x` as a whole, never
-    a specific key path — the SAME flow-insensitive, whole-object
-    granularity every other binding form in this module already accepts
-    (see the mutually-exclusive-rebindings limit above), never a
-    per-key/per-index precision this design was never meant to have.
+    `.insert`/`.add`/`.update` and `Subscript`-STORE — a container is no
+    longer silently clean forever after a tainted element/value passes
+    through it. `.update(...)` (dict merge, block 01-40 T1 THIS round's
+    close) taints the receiver from EVERY positional arg and EVERY keyword
+    VALUE, matching the real mutation semantics of the method (both
+    `d.update({"k": tainted})` and `d.update(k=tainted)` mutate `d`); `d |=
+    other` needed no dedicated code at all — an `AugAssign` to a bare
+    `Name` was already routed through rule 2's own binding walk
+    unconditionally, for every operator, before this round (verified, see
+    fixture 44). One deliberate, honest scope limit remains: a
+    nested-subscript store (`x[a][b] = v`) taints only the ROOT container
+    `x` as a whole, never a specific key path — the SAME flow-insensitive,
+    whole-object granularity every other binding form in this module
+    already accepts (see the mutually-exclusive-rebindings limit above),
+    never a per-key/per-index precision this design was never meant to
+    have. A further, still-OPEN residual (never claimed closed): dict
+    mutator methods OUTSIDE this round's scope — `.setdefault(k, v)`,
+    `.pop(k, default)`'s `default` arg written back via a later store,
+    `__setitem__` called explicitly instead of `d[k] = v`, `.popitem()` —
+    are not container-mutation taint SOURCES; each is the same shape as
+    the four originally-fixed PoCs (and `.update`) but via a still-
+    unenumerated method name. This is the SAME class of gap this module's
+    own rebuild history keeps finding (an additive enumeration, not a
+    structural bound) — flagged here honestly rather than silently, not
+    fixed in this round (scope was `.update`/`|=` exactly, per this
+    round's finding).
 """
 import ast
 import glob
@@ -335,17 +355,19 @@ def _flatten_bind_targets(target):
     return []
 
 
-_CONTAINER_MUTATE_TAINT_METHODS = {"append", "extend", "insert", "add"}
+_CONTAINER_MUTATE_TAINT_METHODS = {"append", "extend", "insert", "add", "update"}
 
 
 def _container_receiver_key(expr):
     """The bindable KEY a container-MUTATION (never a fresh bind) should
     taint — block 01-40 T1, second hostile review's `argv.append(eng.ctx.
-    worker_inbox)` / `env["P"] = tainted` miss: rule 2's binding forms only
-    ever recorded taint for a name/attribute BOUND to a tainted value, never
-    for a name whose already-bound container was MUTATED in place with
-    tainted content afterward (`.append`/`.extend`/`.insert`/`.add`, or a
-    `Subscript` STORE `d[k] = v`) — `subprocess.run(argv)` then read `argv`
+    worker_inbox)` / `env["P"] = tainted` miss (and THIS round's identical-
+    shape `env.update({"P": eng.ctx.worker_inbox})` miss): rule 2's binding
+    forms only ever recorded taint for a name/attribute BOUND to a tainted
+    value, never for a name whose already-bound container was MUTATED in
+    place with tainted content afterward (`.append`/`.extend`/`.insert`/
+    `.add`/`.update`, or a `Subscript` STORE `d[k] = v`) — `subprocess.
+    run(argv)`/`subprocess.run(env=env)` then read `argv`/`env`
     itself, which the fixed point had never touched, straight through as
     clean. Unwraps nested `Subscript`s (`x[a][b] = v` / `x[a].append(v)`
     taints the ROOT `x`, consistent with this module's flow-insensitive
@@ -576,18 +598,35 @@ def _build_ctx(tree):
                     add_container(target_key(rk, scope_id), node.value, scope_id)
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
                 and node.func.attr in _CONTAINER_MUTATE_TAINT_METHODS:
-            # `.append`/`.extend`/`.insert`/`.add` — see `container_bindings`
-            # above for why this is a SEPARATE, worker/operator-only
-            # substrate, never unioned into the general aliasing `bindings`.
+            # `.append`/`.extend`/`.insert`/`.add`/`.update` — see
+            # `container_bindings` above for why this is a SEPARATE,
+            # worker/operator-only substrate, never unioned into the
+            # general aliasing `bindings`.
             scope_id = scope_of(node)
             rk = _container_receiver_key(node.func.value)
             if rk is not None:
+                key = target_key(rk, scope_id)
                 if node.func.attr == "insert":
                     val = node.args[1] if len(node.args) >= 2 else None
+                    if val is not None:
+                        add_container(key, val, scope_id)
+                elif node.func.attr == "update":
+                    # dict.update(mapping_or_iterable, **kwargs) /
+                    # set.update(*iterables) — block 01-40 T1, THIS round's
+                    # close: EVERY positional arg AND every keyword's VALUE
+                    # genuinely mutates the receiver (`env.update({"P":
+                    # tainted})` and `env.update(P=tainted)` both do), so
+                    # ALL of them are taint sources — never just the first
+                    # positional slot the way `.append`'s single-value
+                    # calling convention allows.
+                    for a in node.args:
+                        add_container(key, a, scope_id)
+                    for kw in node.keywords:
+                        add_container(key, kw.value, scope_id)
                 else:
                     val = node.args[0] if node.args else None
-                if val is not None:
-                    add_container(target_key(rk, scope_id), val, scope_id)
+                    if val is not None:
+                        add_container(key, val, scope_id)
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             scope_id = scope_of(node)
             for fk in _flatten_bind_targets(node.target):
