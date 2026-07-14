@@ -39,14 +39,34 @@ case can only cause a false RED, never a false GREEN. Proves, live:
              legitimately (a thin same-file wrapper whose every real call
              site sends a safe payload) — proving the lint tells indirection
              APART from a violation, rather than reddening all indirection.
+  RED (x1)   the ROUND-5 receiver-provenance evasion (block 01-40 T1, Opus-
+             pivot item 3a): an unrelated same-file class's OWN
+             `self.manifest = {}` used to launder ANY `<receiver>.manifest`
+             access into a false exemption (attribute-storage keys are
+             bare/unscoped); the manifest fixture-local proof now ALSO
+             requires the receiver itself resolve to a locally-constructed
+             fixture — a bare parameter denies by default.
+  PENDING(x2) two ROUND-5 payload-MUTATION PoCs (`payload["sender"] = ...`
+             / `.update(...)` AFTER a safe dict literal is authored) are a
+             REAL, currently KNOWN-GREEN gap — printed loudly as an
+             explicit pending row, not fixed here: the fix is gated on an
+             outstanding operator ruling (MODEL A deletes the payload
+             prover entirely; MODEL B would extend it to trace mutations).
   GREEN/tree the real `core/` proof-harness tree is clean except the
              explicit, visible KNOWN_RED list (core/sim/operator_proxy.py
-             at minimum) — every KNOWN_RED entry is re-verified genuinely
-             red on THIS run, never a silent whitelist.
+             + core/architect_rig.py, at minimum — see core/r3_lint.py's
+             KNOWN_RED for the latter's block-01-40-introduced entry) —
+             every KNOWN_RED entry is re-verified genuinely red on THIS
+             run, never a silent whitelist.
   MECHANISM  the lint's own stale/unlisted detectors fire correctly — a
              known-red entry that has gone clean is caught, and a red file
              missing from KNOWN_RED is caught — proven with synthetic
              KNOWN_RED overrides, never by editing the real list.
+
+The runtime write-guard (`core/r3_guard.py`, block 01-40 T1, Opus-pivot
+item 1/2) is a SEPARATE CI proof — `.github/scripts/r3_guard_runtime_check.py`
+— covering what this static lint structurally cannot (a genuine OS-level
+write landing on a protected path, independent of AST shape/mechanism).
 
 Exit 0 only if every one of the above holds.
 """
@@ -403,6 +423,62 @@ def bad(eng):
     with open(dest, "a") as fh:
         fh.write(json.dumps(rep) + "\\n")
 ''',
+
+    # ── ROUND-5 evasion (block 01-40 T1, Opus-pivot item 3a/4) — the
+    #     manifest fixture-local proof's RECEIVER-PROVENANCE gap: an
+    #     UNRELATED same-file class's own `self.manifest = {}` laundered
+    #     ANY `<receiver>.manifest` access into a false exemption, because
+    #     attribute-storage keys are bare/unscoped and the OLD proof never
+    #     checked what the receiver itself resolved to. `real_eng` here is
+    #     a plain PARAMETER — never locally constructed, no same-file call
+    #     site to resolve it through — so it must DENY by default; only
+    #     `FakeEng`'s OWN unrelated `self.manifest = {}` made this look
+    #     fixture-local before the fix. ──
+    "35_manifest_launder_via_unrelated_fakeeng": '''
+class FakeEng:
+    def __init__(self):
+        self.manifest = {}
+
+def bad(real_eng, case_id, verb):
+    real_eng.manifest["cases"][case_id]["decision"] = {"verb": verb}
+''',
+}
+
+# ── ROUND-5 PoCs (Opus design review, pending the operator's MODEL A/B
+#     ruling) — two of round-5's four PoCs are payload-MUTATION evasions:
+#     the dict literal at the write-sink is safe (no `sender` key) AS
+#     AUTHORED, but a fabricated sender is written into it via a POST-
+#     CONSTRUCTION mutation (`payload["sender"] = ...` / `.update(...)`)
+#     the payload-safety proof — a static proof over a dict literal's own
+#     authored keys/values — has no mechanism to see. This is a REAL,
+#     currently KNOWN-GREEN gap. It is NOT fixed here: MODEL A (route every
+#     rig through scripts/report.sh, delete the payload prover) makes
+#     payload SHAPE moot entirely; MODEL B would instead need the prover
+#     taught to trace subscript-store/`.update()` mutations forward to
+#     every sink that reads the same object. Asserted below as an
+#     EXPLICIT, tagged-pending row — never a silent gap — so this suite
+#     prints LOUDLY the moment either the ruling lands and ships a fix, or
+#     a future rebuild accidentally closes (or widens) this unnoticed.
+ROUND5_PENDING_RULING_FIXTURES = {
+    "36_pending_payload_subscript_mutation": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision"}
+    rep["sender"] = {"kind": "operator", "id": "x"}
+    with open(eng.ctx.worker_inbox, "a") as ib:
+        ib.write(json.dumps(rep) + "\\n")
+''',
+
+    "37_pending_payload_update_mutation": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision"}
+    rep.update({"sender": {"kind": "operator", "id": "x"}})
+    with open(eng.ctx.worker_inbox, "a") as ib:
+        ib.write(json.dumps(rep) + "\\n")
+''',
 }
 
 # ─────────────────────── legal shapes (must stay GREEN) ───────────────────────
@@ -438,7 +514,7 @@ def use_it(tron_ctx):
 def main():
     failed = False
 
-    # ── RED x34: every evasion must still be caught ──
+    # ── RED x35: every evasion must still be caught ──
     for name, fixture in EVASION_FIXTURES.items():
         violations = r3_lint.lint_source(fixture, path=f"<evasion:{name}>")
         if violations:
@@ -448,6 +524,22 @@ def main():
                   "(expected RED, got GREEN — the lint is fingerprinting a shape again, "
                   "not the illegal class).", file=sys.stderr)
             failed = True
+
+    # ── ROUND-5 pending-ruling PoCs: a VISIBLE open row, never a silent gap.
+    #     Currently KNOWN-GREEN (documented, ruling-gated) — printed loudly
+    #     either way so nobody has to go looking for this status. ──
+    for name, fixture in ROUND5_PENDING_RULING_FIXTURES.items():
+        violations = r3_lint.lint_source(fixture, path=f"<round5-pending:{name}>")
+        if violations:
+            print(f"ROUND-5 PENDING [{name}]: now RED ({[str(v) for v in violations]}) — "
+                  "if the Model A/B payload-mutation fix has shipped, move this fixture "
+                  "into EVASION_FIXTURES as a required-RED case; otherwise this is an "
+                  "unexpected change, investigate.")
+        else:
+            print(f"ROUND-5 PENDING [{name}]: KNOWN-GREEN-PENDING-RULING confirmed — "
+                  "a post-construction payload-mutation fabricated sender is NOT caught "
+                  "(documented gap, ruling-gated fix — see core/r3_lint.py's 'payload "
+                  "(sender-kind) resolution' docstring section).")
 
     # ── control: a door-only fixture (real report.sh shape) must be clean ──
     clean_violations = r3_lint.lint_source(DOOR_ONLY_FIXTURE, path="<door-only-fixture>")

@@ -97,11 +97,37 @@ these a false-RED risk, never a false-GREEN one):
   - a `subprocess`/shell command built from a computed/concatenated string
     (rather than one whose AST literally contains the marker, checked via
     a `>`/`>>` text pattern) is not parsed as shell.
-  - a write OPERATION outside the enumerated list in rule 5 (a genuinely
-    novel stdlib/3rd-party write idiom, never seen across four hostile
-    reviews) is not recognized as a sink — taint still flows through it
-    (rule 3), so anything written FROM it further downstream is still
-    caught; only that one call, standing alone, is not itself flagged.
+  - a write OPERATION outside the enumerated list in rule 5 is not
+    recognized as a STATIC sink — taint still flows through it (rule 3), so
+    anything written FROM it further downstream is still caught; only that
+    one call, standing alone, is not itself flagged. This enumeration is
+    now DELIBERATELY non-exhaustive by design, not just by history: it is a
+    fast, structural SMOKE layer (catches the common/obvious shapes at AST
+    time, zero process spawned), never the thing actually responsible for
+    "can a byte physically land on a protected path" — that job belongs to
+    `core/r3_guard.py`'s runtime `sys.addaudithook` (block 01-40 T1, Opus-
+    pivot item 1/2), which is mechanism-complete by construction (it sees
+    every real OS-level write CPython can make, not an enumerated list of
+    Python-level call shapes) for whatever paths it is told to protect.
+    Extending this static enumeration further (csv/`os.write`/...) was
+    considered and deliberately NOT done — it would duplicate, in a
+    strictly weaker form, what the runtime guard already proves.
+  - mutually-exclusive REBINDINGS of one bare name (if/else branches,
+    try/except handlers, sequential unrelated `with open(...) as f:`
+    blocks reusing `f`) UNION their taint under this module's flow-
+    insensitive design — by construction (module docstring's rule 2: "the
+    union of ALL of them", never flow/branch-aware). A name legitimately
+    bound to something inert in one branch and something tainted in an
+    UNRELATED branch is flagged as if EVERY use of that name were tainted,
+    even a use that can only ever see the inert branch. This is accepted,
+    not fixed: making it flow-sensitive is exactly the design this module
+    was rebuilt FOUR times to get away from (each earlier attempt's
+    flow/branch-awareness was also its false-GREEN hole — see the block
+    01-40 T1 rebuild history above). The only sound, simple, PRACTICAL
+    mitigation is what commit aeb6360 already applied in a handful of real
+    call sites — rename the reused bare name (`f` -> `bf`) so the two
+    bindings are no longer the same key at all. False-RED (an occasional
+    forced rename) is the accepted cost; false-GREEN is not.
 """
 import ast
 import glob
@@ -127,6 +153,35 @@ KNOWN_RED = {
                    'harness: "the current harness injects into the worker channel '
                    'and lies exactly the way the old rigs lied." Rebuilt honestly '
                    "in 01-38 T4 once the real operator channel exists."),
+    },
+    "core/architect_rig.py": {
+        "owning_block": "01-40",
+        "reason": ("RIG2-C2 (run_seq_reconcile_rig) monkeypatches "
+                   "real_eng2._next_mbox_seq and seeds real_eng2._manifest = {} on a "
+                   "REAL engine.fsm.Engine instance, then does "
+                   "`mbox[wid] = seq` off it — a manifest-rooted subscript store. "
+                   "This block's own 3a fix (r3_lint's manifest fixture-local proof "
+                   "now requires the receiver be provably bound to a LOCAL fixture "
+                   "construction, never a real production class) correctly stops "
+                   "exempting it: CoreEngine is engine.fsm.Engine, imported real "
+                   "production code, not a same-file fake. Investigating the real "
+                   "engine (engine/fsm.py Engine._to_worker) shows neither "
+                   "`_manifest` nor `_next_mbox_seq` is read by ANY real code path — "
+                   "`_to_worker` computes `seq = int(w.get('mbox_seq', 0)) + 1` "
+                   "inline off `self.st.workers`, never delegating to a "
+                   "`_next_mbox_seq` method. Both attributes appear to be vestigial "
+                   "from an earlier engine shape, now inert on the real class — "
+                   "genuinely different in kind from R3's target failure mode (a "
+                   "rig FAKING a drain outcome other code then trusts), but this "
+                   "lint intentionally cannot (and, by design, should not try to) "
+                   "distinguish 'real engine, dead attribute' from 'real engine, "
+                   "faking an outcome' by AST shape alone. Tracked here rather than "
+                   "silently loosening the general receiver-provenance rule for one "
+                   "caller, or touching RIG2-C1/RIG2-C2's test semantics — a change "
+                   "outside 01-40 T1's ruling-independent R3 scope. Candidate "
+                   "follow-up: confirm RIG2-C1/RIG2-C2 are non-vacuous against the "
+                   "current engine and delete the dead _manifest/_next_mbox_seq "
+                   "lines if so."),
     },
 }
 
@@ -550,8 +605,27 @@ def _compute_taint(bindings, returns):
 # `.get()`/`.setdefault()`-passthrough of one) — a real attribute READ, a
 # same-file helper's return, or anything else unresolvable fails the proof
 # and is still denied exactly as before.
+#
+# RECEIVER-PROVENANCE FIX (block 01-40 T1, round-5 probe3): the Attribute
+# branch below used to grant the exemption to ANY `<receiver>.manifest`
+# access as long as SOME same-file `self.manifest = {...}`/`Cls.manifest =
+# {...}` store existed ANYWHERE in the file — it never checked what
+# `<receiver>` itself actually WAS. Since attribute-storage keys are
+# deliberately BARE/unscoped (module docstring's documented limit), an
+# unrelated class's own `self.manifest = {}` in `__init__` laundered a
+# COMPLETELY different, unresolvable receiver's `.manifest` access (a real
+# `real_eng` parameter, never locally constructed) into a false exemption —
+# a genuine `real_eng.manifest["cases"][case_id]["decision"] = {...}`
+# direct-write evaded detection entirely. The exemption now ALSO requires
+# the receiver expression itself (`expr.value`) to independently prove
+# fixture-local — a Name resolving (through the same union-bindings
+# substrate) to a local dict-literal construction, or a call to a SAME-FILE
+# class's constructor (`FakeEng()` — see the Call branch's `local_classes`
+# check). A parameter with no same-file call-site binding, or one bound to
+# anything unresolvable, denies by default exactly like every other
+# unresolvable candidate in this proof.
 
-def _is_manifest_fixture_local(expr, nt, rt, bindings, scope, depth=0, seen=frozenset()):
+def _is_manifest_fixture_local(expr, nt, rt, bindings, local_classes, scope, depth=0, seen=frozenset()):
     if expr is None or depth > _MAX_DEPTH:
         return False
     if isinstance(expr, ast.Constant):
@@ -562,26 +636,36 @@ def _is_manifest_fixture_local(expr, nt, rt, bindings, scope, depth=0, seen=froz
         # value must ALSO be independently fixture-local (rule 4).
         for v in expr.values:
             if "manifest" in _expr_taint(v, nt, rt, bindings, scope) and \
-                    not _is_manifest_fixture_local(v, nt, rt, bindings, scope, depth + 1, seen):
+                    not _is_manifest_fixture_local(v, nt, rt, bindings, local_classes, scope, depth + 1, seen):
                 return False
         return True
     if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
         for e in expr.elts:
             if "manifest" in _expr_taint(e, nt, rt, bindings, scope) and \
-                    not _is_manifest_fixture_local(e, nt, rt, bindings, scope, depth + 1, seen):
+                    not _is_manifest_fixture_local(e, nt, rt, bindings, local_classes, scope, depth + 1, seen):
                 return False
         return True
     if isinstance(expr, ast.Subscript):
-        return _is_manifest_fixture_local(expr.value, nt, rt, bindings, scope, depth + 1, seen)
+        return _is_manifest_fixture_local(expr.value, nt, rt, bindings, local_classes, scope, depth + 1, seen)
     if isinstance(expr, ast.Call):
         # `.get()`/`.setdefault()` on a manifest-rooted receiver is alias-
         # preserving (returns the SAME object, never a copy) — trace into
-        # the receiver. Any other call shape is NOT provably fixture-local.
+        # the receiver.
         if isinstance(expr.func, ast.Attribute) and expr.func.attr in ("get", "setdefault"):
-            return _is_manifest_fixture_local(expr.func.value, nt, rt, bindings, scope, depth + 1, seen)
+            return _is_manifest_fixture_local(expr.func.value, nt, rt, bindings, local_classes, scope, depth + 1, seen)
+        # A bare call to a SAME-FILE class's constructor (`FakeEng()`) is
+        # itself a fresh, local fixture object — the receiver-provenance
+        # fix above needs this to recognize `real_eng = FakeEng()` as a
+        # legitimately fixture-local binding. A call to anything else
+        # (an imported/real class, a same-file function, an unresolvable
+        # callee) is NOT provably fixture-local.
+        if isinstance(expr.func, ast.Name) and expr.func.id in local_classes:
+            return True
         return False
     if isinstance(expr, ast.Attribute):
         if not _is_manifest_name(expr.attr):
+            return False
+        if not _is_manifest_fixture_local(expr.value, nt, rt, bindings, local_classes, scope, depth + 1, seen):
             return False
         key = ("attr", expr.attr)
         if key in seen:
@@ -589,7 +673,7 @@ def _is_manifest_fixture_local(expr, nt, rt, bindings, scope, depth=0, seen=froz
         vals = bindings.get(key, [])
         if not vals:
             return False
-        return all(_is_manifest_fixture_local(v, nt, rt, bindings, vscope, depth + 1, seen | {key})
+        return all(_is_manifest_fixture_local(v, nt, rt, bindings, local_classes, vscope, depth + 1, seen | {key})
                    for v, vscope in vals)
     if isinstance(expr, ast.Name):
         local_key, global_key = ("var", scope, expr.id), ("var", None, expr.id)
@@ -598,7 +682,7 @@ def _is_manifest_fixture_local(expr, nt, rt, bindings, scope, depth=0, seen=froz
         vals = _lookup(bindings, scope, expr.id)
         if not vals:
             return False
-        return all(_is_manifest_fixture_local(v, nt, rt, bindings, vscope, depth + 1, seen | {local_key, global_key})
+        return all(_is_manifest_fixture_local(v, nt, rt, bindings, local_classes, vscope, depth + 1, seen | {local_key, global_key})
                    for v, vscope in vals)
     return False
 
@@ -854,7 +938,7 @@ def _emit_violation(kind, payload_expr, payload_scope, path, lineno, violations,
             '`sender` key, or `sender.kind == "worker"`; denied by default otherwise'))
 
 
-def _check_calls(tree, nt, rt, bindings, returns, parent_scope, path):
+def _check_calls(tree, nt, rt, bindings, returns, local_classes, parent_scope, path):
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -871,7 +955,7 @@ def _check_calls(tree, nt, rt, bindings, returns, parent_scope, path):
         if target is None:
             continue
         kinds = _expr_taint(target, nt, rt, bindings, scope) & relevant_kinds
-        if "manifest" in kinds and _is_manifest_fixture_local(target, nt, rt, bindings, scope):
+        if "manifest" in kinds and _is_manifest_fixture_local(target, nt, rt, bindings, local_classes, scope):
             kinds = kinds - {"manifest"}
         if not kinds:
             continue
@@ -886,7 +970,7 @@ def _check_calls(tree, nt, rt, bindings, returns, parent_scope, path):
 
 # ───────────────────────── manifest direct-store ─────────────────────────
 
-def _check_manifest_stores(tree, nt, rt, bindings, parent_scope, path):
+def _check_manifest_stores(tree, nt, rt, bindings, local_classes, parent_scope, path):
     violations = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -899,7 +983,7 @@ def _check_manifest_stores(tree, nt, rt, bindings, parent_scope, path):
         for tgt in targets:
             if not (isinstance(tgt, ast.Subscript) and "manifest" in _expr_taint(tgt.value, nt, rt, bindings, scope)):
                 continue
-            if _is_manifest_fixture_local(tgt.value, nt, rt, bindings, scope):
+            if _is_manifest_fixture_local(tgt.value, nt, rt, bindings, local_classes, scope):
                 continue
             try:
                 shape = ast.unparse(tgt)
@@ -971,13 +1055,23 @@ def lint_file(path):
     return lint_source(source, path=path)
 
 
+def _local_class_names(tree):
+    """Every same-file `class ...:` name — the receiver-provenance fix
+    (manifest fixture-local proof, above) needs this to tell a call to a
+    LOCAL test-double constructor (`FakeEng()`) apart from a call to
+    anything else (an imported real class, a same-file function, an
+    unresolvable callee)."""
+    return {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+
+
 def lint_source(source, path="<fixture>"):
     tree = ast.parse(source, filename=path)
     bindings, returns = _build_ctx(tree)
     nt, rt = _compute_taint(bindings, returns)
     parent_scope = _build_parent_scope(tree)
-    return (_check_calls(tree, nt, rt, bindings, returns, parent_scope, path)
-            + _check_manifest_stores(tree, nt, rt, bindings, parent_scope, path))
+    local_classes = _local_class_names(tree)
+    return (_check_calls(tree, nt, rt, bindings, returns, local_classes, parent_scope, path)
+            + _check_manifest_stores(tree, nt, rt, bindings, local_classes, parent_scope, path))
 
 
 class LintResult:
