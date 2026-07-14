@@ -94,9 +94,34 @@ these a false-RED risk, never a false-GREEN one):
     through the closure — only module-level fallback is checked.
   - `exec`/`eval`, and `getattr(obj, computed_expr)` where the attribute
     name is not itself a statically-resolvable string, are not traced.
-  - a `subprocess`/shell command built from a computed/concatenated string
-    (rather than one whose AST literally contains the marker, checked via
-    a `>`/`>>` text pattern) is not parsed as shell.
+  - a `subprocess.{run,call,check_call,check_output,Popen,system,popen}`
+    or `os.{system,popen,exec*,spawn*}` call is caught the moment ANY of
+    its arguments carries WORKER/OPERATOR taint (an ingress FILE PATH,
+    the shape a channel-fabrication evasion needs to hand a child) — the
+    SAME union substrate as every other sink (rules 2-4), so a tainted
+    path/payload inside an argv LIST, a concatenated string, or an
+    f-string is caught identically, no shell redirect syntax required.
+    (A PRIOR version of this check required a textual `>`/`>>` redirect
+    and was WRONG — `subprocess.run([sys.executable, "-c", code,
+    protected_path, payload])` contains no redirect character and
+    slipped through clean; fixed block 01-40 T1, second pass,
+    required-RED fixture 36.) MANIFEST taint is deliberately EXCLUDED
+    from this particular sink — manifest taint marks any manifest-
+    DERIVED value (rule 4: a subscript read off tainted state is itself
+    tainted), which routinely flows into subprocess argv as ordinary
+    data in this real tree (a case ID read off the manifest, passed to
+    `land.sh`) with no receiver/target slot for a "direct write" to land
+    on at all; scoping manifest in here would false-RED that legitimate
+    pattern across most of `core/*_rig.py`, not catch a new evasion. The
+    one TRUE residual, honest and adversarial-only: a child-process
+    invocation built from NO tainted argument at all — every argument a
+    bare literal, the protected path reconstructed or hardcoded
+    independently rather than derived from a traced
+    `ctx.worker_inbox`/`ctx.operator_inbox` marker. There is no taint to
+    see in that shape, so no static prover — this one or any rebuild of
+    it — can catch it; that gap belongs to a runtime mechanism
+    (`core/r3_guard.py`), which itself documents the matching hole (its
+    hook does not propagate through `exec`), never to this module.
   - a write OPERATION outside the enumerated list in rule 5 is not
     recognized as a STATIC sink — taint still flows through it (rule 3), so
     anything written FROM it further downstream is still caught; only that
@@ -132,7 +157,6 @@ these a false-RED risk, never a false-GREEN one):
 import ast
 import glob
 import os
-import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -158,30 +182,55 @@ KNOWN_RED = {
         "owning_block": "01-40",
         "reason": ("RIG2-C2 (run_seq_reconcile_rig) monkeypatches "
                    "real_eng2._next_mbox_seq and seeds real_eng2._manifest = {} on a "
-                   "REAL engine.fsm.Engine instance, then does "
-                   "`mbox[wid] = seq` off it — a manifest-rooted subscript store. "
+                   "REAL core/engine.py Engine instance (CoreEngine — architect_rig.py's "
+                   "own `from engine import Engine as CoreEngine`; its sys.path is "
+                   "ordered core/ BEFORE engine/ — line 84's `sys.path.insert(0, HERE)` "
+                   "runs AFTER line 83's engine/-dir insert, so it ends up first — so "
+                   "the bare module name `engine` resolves to core/engine.py, R-A's "
+                   "real implementation, NOT the engine/ package's engine/fsm.py), then "
+                   "does `mbox[wid] = seq` off it — a manifest-rooted subscript store. "
                    "This block's own 3a fix (r3_lint's manifest fixture-local proof "
                    "now requires the receiver be provably bound to a LOCAL fixture "
                    "construction, never a real production class) correctly stops "
-                   "exempting it: CoreEngine is engine.fsm.Engine, imported real "
-                   "production code, not a same-file fake. Investigating the real "
-                   "engine (engine/fsm.py Engine._to_worker) shows neither "
-                   "`_manifest` nor `_next_mbox_seq` is read by ANY real code path — "
-                   "`_to_worker` computes `seq = int(w.get('mbox_seq', 0)) + 1` "
-                   "inline off `self.st.workers`, never delegating to a "
-                   "`_next_mbox_seq` method. Both attributes appear to be vestigial "
-                   "from an earlier engine shape, now inert on the real class — "
-                   "genuinely different in kind from R3's target failure mode (a "
-                   "rig FAKING a drain outcome other code then trusts), but this "
-                   "lint intentionally cannot (and, by design, should not try to) "
-                   "distinguish 'real engine, dead attribute' from 'real engine, "
-                   "faking an outcome' by AST shape alone. Tracked here rather than "
-                   "silently loosening the general receiver-provenance rule for one "
-                   "caller, or touching RIG2-C1/RIG2-C2's test semantics — a change "
-                   "outside 01-40 T1's ruling-independent R3 scope. Candidate "
-                   "follow-up: confirm RIG2-C1/RIG2-C2 are non-vacuous against the "
-                   "current engine and delete the dead _manifest/_next_mbox_seq "
-                   "lines if so."),
+                   "exempting it: CoreEngine is real, imported production code, not a "
+                   "same-file fake. CORRECTED (a prior version of this entry "
+                   "investigated the WRONG FILE — engine/fsm.py's own unrelated Engine "
+                   "class, which genuinely does compute "
+                   "`seq = int(w.get('mbox_seq', 0)) + 1` inline off a worker dict and "
+                   "never touches `_manifest`/`_next_mbox_seq` — and wrongly concluded "
+                   "those attributes were dead on THIS class too): core/engine.py's "
+                   "Engine._next_mbox_seq (lines 269-297) genuinely reads and writes "
+                   "`self._manifest[\"mbox_seq\"][worker_id]` for real — "
+                   "`mbox = self._manifest.setdefault(\"mbox_seq\", {})` then "
+                   "`mbox[worker_id] = seq` — and Engine._to_worker (line 310) calls "
+                   "`self._next_mbox_seq(worker_id)` at line 320 on every real dispatch; "
+                   "Engine.start sets `self._manifest = snap.manifest` (line 654) as the "
+                   "live handle for that pass. So the RED here is CORRECT under R3's "
+                   "letter — this is in-process mutation of REAL engine state a real "
+                   "code path genuinely reads, not a dead/vestigial attribute. The "
+                   "rig's OWN intent is nonetheless legitimate mutation-testing "
+                   "hygiene, not a lie: RIG2-C2 exists purely to prove RIG2-C1 (the "
+                   "R-A engine-restart-wedge fix, asserted GREEN a few lines above) is "
+                   "non-vacuous — it monkeypatches _next_mbox_seq to the pre-R-A, "
+                   "persisted-counter-only reconciliation and asserts that the mutation "
+                   "flips RIG2-C1's own assertion shape RED, i.e. that RIG2-C1 would "
+                   "actually fail if the real fix regressed. That is the SAME AST shape "
+                   "R3 targets (mutating real engine internals from a rig) but used "
+                   "here for anti-vacuity, never to fake a drain outcome another module "
+                   "then trusts. This lint intentionally cannot (and, by design, should "
+                   "not try to) distinguish those two intents by AST shape alone, so "
+                   "this stays KNOWN_RED rather than silently loosening the general "
+                   "receiver-provenance rule for one caller, or touching RIG2-C1/"
+                   "RIG2-C2's test semantics — a change outside 01-40 T1's "
+                   "ruling-independent R3 scope. Follow-up decision, NOT resolved here, "
+                   "for the ruling/01-40 completion: (a) rebuild RIG2-C1/RIG2-C2's "
+                   "non-vacuity proof through a legitimate seam (e.g. a same-file "
+                   "fixture Engine stand-in, or a public reset hook on CoreEngine) so "
+                   "it no longer needs an in-process mutation of the real class at all, "
+                   "or (b) formally, structurally reclassify 'real-class mutation for "
+                   "anti-vacuity hygiene, never observed by other code as a fake drain "
+                   "outcome' as an R3-exempt pattern — never a one-off carve-out for "
+                   "this file alone."),
     },
 }
 
@@ -964,7 +1013,7 @@ def _check_calls(tree, nt, rt, bindings, returns, local_classes, parent_scope, p
         for kind in sorted(kinds):
             _emit_violation(kind, payload_expr, scope, path, node.lineno, violations,
                              _describe_call(node), bindings, returns)
-    violations.extend(_check_subprocess_redirect(tree, nt, rt, bindings, returns, parent_scope, path))
+    violations.extend(_check_subprocess_taint(tree, nt, rt, bindings, returns, parent_scope, path))
     return violations
 
 
@@ -996,20 +1045,29 @@ def _check_manifest_stores(tree, nt, rt, bindings, local_classes, parent_scope, 
     return violations
 
 
-# ───────────────────────── subprocess shell redirect ─────────────────────────
-# A fundamentally different, textual mechanism (shell command TEXT, not a
-# Python call graph) — a shelled `>`/`>>` redirect whose command touches a
-# marker is never a real production shape (report.sh is always invoked via
-# argv). Still not a shell parser (see module docstring's honest limits).
+# ───────────────────────── subprocess/exec/spawn child-ingress ─────────────────────────
+# A child process is a NEW interpreter image — nothing in this file's own
+# Python-level taint substrate can see what it does. But the substrate CAN
+# see what it was HANDED: any subprocess/os.exec*/os.spawn* call carrying a
+# WORKER/OPERATOR-tainted argument (an ingress channel path, or a fabricated
+# payload alongside it) is a sink by construction, no shell-redirect syntax
+# required — a redirect-gated version of this check missed
+# `subprocess.run([sys.executable, "-c", code, protected_path, payload])`
+# entirely (no `>`/`>>` in it at all). MANIFEST kind is deliberately excluded
+# here (see module docstring's honest-limits section for why, and for the
+# TRUE residual this leaves).
 
 _SUBPROC_ATTRS = {"run", "call", "check_call", "check_output", "Popen", "system", "popen"}
-_REDIRECT_RE = re.compile(r">>|(?<!-)>(?!=)")
 
 
 def _is_subprocess_like_call(call):
     func = call.func
-    return (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
-            and func.value.id in ("subprocess", "os") and func.attr in _SUBPROC_ATTRS)
+    if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+            and func.value.id in ("subprocess", "os")):
+        return False
+    attr = func.attr
+    return (attr in _SUBPROC_ATTRS
+            or (func.value.id == "os" and (attr.startswith("exec") or attr.startswith("spawn"))))
 
 
 def _find_dumps_payload(node):
@@ -1021,16 +1079,27 @@ def _find_dumps_payload(node):
     return None
 
 
-def _check_subprocess_redirect(tree, nt, rt, bindings, returns, parent_scope, path):
+# Scoped to worker/operator kinds ONLY, deliberately never manifest: worker/
+# operator taint marks an INGRESS FILE PATH — handing that path (plus a
+# fabricated payload) to a child is the ingress-escape shape this check
+# exists to catch, "a tainted PATH handed to any child is ingress escape by
+# construction". Manifest taint marks something structurally different — ANY
+# manifest-DERIVED value (rule 4: a subscript READ off tainted state is
+# itself tainted), which routinely flows into subprocess argv as ordinary,
+# LEGITIMATE data (a case ID read off `gate["merge_case_id"]` passed to
+# `land.sh case_id` is exactly this real tree's own pattern, dozens of call
+# sites — see `core/casestate_rig.py::run_land` and its siblings across
+# nearly every `core/*_rig.py`). Manifest's own DIRECT-WRITE semantics are
+# about the TARGET/RECEIVER of a write-like operation being manifest-rooted
+# (`_check_calls`'s `_sink_target`, `_check_manifest_stores`'s subscript
+# target) — a subprocess call's argv/env has no such "receiver" slot at all,
+# only DATA, so that semantic does not transfer here; scoping it in would
+# false-RED nearly every real rig's legitimate "read manifest, act on a
+# derived scalar" pattern, not catch a new evasion.
+def _check_subprocess_taint(tree, nt, rt, bindings, returns, parent_scope, path):
     violations = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and _is_subprocess_like_call(node)):
-            continue
-        try:
-            text = ast.unparse(node)
-        except Exception:
-            continue
-        if not _REDIRECT_RE.search(text):
             continue
         scope = parent_scope.get(node)
         kinds = frozenset()
@@ -1038,12 +1107,14 @@ def _check_subprocess_redirect(tree, nt, rt, bindings, returns, parent_scope, pa
             kinds |= _expr_taint(a, nt, rt, bindings, scope)
         for kw in node.keywords:
             kinds |= _expr_taint(kw.value, nt, rt, bindings, scope)
+        kinds = kinds & {"worker", "operator"}
         if not kinds:
             continue
         payload = _find_dumps_payload(node)
         for kind in sorted(kinds):
             _emit_violation(kind, payload, scope, path, node.lineno, violations,
-                             "a shelled-out subprocess redirect (>>/>)", bindings, returns)
+                             "a subprocess/os.exec/os.spawn call carrying a tainted argument",
+                             bindings, returns)
     return violations
 
 

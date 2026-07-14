@@ -15,6 +15,19 @@ the way `scripts/l1.sh` wires it (via `materialize_site_dir` +
            protected path, and `csv.writer` over an `open()` of the
            protected path (caught AT THE OPEN, before csv ever gets a
            handle) — every one of these against the protected file.
+  DIES     (block 01-40 T1, second pass — hostile-review closures) —
+           `os.open(basename, flags, dir_fd=dfd)` (the dir_fd/openat
+           bypass: the audit event hands the hook ONLY the bare relative
+           filename, no dir_fd, which the OLD code resolved against the
+           wrong base — CWD — and missed; now denied by RELATIVE-basename
+           match, never resolved against CWD at all), `os.remove` /
+           `os.unlink` of the protected file, `os.rename`/`os.replace`
+           MOVING the protected file AWAY to an unprotected path (not just
+           writes ONTO it), and `shutil.move` of the protected file (same-
+           filesystem rename, or cross-device copy2+unlink — either way,
+           the protected file's bytes are gone or aliased away, denied).
+           Each of these asserts BOTH the protected file's CONTENT and its
+           EXISTENCE are unchanged after the child dies.
   SURVIVES a read-mode `open()` of the protected file, and a write to an
            UNPROTECTED sibling path.
   SURVIVES (documented, not a bug) — `del sys.addaudithook` from rig code
@@ -23,9 +36,18 @@ the way `scripts/l1.sh` wires it (via `materialize_site_dir` +
   SUCCEEDS (documented hole, asserted EXPLICITLY) — a subprocess CHILD the
            guarded process spawns, without the guard's own PYTHONPATH/env
            wired into it, writes the protected file successfully: audit
-           hooks do not propagate through exec. This surface is owned by
-           `core/r3_lint.py`'s static subprocess-shell-redirect check, not
-           by this module — see both docstrings.
+           hooks do not propagate through exec. CORRECTED CLAIM: a prior
+           version of this comment said this surface was owned by
+           `core/r3_lint.py`'s static subprocess-shell-REDIRECT check —
+           WRONG, that check required a `>`/`>>` redirect and missed a
+           plain argv-only `subprocess.run([sys.executable, "-c", code,
+           protected_path, payload])`. `core/r3_lint.py` now denies-by-
+           default on ANY subprocess/os.exec*/os.spawn* call carrying a
+           WORKER/OPERATOR-tainted argument, no redirect syntax required
+           (see both docstrings, and `.github/scripts/
+           r3_honesty_lint_check.py` fixture 36). The TRUE residual is a
+           child invocation built from NO tainted argument at all — see
+           both docstrings' honest-limits sections.
 
 Exit 0 only if every one of the above holds.
 """
@@ -61,6 +83,15 @@ def _read(path):
         return fh.read()
 
 
+def _snapshot(path):
+    """(exists, content-or-None) — never raises on a missing file (several
+    of the block 01-40 T1 second-pass DIES cases are DESTRUCTION attempts;
+    if the guard ever regressed and let one through, the file could be
+    genuinely GONE afterward — this must observe that, not crash)."""
+    exists = os.path.exists(path)
+    return exists, (_read(path) if exists else None)
+
+
 def main():
     failed = False
     work = tempfile.mkdtemp(prefix="r3-guard-proof-")
@@ -74,14 +105,25 @@ def main():
     env = _guarded_env([protected], site_dir, rig="r3_guard_runtime_check")
 
     def expect_dies(name, code):
+        """DIES: the child must exit non-zero via the guard's own
+        PermissionError, AND the protected file's EXISTENCE and CONTENT
+        must both be exactly unchanged afterward — covers write-mode
+        opens (content-only concern, existence trivially unchanged) and
+        destruction/move-away attempts (existence is the real assertion)
+        with the SAME check."""
         nonlocal failed
-        before = _read(protected)
+        before_exists, before = _snapshot(protected)
         r = _run(code, env)
-        after = _read(protected)
+        after_exists, after = _snapshot(protected)
         if r.returncode == 0:
             print(f"REGRESSION [{name}]: expected the guard to kill this write "
-                  f"(protected file content unchanged), but the child exited 0. "
+                  f"(protected file unchanged), but the child exited 0. "
                   f"stdout={r.stdout!r} stderr={r.stderr!r}", file=sys.stderr)
+            failed = True
+        elif not after_exists:
+            print(f"REGRESSION [{name}]: child died (rc={r.returncode}) but the "
+                  f"protected file is GONE afterward (existed before={before_exists}) "
+                  "— a destructive op landed before the guard fired.", file=sys.stderr)
             failed = True
         elif after != before:
             print(f"REGRESSION [{name}]: child died (rc={r.returncode}) but the "
@@ -95,8 +137,8 @@ def main():
                   file=sys.stderr)
             failed = True
         else:
-            print(f"DIES confirmed [{name}]: rc={r.returncode}, content unchanged, "
-                  "guard's PermissionError raised.")
+            print(f"DIES confirmed [{name}]: rc={r.returncode}, existence+content "
+                  "unchanged, guard's PermissionError raised.")
 
     def expect_survives(name, code, check=None):
         nonlocal failed
@@ -160,6 +202,53 @@ del sys.addaudithook
 open({protected!r}, "w").write("pwned")
 """)
 
+    # ── DIES (block 01-40 T1, second pass — hostile-review closure #1):
+    #     `os.open(basename, flags, dir_fd=dfd)` — the audit 'open' event
+    #     hands the hook ONLY the bare relative filename, no dir_fd. The
+    #     OLD code realpath-resolved that against the WRONG base (this
+    #     child's CWD, not dfd's directory), found nothing, and let the
+    #     write through. Now denied by the RELATIVE-basename fail-closed
+    #     rule, never resolved against CWD at all. ──
+    expect_dies("dir_fd_openat_bypass", f"""
+import os
+protected = {protected!r}
+dfd = os.open(os.path.dirname(protected), os.O_RDONLY)
+fd = os.open(os.path.basename(protected), os.O_WRONLY | os.O_TRUNC, dir_fd=dfd)
+os.write(fd, b"pwned-dirfd")
+os.close(fd)
+os.close(dfd)
+""")
+
+    # ── DIES (hostile-review closure #2a): os.remove of the protected
+    #     file itself — pure destruction, no open()/rename() involved,
+    #     the OLD hook had no 'os.remove' branch at all. ──
+    expect_dies("os_remove_destroys_protected", f"""
+import os
+os.remove({protected!r})
+""")
+
+    # ── DIES (hostile-review closure #2b): os.rename MOVING the protected
+    #     file AWAY to an unprotected path — the OLD hook only guarded
+    #     args[1] (dst onto the protected path), never args[0] (src moved
+    #     off of it); the bytes under the protected name are gone either
+    #     way. ──
+    expect_dies("os_rename_move_away_destroys_protected", f"""
+import os
+protected = {protected!r}
+os.rename(protected, protected + ".moved-away")
+""")
+
+    # ── DIES (hostile-review closure #2c): shutil.move of the protected
+    #     file — same-filesystem uses os.rename internally (caught by the
+    #     src-check above); a cross-device move falls back to copy2 +
+    #     os.unlink(src) (caught by the os.remove branch instead). Either
+    #     way the protected file must survive untouched. ──
+    expect_dies("shutil_move_destroys_protected", f"""
+import shutil
+protected = {protected!r}
+shutil.move(protected, protected + ".moved-by-shutil")
+""")
+
     # ── SURVIVES: read-mode open of the protected path ──
     expect_survives("read_mode_open_survives", f"""
 data = open({protected!r}, "r").read()
@@ -215,9 +304,13 @@ print("GRANDCHILD_STDERR", grandchild.stderr)
         print("DOCUMENTED HOLE confirmed [documented_hole_subprocess_child]: "
               "a subprocess child NOT wired with the guard's env wrote the "
               "protected file successfully (before={!r}, after={!r}) — audit "
-              "hooks do not propagate through exec; this surface is owned by "
-              "core/r3_lint.py's static subprocess-redirect check, not "
-              "core/r3_guard.py.".format(before, after))
+              "hooks do not propagate through exec, a CPython/OS fact this "
+              "module cannot fix. core/r3_lint.py denies-by-default on ANY "
+              "subprocess/os.exec/os.spawn call carrying a WORKER/OPERATOR- "
+              "tainted argument (no redirect-syntax requirement — a PRIOR "
+              "version required one and was WRONG, see both docstrings); the "
+              "TRUE residual is a child invocation built from NO tainted "
+              "argument at all, undetectable by either module.".format(before, after))
         with open(protected, "w", encoding="utf-8") as fh:
             fh.write("seed\n")   # reset for any later case in this run
 

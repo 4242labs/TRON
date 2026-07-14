@@ -66,16 +66,50 @@ higher-level write (`open().write`, `Path.write_text`, `csv.writer`,
                  on an unresolvable flags value.
   'os.rename'    covers `os.replace` too (verified empirically — CPython
                  raises the SAME 'os.rename' audit event for `os.replace`,
-                 there is no separate 'os.replace' event); guards args[1]
-                 (dst) — the write-tmp-then-atomic-rename-onto-the-real-
-                 path evasion lands here, at the rename, not the (legal)
-                 tmp-file open.
+                 there is no separate 'os.replace' event); guards BOTH
+                 args[0] (src) AND args[1] (dst) — dst catches the
+                 write-tmp-then-atomic-rename-onto-the-real-path evasion
+                 (at the rename, not the legal tmp-file open); src catches
+                 a rig renaming the PROTECTED file itself away to an
+                 unprotected path (destruction-by-move-away — the bytes
+                 under the protected name are gone either way).
   'os.truncate'  guards args[0] (path).
   'os.link'      guards args[1] (dst) — a hardlink is a second directory
                  entry for the SAME inode; blocking it stops a rig from
                  aliasing a fresh path onto the protected file's bytes.
   'os.symlink'   guards args[1] (dst) — same reasoning, one level of
                  indirection.
+  'os.remove'    guards args[0] (path). CPython raises the SAME
+                 'os.remove' audit event for `os.unlink` (verified
+                 empirically — `os.unlink` is a bare alias for
+                 `os.remove`, no separate event exists), so this one
+                 branch covers both spellings, plus `shutil.move`'s
+                 cross-device fallback (`copy2` then `os.unlink(src)`
+                 when rename can't cross filesystems) — the unlink half of
+                 that fallback dies here even though the copy2 half writes
+                 an UNPROTECTED destination.
+  'os.rmdir'     guards args[0] (path) — a protected DIRECTORY spec's own
+                 root, or an ancestor a glob/dir spec still matches.
+
+DIR_FD / OPENAT FAIL-CLOSED RULE: `os.open(basename, flags,
+dir_fd=some_open_dir_fd)` hands the 'open' audit event ONLY the bare
+RELATIVE filename — no dir_fd, no absolute base, nothing this module could
+resolve against. Blindly `realpath`-ing that relative candidate resolves
+it against the process's CWD instead — the WRONG base — very likely
+matching nothing, and the write sails through even though it landed on
+the protected file via the dir_fd's real directory. This applies to
+`os.remove`/`os.rmdir`/`os.rename` too (all accept a `dir_fd=` kwarg the
+same way). FAIL-CLOSED fix, applied uniformly to every guarded path slot
+via `_protected()`: any RELATIVE candidate whose BASENAME matches a
+protected basename is denied UNCONDITIONALLY — never resolved against
+CWD, never given the benefit of the doubt, regardless of whether it
+happens to also resolve to an existing file. This trades a small
+false-RED risk (a same-named but genuinely unrelated relative write, e.g.
+a rig's own relative temp file that happens to end in the exact protected
+basename) for closing a real, demonstrated bypass; every legitimate
+relative write in this tree uses a temp filename that does not collide
+with a protected basename — verified by `scripts/l1.sh` staying 30/30
+green with this rule active.
 
 NON-BYPASSABLE FROM RIG CODE: install() is idempotent (a module-level
 sentinel — `sys.modules` caches this module, so a second `import
@@ -91,12 +125,25 @@ THE KNOWN, DOCUMENTED HOLE — child processes: `sys.addaudithook` is
 per-interpreter. `subprocess`/`os.exec*`/`os.system` start a NEW process
 image; nothing about this module's hook travels with it (this is a
 CPython/OS fact, not a bug to fix here). A rig that shells out to write a
-protected path bypasses this guard entirely — that surface is OWNED by
-`core/r3_lint.py`'s static `_check_subprocess_redirect` (a textual `>`/`>>`
-shell-redirect scan), not by this module. `.github/scripts/
-r3_guard_runtime_check.py` proves this hole EXPLICITLY (a guarded parent
-spawns an unguarded child that writes the protected path, and the proof
-asserts that SUCCEEDS) — an acknowledged gap, never a silently-assumed one.
+protected path bypasses this guard entirely. CORRECTED CLAIM (a prior
+version of this paragraph said this surface was OWNED by
+`core/r3_lint.py`'s static `_check_subprocess_redirect` — WRONG, that
+check gated on a textual `>`/`>>` shell-redirect and let a plain
+`subprocess.run([sys.executable, "-c", code, protected_path, payload])`
+through clean, no redirect syntax required to hand a child a tainted
+path): `core/r3_lint.py` now denies-by-default on ANY subprocess/
+os.exec*/os.spawn* call carrying a TAINTED argument, no redirect-syntax
+requirement (see its module docstring and required-RED fixture 36). The
+TRUE residual — never closeable statically, by construction — is a child
+invocation built from NO tainted argument at all (every argument a bare
+literal, the protected path reconstructed or hardcoded independently
+rather than derived from a traced marker): there is no taint to see, so
+no static prover can catch it; only a runtime, per-process mechanism like
+this module could, and this module's own hook does not propagate through
+`exec` either (below). `.github/scripts/r3_guard_runtime_check.py` proves
+the runtime half of this hole EXPLICITLY (a guarded parent spawns an
+unguarded child that writes the protected path, and the proof asserts
+that SUCCEEDS) — an acknowledged gap, never a silently-assumed one.
 """
 import fnmatch
 import os
@@ -196,6 +243,65 @@ def _matches(specs, candidate_real):
     return False
 
 
+def _raw_str(raw):
+    """Best-effort `str()` of a "path" audit-event slot WITHOUT resolving
+    it against CWD — used only to inspect the RAW shape (is it relative?
+    what is its basename?) ahead of, or instead of, `_resolve_path`'s
+    realpath resolution. `None` for anything not already string/bytes/
+    PathLike-shaped (an fd int, or unresolvable bytes) — never guessed;
+    an fd int is never "relative" in the sense this helper cares about."""
+    if raw is None or isinstance(raw, int):
+        return None
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = os.fsdecode(bytes(raw))
+        except Exception:
+            return None
+    try:
+        return os.fspath(raw)
+    except TypeError:
+        return None
+
+
+def _protected_basename_match(specs, raw):
+    """FAIL-CLOSED dir_fd/openat bypass close (see module docstring): a
+    RELATIVE candidate is never realpath-resolved against CWD here — it is
+    tested by BASENAME alone against every "exact"/"glob" protected spec's
+    own basename. An ABSOLUTE candidate always returns False (it has a
+    real base already; `_resolve_path`+`_matches` is the correct, more
+    precise check for it). "dir" specs are skipped deliberately — a
+    protected-DIRECTORY prefix rule has no single meaningful basename to
+    compare a bare relative filename against."""
+    s = _raw_str(raw)
+    if s is None or os.path.isabs(s):
+        return False
+    base = os.path.basename(s)
+    if not base:
+        return False
+    for kind, val in specs:
+        if kind == "exact" and os.path.basename(val) == base:
+            return True
+        if kind == "glob" and fnmatch.fnmatchcase(base, os.path.basename(val)):
+            return True
+    return False
+
+
+def _protected(specs, raw):
+    """The ONE decision point for "does this raw path slot denote a
+    protected path" — shared by every guarded event, so the dir_fd/openat
+    fail-closed basename rule is never a per-event special case a hostile
+    review can find missing from the NEXT event this module adds. Checks
+    the fail-closed relative-basename rule FIRST (cheap, and correct even
+    when the candidate does not exist / cannot be realpath-resolved at
+    all), then falls back to full realpath resolution. Returns
+    `(matched, display)` — `display` is whichever form was actually
+    matched against, for the denial message."""
+    if _protected_basename_match(specs, raw):
+        return True, _raw_str(raw)
+    cand = _resolve_path(raw)
+    return _matches(specs, cand), cand
+
+
 def _is_write_open(mode, flags):
     """DENY BY DEFAULT: an unresolvable flags value (shouldn't happen —
     CPython always hands a real int here — but if it ever doesn't, treat
@@ -235,25 +341,42 @@ def install():
             path, mode, flags = args
             if not _is_write_open(mode, flags):
                 return
-            cand = _resolve_path(path)
-            if _matches(specs, cand):
-                _deny("open() for write", cand)
+            matched, display = _protected(specs, path)
+            if matched:
+                _deny("open() for write", display)
         elif event == "os.rename":
-            cand = _resolve_path(args[1])
-            if _matches(specs, cand):
-                _deny("os.rename/os.replace onto", cand)
+            # guard BOTH slots: dst (write-tmp-then-atomic-rename-onto-the-
+            # real-path evasion) AND src (rig renames the protected file
+            # itself AWAY — destruction by move-away).
+            matched, display = _protected(specs, args[1])
+            if matched:
+                _deny("os.rename/os.replace onto", display)
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny("os.rename/os.replace (move-away) of", display)
         elif event == "os.truncate":
-            cand = _resolve_path(args[0])
-            if _matches(specs, cand):
-                _deny("os.truncate", cand)
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny("os.truncate", display)
         elif event == "os.link":
-            cand = _resolve_path(args[1])
-            if _matches(specs, cand):
-                _deny("os.link (hardlink) onto", cand)
+            matched, display = _protected(specs, args[1])
+            if matched:
+                _deny("os.link (hardlink) onto", display)
         elif event == "os.symlink":
-            cand = _resolve_path(args[1])
-            if _matches(specs, cand):
-                _deny("os.symlink onto", cand)
+            matched, display = _protected(specs, args[1])
+            if matched:
+                _deny("os.symlink onto", display)
+        elif event == "os.remove":
+            # covers os.unlink too (same audit event — see module
+            # docstring) — also the unlink half of shutil.move's
+            # cross-device copy2+unlink fallback.
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny("os.remove/os.unlink of", display)
+        elif event == "os.rmdir":
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny("os.rmdir of", display)
 
     sys.addaudithook(hook)
 

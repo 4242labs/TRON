@@ -46,6 +46,17 @@ case can only cause a false RED, never a false GREEN. Proves, live:
              bare/unscoped); the manifest fixture-local proof now ALSO
              requires the receiver itself resolve to a locally-constructed
              fixture — a bare parameter denies by default.
+  RED (x1)   the block 01-40 T1 SECOND-PASS hostile-review evasion
+             (fixture 36): a plain `subprocess.run([sys.executable, "-c",
+             code, protected_path, payload])` — the exact shape the
+             runtime guard's own PoC (`core/r3_guard.py`'s "documented
+             hole" proof) uses — contains NO `>`/`>>` shell-redirect text
+             at all, so the PRIOR redirect-gated subprocess check let it
+             through clean, and a PRIOR version of `core/r3_guard.py`'s
+             module docstring falsely claimed this whole surface was
+             OWNED by that check. Now caught by taint alone (any
+             WORKER/OPERATOR-tainted argument to a subprocess/os.exec/
+             os.spawn call is a sink, no redirect syntax required).
   PENDING(x2) two ROUND-5 payload-MUTATION PoCs (`payload["sender"] = ...`
              / `.update(...)` AFTER a safe dict literal is authored) are a
              REAL, currently KNOWN-GREEN gap — printed loudly as an
@@ -442,6 +453,25 @@ class FakeEng:
 def bad(real_eng, case_id, verb):
     real_eng.manifest["cases"][case_id]["decision"] = {"verb": verb}
 ''',
+
+    # ── block 01-40 T1 SECOND-PASS hostile-review evasion — the FALSE
+    #     OWNERSHIP CLAIM PoC: no `>`/`>>` redirect text anywhere in this
+    #     call at all (the OLD `_check_subprocess_redirect` gated on
+    #     exactly that regex and let this straight through). This is the
+    #     runtime guard's own "documented hole" PoC shape
+    #     (`subprocess.run([sys.executable, "-c", code, protected_path,
+    #     payload])`) — a tainted ingress path handed to a child, argv-only,
+    #     zero shell syntax. ──
+    "36_subprocess_no_redirect_argv_only": '''
+import json
+import subprocess
+import sys
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    code = "import sys; open(sys.argv[1], 'a').write(sys.argv[2])"
+    subprocess.run([sys.executable, "-c", code, eng.ctx.worker_inbox, json.dumps(rep)])
+''',
 }
 
 # ── ROUND-5 PoCs (Opus design review, pending the operator's MODEL A/B
@@ -460,7 +490,7 @@ def bad(real_eng, case_id, verb):
 #     prints LOUDLY the moment either the ruling lands and ships a fix, or
 #     a future rebuild accidentally closes (or widens) this unnoticed.
 ROUND5_PENDING_RULING_FIXTURES = {
-    "36_pending_payload_subscript_mutation": '''
+    "37_pending_payload_subscript_mutation": '''
 import json
 
 def bad(eng):
@@ -470,7 +500,7 @@ def bad(eng):
         ib.write(json.dumps(rep) + "\\n")
 ''',
 
-    "37_pending_payload_update_mutation": '''
+    "38_pending_payload_update_mutation": '''
 import json
 
 def bad(eng):
@@ -514,7 +544,7 @@ def use_it(tron_ctx):
 def main():
     failed = False
 
-    # ── RED x35: every evasion must still be caught ──
+    # ── RED x36: every evasion must still be caught ──
     for name, fixture in EVASION_FIXTURES.items():
         violations = r3_lint.lint_source(fixture, path=f"<evasion:{name}>")
         if violations:
