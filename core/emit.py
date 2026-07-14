@@ -169,6 +169,34 @@ EFFECTS = dict([
     _reg("sentry_nudged", "state"),           # a one-time re-nudge marked (nudged_at)
     _reg("sentry_escalated", "state"),        # a gate idle past the cap -> BLOCKED
     _reg("sentry_reviewer_dropped", "state"), # a capped reviewer's slot freed (workers pop)
+
+    # ── core/engine.py — bootup + the Engine's own duck-typed surface (T7 sub-commit 5) ──
+    # R-A: the per-worker engine->worker mailbox seq advanced (`manifest["mbox_seq"]`),
+    # fired on every real dispatch (`_next_mbox_seq`).
+    _reg("engine_mbox_seq_advanced", "state"),
+    # D5/D6: a renderer-side template lookup failed for a template id `emit`
+    # already validated against `vocab.EMIT_TEMPLATE_IDS` — `manifest["counters"]
+    # ["emit_missing_template"]` bumped (durable, acceptance-readable per 01-39),
+    # a must-be-zero-class counter (paired with the `must_be_zero` forensic event
+    # family other modules already use).
+    _reg("engine_emit_missing_template_counted", "state", counter_class="must_be_zero"),
+    # An operator page was durably recorded (`manifest["operator_pages"][page_id]`)
+    # — the STATE half of `_page_operator`; the forensic `operator_page` event
+    # above is the separate, always-fired forensic half.
+    _reg("engine_operator_page_recorded", "state"),
+    # A5: bootup wrote the requested scope (`manifest["scope"]`).
+    _reg("engine_scope_set", "state"),
+    # A4/A5: bootup wrote the resolved worker/architect counts (`manifest["counts"]`).
+    _reg("engine_counts_set", "state"),
+    # A5: bootup seeded any not-yet-present cadence type at 0 (`manifest["cadence"]`).
+    _reg("engine_cadence_seeded", "state"),
+    # A8: bootup installed the architect's fresh state (`architect.new_state()`,
+    # a pure local constructor) into `manifest["architect"]` — the ONE install site.
+    _reg("engine_architect_installed", "state"),
+    # A8: the just-installed (or already-present) architect record was marked spawned.
+    _reg("engine_architect_spawned", "state"),
+    # A6/A7: bootup wrote the live-session marker (`manifest["session"]`).
+    _reg("engine_session_started", "state"),
 ])
 
 

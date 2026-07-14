@@ -289,10 +289,11 @@ class Engine:
         if not self.dry:
             hwm = jobs.read_hwm(self.ctx.worker_dir(worker_id))
         if self._manifest is not None:
-            mbox = self._manifest.setdefault("mbox_seq", {})
+            mbox = self._manifest.get("mbox_seq") or {}
             persisted = int(mbox.get(worker_id, 0) or 0)
             seq = max(persisted, hwm) + 1
-            mbox[worker_id] = seq
+            emit.put(self, self._manifest, "engine_mbox_seq_advanced", ("mbox_seq",),
+                     worker_id, seq, worker_id=worker_id, seq=seq)
             return seq
         persisted = int(self._mailbox_seq.get(worker_id, 0) or 0)
         seq = max(persisted, hwm) + 1
@@ -452,9 +453,11 @@ class Engine:
                 line = self._renderer.render(template_id, slots)
             except Exception:
                 if self._manifest is not None:
-                    counters = self._manifest.setdefault("counters", {})
-                    counters["emit_missing_template"] = counters.get(
-                        "emit_missing_template", 0) + 1
+                    newcount = int((self._manifest.get("counters") or {}).get(
+                        "emit_missing_template", 0) or 0) + 1
+                    emit.put(self, self._manifest, "engine_emit_missing_template_counted",
+                             ("counters",), "emit_missing_template", newcount,
+                             template_id=template_id, count=newcount)
                 raise
 
         if worker_id and not self.dry:
@@ -531,10 +534,9 @@ class Engine:
         bug, made structurally impossible). Returns the receipt so the
         caller (`core/casestate.py`) can drive THE FLOOR."""
         page_id = None
-        pages = None
         if manifest is not None:
-            pages = manifest.setdefault("operator_pages", {})
-            page_id = f"{case_id}-p{len(pages) + 1}"
+            existing = manifest.get("operator_pages") or {}
+            page_id = f"{case_id}-p{len(existing) + 1}"
 
         deliver = getattr(self, "_deliver_page", None)
         receipt = None
@@ -542,10 +544,12 @@ class Engine:
             r = deliver(case_id, block, detail, worker_id=worker_id, page_id=page_id)
             receipt = r if r in ("delivered", "failed") else None
 
-        if pages is not None:
-            pages[page_id] = {"page_id": page_id, "case_id": case_id, "block": block,
+        if manifest is not None:
+            emit.put(self, manifest, "engine_operator_page_recorded", ("operator_pages",),
+                     page_id, {"page_id": page_id, "case_id": case_id, "block": block,
                               "detail": detail, "worker_id": worker_id, "kind": page_kind,
-                              "receipt": receipt, "at": util.now_iso()}
+                              "receipt": receipt, "at": util.now_iso()},
+                     case_id=case_id, block=block, page_kind=page_kind)
 
         emit.record(self, "operator_page", case=case_id, block=block, detail=detail,
                     worker_id=worker_id, kind=page_kind, receipt=receipt, page_id=page_id)
@@ -716,17 +720,25 @@ class Engine:
 
         # A4/A5: write the manifest — scope + counts + a zeroed cadence seed.
         cadence_cfg = self._knobs().cadence
-        manifest["scope"] = {"requested": scope, "ids": scope_ids}
-        manifest["counts"] = {"worker_count": self.paths["worker_count"], "architect_count": 1}
-        cadence = manifest.setdefault("cadence", {})
-        for typ in cadence_cfg:
-            cadence.setdefault(typ, 0)
+        emit.put(self, manifest, "engine_scope_set", (), "scope",
+                 {"requested": scope, "ids": scope_ids}, scope_ids=scope_ids)
+        emit.put(self, manifest, "engine_counts_set", (), "counts",
+                 {"worker_count": self.paths["worker_count"], "architect_count": 1},
+                 worker_count=self.paths["worker_count"])
+        cadence = manifest.get("cadence") or {}
+        missing_cadence = {typ: 0 for typ in cadence_cfg if typ not in cadence}
+        emit.patch(self, manifest, "engine_cadence_seeded", ("cadence",), missing_cadence,
+                   types=sorted(missing_cadence))
 
         # A8 (first half): spawn the persistent, pool-excluded architect —
         # unconditionally, at boot, never left to core/architect.py::advance's
         # own lazy first-job trigger (which stays intact for a caller that
         # drives core.tick.tick without ever going through Engine.start).
-        arch = manifest.setdefault("architect", architect.new_state())
+        if "architect" in manifest:
+            arch = manifest["architect"]
+        else:
+            arch = emit.put(self, manifest, "engine_architect_installed", (), "architect",
+                            architect.new_state())
         if not arch.get("spawned"):
             # Block 01-38 T1 — the root invariant: the architect's own
             # private intake, minted the same "before any process" moment
@@ -734,10 +746,11 @@ class Engine:
             # `self.dry` — a pure filesystem op, no real process implied).
             intake_mod.create(self.ctx, architect.ARCHITECT_WID)
             self._spawn_architect()
-            arch["spawned"] = True
-            arch["status"] = "idle"
+            emit.patch_obj(self, "engine_architect_spawned", arch,
+                           {"spawned": True, "status": "idle"})
 
-        manifest["session"] = {"started_at": util.now_iso(), "trunk_sha": trunk_sha}
+        emit.put(self, manifest, "engine_session_started", (), "session",
+                 {"started_at": util.now_iso(), "trunk_sha": trunk_sha}, trunk_sha=trunk_sha)
         state.save(self.ctx, manifest)
 
         # A8 (second half): the first dispatch — SWITCHBOARD's SPAWN half
