@@ -104,6 +104,7 @@ import reviewers    # noqa: E402 — core/reviewers.py, wave 10's DONE-REVIEW ga
 import liveness     # noqa: E402 — core/liveness.py, wave 11's worker-silence side-system
 import architect    # noqa: E402 — core/architect.py, block-less wall -> architect-first triage
 import vocab        # noqa: E402 — core/vocab.py, the closed tag set (block 01-37, T4/T7)
+import emit         # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 
 def _origin_id(rep):
@@ -137,8 +138,14 @@ def route(eng, manifest, worker_reports):
     is the ONLY place `last_seen` gets marked live — a worker's own report
     is what proves it isn't silent, independent of which specific tag it
     sent."""
-    workers = manifest.setdefault("workers", {})
-    gates = manifest.setdefault("gates", {})
+    # Read the live sections by reference (never a setdefault-install — the
+    # emit API's own path navigation seeds a section on its first real write;
+    # T7). Present in every real flow (snapshot builds them); an absent one
+    # reads as a throwaway empty for the read/no-op paths below, while every
+    # WRITE routes through emit against `manifest` directly, so it persists
+    # regardless.
+    workers = manifest.get("workers") or {}
+    gates = manifest.get("gates") or {}
 
     for rep in worker_reports:
         liveness.touch(workers, gates, rep)
@@ -180,7 +187,7 @@ def route(eng, manifest, worker_reports):
         # known — for ANY report carrying one (the online report in the rig's
         # one-phase path; a later branch/done declaration in a real worker's
         # two-phase path). See `_open_gate_if_branch`.
-        _open_gate_if_branch(eng, workers, gates, rep)
+        _open_gate_if_branch(eng, manifest, workers, gates, rep)
 
 
 def _is_review_pseudo_block(block):
@@ -236,7 +243,8 @@ def _route_online(eng, manifest, workers, gates, rep):
     # stray ':' is never silently mis-read as a reviewer (a build-ASSIGN that
     # silently never fires = a stalled block with no wall/page — a silent default).
     if _is_review_pseudo_block(block):
-        worker["assigned"] = True
+        emit.patch_obj(eng, "worker_assigned", worker, {"assigned": True},
+                       agent_id=agent_id, block=block)
         eng.log("flow", f"router: {agent_id!r} is a reviewer (pseudo-block "
                         f"{block!r}) — already ordered at spawn (PMT-SPAWN), "
                         f"no build ASSIGN")
@@ -254,12 +262,13 @@ def _route_online(eng, manifest, workers, gates, rep):
             slots={"assignment": assignment, "merge_path": ""},
             worker_id=agent_id,
             kind="PMT-ASSIGN")
-    worker["assigned"] = True
+    emit.patch_obj(eng, "worker_assigned", worker, {"assigned": True},
+                   agent_id=agent_id, block=block)
     eng.log("flow", f"router: ASSIGN {agent_id!r} -> block {block!r} "
                     f"(gate.local opens when it declares its branch)")
 
 
-def _open_gate_if_branch(eng, workers, gates, rep):
+def _open_gate_if_branch(eng, manifest, workers, gates, rep):
     """Open `gate.local` for an ASSIGNED worker the moment a branch is known.
     Fires for ANY report carrying `slots.branch` (a worker.online that already
     named it — the rig's one-phase path — OR a later branch/done declaration —
@@ -275,7 +284,11 @@ def _open_gate_if_branch(eng, workers, gates, rep):
     if not worker or not worker.get("assigned") or worker.get("status") == "released":
         return
     block = worker.get("block")
-    if not block or block in gates:
+    # Guard against an already-open gate read FRESH off the manifest (not the
+    # possibly-throwaway `gates` local `route` passed in) so a section that was
+    # absent at pass-start and installed by an earlier report THIS pass is still
+    # seen — never a second gate for one block.
+    if not block or block in (manifest.get("gates") or {}):
         return
     # A reviewer carries a `review:<type>` pseudo-block and is driven by the
     # DONE-REVIEW flow, NOT a gate ladder — a review pseudo-block living in
@@ -284,10 +297,11 @@ def _open_gate_if_branch(eng, workers, gates, rep):
     # non-deterministic, so never open a gate for one even if a stray branch arrives.
     if _is_review_pseudo_block(block):
         return
-    gates[block] = gate.new_state_full(eng, block, worker.get("block_file"),
-                                       branch, agent_id)
-    worker["status"] = "busy"
-    worker["branch"] = branch
+    emit.put(eng, manifest, "gate_opened_local", ("gates",), block,
+             gate.new_state_full(eng, block, worker.get("block_file"), branch, agent_id),
+             block=block, branch=branch, wid=agent_id)
+    emit.patch_obj(eng, "worker_busy", worker, {"status": "busy", "branch": branch},
+                   agent_id=agent_id, block=block, branch=branch)
     eng.log("flow", f"router: gate.local opened for block {block!r} on "
                     f"{agent_id!r}'s declared branch {branch!r}")
 
@@ -391,12 +405,11 @@ def _route_architect_reconciled(eng, manifest, rep):
         eng.log("flow", f"router: dropped a malformed architect.reconciled "
                         f"report (no in-flight reconcile job, no block): {rep!r}")
         return
-    reconciled = manifest.setdefault("reconciled", [])
-    if block in reconciled:
+    if block in (manifest.get("reconciled") or []):
         eng.log("flow", f"router: architect.reconciled for block {block!r} "
                         f"— already reconciled, no-op")
         return
-    reconciled.append(block)
+    emit.append(eng, manifest, "block_reconciled", ("reconciled",), block, block=block)
     eng.log("flow", f"router: architect.reconciled for block {block!r} -> "
                     f"reconcile-gate record set (core/architect.py::advance "
                     f"clears the architect's own current_job off this)")
@@ -416,12 +429,12 @@ def _route_architect_triage_verdict(eng, manifest, rep):
         eng.log("flow", f"router: dropped a malformed architect.triage_verdict "
                         f"report (triage_id={triage_id!r} verdict={verdict!r}): {rep!r}")
         return
-    verdicts = manifest.setdefault("triage_verdicts", {})
-    if triage_id in verdicts:
+    if triage_id in (manifest.get("triage_verdicts") or {}):
         eng.log("flow", f"router: architect.triage_verdict for triage_id="
                         f"{triage_id!r} — already recorded, no-op")
         return
-    verdicts[triage_id] = {"verdict": verdict, "note": note}
+    emit.put(eng, manifest, "triage_verdict_recorded", ("triage_verdicts",), triage_id,
+             {"verdict": verdict, "note": note}, triage_id=triage_id, verdict=verdict)
     eng.log("flow", f"router: architect.triage_verdict for triage_id="
                     f"{triage_id!r} -> {verdict!r} recorded (core/"
                     f"architect.py::advance drains it, applies it, clears "
@@ -466,8 +479,10 @@ def _route_flag(eng, manifest, rep):
     block = (manifest.get("workers") or {}).get(worker_id or "", {}).get("block")
     entry = {"worker_id": worker_id, "block": block, "detail": detail,
              "at": rep.get("at")}
-    manifest.setdefault("flag_ledger", []).append(entry)
-    manifest.setdefault("architect_flags", []).append(entry)
+    emit.append(eng, manifest, "flag_ledgered", ("flag_ledger",), entry,
+                worker_id=worker_id, block=block)
+    emit.append(eng, manifest, "flag_queued", ("architect_flags",), entry,
+                worker_id=worker_id, block=block)
     eng.log("flow", f"router: worker.flag from {worker_id!r} (block={block!r}) "
                     f"— ledgered + queued for the architect's next batched digest, "
                     f"pages no one: {detail!r}")
@@ -481,8 +496,9 @@ def _route_catch_all(eng, manifest, rep):
     this block only writes it and proves it fires — T4)."""
     tag = rep.get("tag")
     worker_id = _origin_id(rep)
-    counters = manifest.setdefault("counters", {})
-    counters["router_catch_all"] = counters.get("router_catch_all", 0) + 1
+    count = int((manifest.get("counters") or {}).get("router_catch_all", 0) or 0) + 1
+    emit.put(eng, manifest, "router_catch_all_counted", ("counters",),
+             "router_catch_all", count, tag=tag, worker_id=worker_id, count=count)
     block = (manifest.get("workers") or {}).get(worker_id or "", {}).get("block")
     detail = (f"router: unrecognized/unroutable tag {tag!r} reached route() — "
              f"never routed, never silently dropped (T4): {rep!r}")

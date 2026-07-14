@@ -1021,7 +1021,11 @@ def run_scenario_e_reviewer_never_build_assigned():
     gates = {}
     rw = {aid: {"block": reviewers.review_block("code"), "type": "code",
                 "status": "reviewing", "wid": aid, "assigned": True}}
-    router._open_gate_if_branch(eng, rw, gates,
+    # T7: `_open_gate_if_branch` now reads/writes the live section off `manifest`
+    # (the emit API's path nav is the sole gate-installer) — pass a manifest
+    # wrapping this test's own `gates`/`rw` so the reviewer-never-gated guard
+    # reads the SAME empty gates object the assertion below inspects.
+    router._open_gate_if_branch(eng, {"gates": gates, "workers": rw}, rw, gates,
                                {"tag": "worker.online", "origin": intake.Origin(vocab.WORKER, aid),
                                 "slots": {"branch": "feat/reviewer-should-not-gate"}})
     ok("E-K5 (REVIEWER-NEVER-GATED KILLER — must be GREEN): a reviewer report "

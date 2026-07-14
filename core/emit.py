@@ -221,6 +221,29 @@ EFFECTS = dict([
     # GAP-C: "outage clearing" — a subsequent spawn genuinely succeeded, so the
     # consecutive-death counter reset to 0.
     _reg("fleet_progress_reset", "state"),
+
+    # ── core/router.py — the ASSIGN half + the structured-report routes
+    #     (T7 sub-commit 7) ──
+    # A worker was ASSIGNED (told what to build) — its record marked assigned so
+    # a repeat worker.online is inert.
+    _reg("worker_assigned", "state"),
+    # ASSIGN opened the block's DONE-gate at gate.local, bound to the worker's
+    # OWN reported branch (`manifest["gates"][block]` installed).
+    _reg("gate_opened_local", "state"),
+    # The just-assigned worker moved to "busy" on its declared branch.
+    _reg("worker_busy", "state"),
+    # A reconcile job's block was recorded reconciled (`manifest["reconciled"]`).
+    _reg("block_reconciled", "state"),
+    # An architect triage verdict was recorded (`manifest["triage_verdicts"]`).
+    _reg("triage_verdict_recorded", "state"),
+    # A worker.flag was ledgered forensically (`manifest["flag_ledger"]`).
+    _reg("flag_ledgered", "state"),
+    # A worker.flag was queued for the architect's batched digest
+    # (`manifest["architect_flags"]`).
+    _reg("flag_queued", "state"),
+    # T4/AC-5: the must-be-zero router catch-all counter fired (an unroutable tag
+    # reached route()) — `manifest["counters"]["router_catch_all"]` bumped.
+    _reg("router_catch_all_counted", "state", counter_class="must_be_zero"),
 ])
 
 
