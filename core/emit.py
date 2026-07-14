@@ -264,6 +264,24 @@ EFFECTS = dict([
     # DONE-REVIEW gate: the first hand-back HELD the reviewer (status "held" +
     # findings stashed, pacing episode reset) pending its coverage attestation.
     _reg("review_held", "state"),
+
+    # ── core/liveness.py — the worker-silence side-system (T7 sub-commit 9) ──
+    # The liveness pace clock ticked (`manifest["liveness"]["clock"]`), the
+    # fallback counter separate from sentry's own.
+    _reg("liveness_clock_advanced", "state"),
+    # A drained report marked its worker seen THIS tick (the transient
+    # `_reported` flag `core/router.py::touch` sets).
+    _reg("worker_reported", "state"),
+    # `sweep` consumed a worker's `_reported` flag (turned into a fresh last_seen).
+    _reg("worker_report_consumed", "state"),
+    # A worker's liveness episode was (re)anchored: `last_seen` set to now (and
+    # its ping episode cleared) — first-ever sighting or a reset on genuine activity.
+    _reg("worker_last_seen_anchored", "state"),
+    # A gateless stalled worker's slot was freed — its `manifest["workers"]`
+    # record popped (no gate existed for open_case to flip terminal).
+    _reg("worker_stall_released", "state"),
+    # A silent worker was pinged once for its episode (`pinged_at` marked).
+    _reg("worker_pinged", "state"),
 ])
 
 

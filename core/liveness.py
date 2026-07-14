@@ -140,6 +140,7 @@ if _HERE not in sys.path:
 
 import casestate   # noqa: E402 — core/casestate.py, the parked-case recovery primitive
 import knobs as knobs_mod   # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (wave 16)
+import emit         # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 
 def _worker_active(eng, wid, reported):
@@ -231,12 +232,13 @@ def _clock(eng, manifest):
     now_fn = getattr(eng, "_now", None)
     if callable(now_fn):
         return now_fn()
-    counters = manifest.setdefault("liveness", {})
-    counters["clock"] = counters.get("clock", 0) + 1
-    return counters["clock"]
+    newclock = int((manifest.get("liveness") or {}).get("clock", 0)) + 1
+    emit.put(eng, manifest, "liveness_clock_advanced", ("liveness",), "clock",
+             newclock, clock=newclock)
+    return newclock
 
 
-def touch(workers, gates, rep):
+def touch(eng, workers, gates, rep):
     """Called once per drained report, from `core/router.py::route`, BEFORE
     that module's own per-tag dispatch: marks the reporting worker's record
     with a transient `_reported` flag — the "this worker said SOMETHING this
@@ -271,7 +273,8 @@ def touch(workers, gates, rep):
         gate_state = gates.get(block) if block else None
         agent_id = gate_state.get("wid") if gate_state else None
     if agent_id and agent_id in workers:
-        workers[agent_id]["_reported"] = True
+        emit.patch_obj(eng, "worker_reported", workers[agent_id],
+                       {"_reported": True}, agent_id=agent_id)
 
 
 def sweep(eng, snapshot):
@@ -309,7 +312,14 @@ def sweep(eng, snapshot):
             # is a clean split: no double-pace, no gap.
             continue
 
-        reported = w.pop("_reported", False)
+        # Consume the transient `_reported` flag (set True by `touch` above).
+        # `touch` only ever sets it True, so a truthy read IS "reported this
+        # tick"; clear it back to False through emit (set-None-not-pop, the
+        # sentry `_drop_pacing` precedent — no reader distinguishes absent from
+        # falsy, both `bool(...)`/`.get()` read the same).
+        reported = bool(w.get("_reported"))
+        if reported:
+            emit.patch_obj(eng, "worker_report_consumed", w, {"_reported": False}, wid=wid)
         active = _worker_active(eng, wid, reported)
 
         if w.get("last_seen") is None:
@@ -318,9 +328,9 @@ def sweep(eng, snapshot):
             # THIS tick, before `core/router.py::touch` could ever have
             # marked it) — progress clears the clock; no silence counted on
             # the call that first notices a worker exists.
-            w["last_seen"] = now
-            if active:
-                w.pop("pinged_at", None)
+            emit.patch_obj(eng, "worker_last_seen_anchored", w,
+                           {"last_seen": now, "pinged_at": None} if active
+                           else {"last_seen": now}, wid=wid)
             continue
 
         # The shared working-excluded integration step (see module
@@ -337,8 +347,8 @@ def sweep(eng, snapshot):
         if active:
             # Reported this tick OR provably mid-turn (a real working
             # runner) — either way genuinely active: reset the episode.
-            w["last_seen"] = new_last_seen   # == now
-            w.pop("pinged_at", None)
+            emit.patch_obj(eng, "worker_last_seen_anchored", w,
+                           {"last_seen": new_last_seen, "pinged_at": None}, wid=wid)   # last_seen == now
             continue
 
         if silent >= escalate_min:
@@ -366,7 +376,8 @@ def sweep(eng, snapshot):
                 # already releases (sentry.py:248); match it here.
                 if wid and not eng.dry:
                     eng._release_worker(wid, reason=f"liveness-stall ({block})")
-                workers.pop(wid, None)
+                emit.drop(eng, manifest, "worker_stall_released", ("workers",), wid,
+                          wid=wid, block=block)
             stalled.append((block, wid, case_id))
             continue
 
@@ -379,7 +390,7 @@ def sweep(eng, snapshot):
                     f"Silence past silence_escalate_min={escalate_min} is "
                     f"declared stalled and parked for the operator.",
                     "heartbeat.ping")
-            w["pinged_at"] = now
+            emit.patch_obj(eng, "worker_pinged", w, {"pinged_at": now}, wid=wid, block=block)
             eng.log("flow", f"liveness: pinged {wid} (block={block!r}, "
                             f"silent={silent}, silence_ping_min={ping_min})")
             pinged.append(wid)

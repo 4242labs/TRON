@@ -148,7 +148,7 @@ def route(eng, manifest, worker_reports):
     gates = manifest.get("gates") or {}
 
     for rep in worker_reports:
-        liveness.touch(workers, gates, rep)
+        liveness.touch(eng, workers, gates, rep)
 
     for rep in worker_reports:
         tag = rep.get("tag")
