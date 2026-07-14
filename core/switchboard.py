@@ -84,6 +84,7 @@ import reviewers  # noqa: E402 — core/reviewers.py, wave 10's cadence-PULL rev
 import casestate  # noqa: E402 — core/casestate.py, wave 18's architect-first raise-and-defer (unedited)
 import knobs as knobs_mod   # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (fleet_outage_deaths)
 import intake as intake_mod   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import emit   # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 
 def _agent_id(block):
@@ -112,22 +113,28 @@ def _record_fleet_death(eng, manifest, agent_id, block_id, exc):
     + raises the ONE fleet-outage escalation, architect-first (never a
     second one while this one is still open — guarded by `_fleet_paused`,
     never a separate latch that could go stale)."""
-    fleet = manifest.setdefault("fleet", {"consecutive_deaths": 0, "total_deaths": 0,
-                                          "outage_case_id": None, "deaths": []})
-    fleet["consecutive_deaths"] = fleet.get("consecutive_deaths", 0) + 1
-    fleet["total_deaths"] = fleet.get("total_deaths", 0) + 1
-    fleet.setdefault("deaths", []).append(
-        {"agent_id": agent_id, "block": block_id, "error": repr(exc)})
+    # Read the current fleet state (never a setdefault-install — the emit API's
+    # own path navigation seeds the section on first write; T7).
+    fleet = manifest.get("fleet") or {}
+    consecutive = fleet.get("consecutive_deaths", 0) + 1
+    emit.patch(eng, manifest, "fleet_death_recorded", ("fleet",),
+               {"consecutive_deaths": consecutive,
+                "total_deaths": fleet.get("total_deaths", 0) + 1,
+                "outage_case_id": fleet.get("outage_case_id")},
+               agent_id=agent_id, block=block_id, consecutive_deaths=consecutive)
+    emit.append(eng, manifest, "fleet_death_recorded", ("fleet", "deaths"),
+                {"agent_id": agent_id, "block": block_id, "error": repr(exc)},
+                agent_id=agent_id, block=block_id)
     eng.log("flow", f"switchboard: SPAWN FAILED for {agent_id} (block={block_id!r}): "
                     f"{exc!r} — worker slot freed (a genuine retry next fill, never a "
                     f"permanently-dead record); fleet consecutive_deaths="
-                    f"{fleet['consecutive_deaths']}")
+                    f"{consecutive}")
 
     threshold = knobs_mod.load(eng.ctx).fleet_outage_deaths
-    if fleet["consecutive_deaths"] < threshold or _fleet_paused(manifest):
+    if consecutive < threshold or _fleet_paused(manifest):
         return
 
-    detail = (f"fleet outage: {fleet['consecutive_deaths']} consecutive worker "
+    detail = (f"fleet outage: {consecutive} consecutive worker "
              f"spawn-then-immediate-death events (>= fleet_outage_deaths="
              f"{threshold}) — self-releasing: dispatch PAUSED (spawning "
              f"NOTHING further, never re-spawning into the outage), escalated "
@@ -135,21 +142,25 @@ def _record_fleet_death(eng, manifest, agent_id, block_id, exc):
              f"silent death, never burned to session-end)")
     case_id = casestate.open_case(eng, manifest, None, "fleet.outage", detail,
                                   worker_id=None, kind="fleet_outage")
-    fleet["outage_case_id"] = case_id
-    manifest["paused"] = True
+    emit.patch(eng, manifest, "fleet_outage_opened", ("fleet",),
+               {"outage_case_id": case_id}, case_id=case_id)
+    if not manifest.get("paused"):
+        emit.put(eng, manifest, "fleet_dispatch_paused", (), "paused", True)
     eng.log("operator", f"switchboard: FLEET OUTAGE — {detail} (case={case_id!r})")
 
 
-def _record_fleet_progress(manifest):
+def _record_fleet_progress(eng, manifest):
     """Wave 19 (GAP-C): a spawn that genuinely SUCCEEDED — "outage clearing"
     IS a subsequent spawn succeeding (the design's own words) — resets the
     consecutive-death counter. Deliberately NOT gated on `_fleet_paused`:
     while paused, `fill` (below) never even attempts a spawn, so this is
-    only ever reached post-resume, exactly where the reset belongs."""
-    fleet = manifest.setdefault("fleet", {"consecutive_deaths": 0, "total_deaths": 0,
-                                          "outage_case_id": None, "deaths": []})
-    if fleet.get("consecutive_deaths"):
-        fleet["consecutive_deaths"] = 0
+    only ever reached post-resume, exactly where the reset belongs. Only
+    emits (and only touches the manifest) when there is a live count to
+    reset — a progress spawn on a never-failed fleet is a true no-op, never
+    a per-spawn re-emit (T7 guard, mirrors sentry `_drop_pacing`)."""
+    if (manifest.get("fleet") or {}).get("consecutive_deaths"):
+        emit.patch(eng, manifest, "fleet_progress_reset", ("fleet",),
+                   {"consecutive_deaths": 0})
 
 
 def _active_worker_count(manifest):
@@ -188,16 +199,18 @@ def fill(eng, snapshot, view=None):
     wave) sees `reviewers.due_type` return `None` every call — a no-op,
     this whole arm falls through unchanged to the block-dispatch loop."""
     manifest = snapshot.manifest
-    workers = manifest.setdefault("workers", {})
+    workers = manifest.get("workers") or {}   # membership reads only; writes route through emit
 
     # ── Wave 19 (GAP-C): the fleet-outage self-release — spawn NOTHING new
     #     while a fleet-outage case sits open (never re-spawning into the
     #     outage; see module docstring). Checked FIRST, before any free-slot
     #     accounting — a pause means zero dispatch, not a partial one. ──
     if _fleet_paused(manifest):
-        manifest["paused"] = True
+        if not manifest.get("paused"):
+            emit.put(eng, manifest, "fleet_dispatch_paused", (), "paused", True)
         return []
-    manifest["paused"] = False
+    if manifest.get("paused"):
+        emit.put(eng, manifest, "fleet_dispatch_resumed", (), "paused", False)
 
     worker_count = max(1, int(eng.paths.get("worker_count", 1) or 1))
 
@@ -235,12 +248,12 @@ def fill(eng, snapshot, view=None):
         # `eng._spawn_worker` stub below leaves a real, re-derivable
         # "spawning" record a later tick's `pipeline.dispatchable` still
         # treats as in-flight — never a double-spawn on replay.
-        workers[agent_id] = {
+        emit.put(eng, manifest, "worker_spawning_recorded", ("workers",), agent_id, {
             "block": block["id"],
             "block_file": block["block_file"],
             "status": "spawning",
             "branch": None,
-        }
+        }, agent_id=agent_id, block=block["id"])
         # Block 01-38 T1 — the root invariant: the intake IS the identity,
         # minted BEFORE any process (same "mint + record before any
         # process" discipline as the manifest write immediately above) so
@@ -257,14 +270,16 @@ def fill(eng, snapshot, view=None):
             # ladder, untouched). Free the slot (a genuine retry candidate,
             # never a permanently-"dead" record) and count it toward the
             # fleet-outage signal; NEVER re-raise — the tick continues.
-            workers.pop(agent_id, None)
+            emit.drop(eng, manifest, "worker_spawn_reverted", ("workers",), agent_id,
+                      agent_id=agent_id, block=block["id"])
             _record_fleet_death(eng, manifest, agent_id, block["id"], exc)
             free -= 1
             if _fleet_paused(manifest):
-                manifest["paused"] = True
+                if not manifest.get("paused"):
+                    emit.put(eng, manifest, "fleet_dispatch_paused", (), "paused", True)
                 break
             continue
-        _record_fleet_progress(manifest)
+        _record_fleet_progress(eng, manifest)
         # PMT-SPAWN needs role + persona slots to render (the worker's first
         # contact — it carries the report-channel + contract + persona the
         # agent reads). Resolve the REAL role/persona off roles.yaml when the

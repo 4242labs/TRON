@@ -197,6 +197,30 @@ EFFECTS = dict([
     _reg("engine_architect_spawned", "state"),
     # A6/A7: bootup wrote the live-session marker (`manifest["session"]`).
     _reg("engine_session_started", "state"),
+
+    # ── core/switchboard.py — SWITCHBOARD's SPAWN half + GAP-C fleet-outage
+    #     self-release (T7 sub-commit 6) ──
+    # A worker record was minted into `manifest["workers"]` with status
+    # "spawning", BEFORE any process (adversary §11.3 mint-then-spawn).
+    _reg("worker_spawning_recorded", "state"),
+    # A just-minted "spawning" worker record was reverted (`workers.pop`) after
+    # a SYNCHRONOUS spawn-time failure — the slot freed for a genuine retry.
+    _reg("worker_spawn_reverted", "state"),
+    # GAP-C: one fleet-wide spawn-then-immediate-death event recorded
+    # (`manifest["fleet"]` consecutive/total counters + the deaths ledger).
+    _reg("fleet_death_recorded", "state"),
+    # GAP-C: past fleet_outage_deaths, the one fleet-outage case's id was bound
+    # onto `manifest["fleet"]["outage_case_id"]`.
+    _reg("fleet_outage_opened", "state"),
+    # GAP-C: dispatch self-paused (`manifest["paused"] = True`) — spawn nothing
+    # further while a fleet-outage case is open.
+    _reg("fleet_dispatch_paused", "state"),
+    # GAP-C: dispatch un-paused (`manifest["paused"] = False`) once no outage
+    # case blocks it.
+    _reg("fleet_dispatch_resumed", "state"),
+    # GAP-C: "outage clearing" — a subsequent spawn genuinely succeeded, so the
+    # consecutive-death counter reset to 0.
+    _reg("fleet_progress_reset", "state"),
 ])
 
 
