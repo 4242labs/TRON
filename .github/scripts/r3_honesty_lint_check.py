@@ -4,17 +4,27 @@
 `core/r3_lint.py` is the R3 honesty lint: a harness may not fabricate a
 sender kind the real door (scripts/report.sh) could never produce, write
 `ctx.operator_inbox` at all (no real operator transport exists yet), nor
-mutate `manifest[...]` state directly. This is the SECOND rebuild — a first
+mutate `manifest[...]` state directly. This is the THIRD rebuild. A first
 hostile review proved the original pattern-matched a fingerprint of the one
-known offender (10/10 plain evasions defeated it); a SECOND hostile review
+known offender (10/10 plain evasions defeated it). A SECOND hostile review
 then proved that rebuild still enumerated the WRITE MECHANISM itself (a
 small, fixed set of shapes: open/write, json.dump, append_jsonl, a shelled
 `>>`) rather than the illegal class — 9/10 further plain evasions (all
 touching a mechanism outside that enumerated set) defeated it too, including
-`print(obj, file=handle)`, an idiom already used elsewhere in this tree
-(`core/sim/launch.py`, `core/sim/live.py`). This SECOND rebuild replaces
-mechanism-enumeration with a structural, deny-by-default call scan (see
-`core/r3_lint.py`'s own docstring). Proves, live:
+`print(obj, file=handle)`. A THIRD hostile review then proved that rebuild —
+which correctly inverted deny-by-default for both the write mechanism (any
+call touching a resolved channel) AND the payload — still enumerated which
+variable-BINDING SHAPES it would even attempt to trace: `_collect_all_bindings`
+recorded only a single bare-`Name` `Assign` target and `with ... as name:`,
+so tuple/list unpacking, chained assignment, a `for` loop's target, a walrus
+binding, and an attribute-storage target (`self.dest = ...`) were invisible
+— not denied, silently SKIPPED — so a channel/manifest alias reached through
+any of those five shapes was never even offered to the (already-correct)
+write/payload check. This THIRD rebuild replaces the shape-limited binding
+walk with a generic one that captures every name Python's own grammar can
+bind (see `core/r3_lint.py`'s own docstring: `_flatten_bind_targets` /
+`_collect_all_bindings`), and widens container-unwrapping to `Tuple`/`Set`
+(previously `Dict`/`List` only). Proves, live:
 
   RED (x10)  each of the 10 evasions the FIRST review demonstrated is still
              caught: a renamed inbox-path variable, a `file=` kwarg path,
@@ -35,6 +45,17 @@ mechanism-enumeration with a structural, deny-by-default call scan (see
              `return`, an `os.replace()` tmp-file swap onto the real inbox
              path, and `io.open` (an `Attribute` call, not the bare `open`
              Name).
+  RED (x8)   each of the 8 FURTHER evasions the THIRD review demonstrated is
+             caught: a tuple-unpack of a same-file helper's `(path, mode)`
+             return, a plain `path, mode = eng.ctx.worker_inbox, "a"`
+             tuple-assign, a `manifest`-tuple-unpack (`m, _extra =
+             eng.manifest, None`), `manifest` wrapped in a throwaway
+             `tuple` container, a chained assignment
+             (`a = path = eng.ctx.worker_inbox`), an attribute-storage
+             target (`self.dest = eng.ctx.worker_inbox` in `__init__`, used
+             later via `self.dest`), a `for dest in (eng.ctx.worker_inbox,)`
+             loop-target binding, and a walrus binding
+             (`if (p := eng.ctx.worker_inbox):`).
   GREEN      two legal shapes stay clean: a door-only report (worker sender,
              or no sender key at all — report.sh's own shape) written
              straight, AND the identical "helper indirection" MECHANISM used
@@ -241,6 +262,93 @@ def bad(eng):
     rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
     with io.open(eng.ctx.worker_inbox, "a") as fh:
         fh.write(json.dumps(rep) + "\\n")
+''',
+
+    # ── THIRD-REVIEW evasions (block 01-40 T1, third rebuild) — each one
+    #     defeated the SECOND rebuild's write-mechanism scan not by using an
+    #     unrecognized WRITE mechanism, but by using a variable-BINDING
+    #     SHAPE `_collect_all_bindings` never recorded at all (tuple/list
+    #     unpacking, chained assigns, a for-loop target, walrus, an
+    #     attribute target) — so the channel/manifest alias was invisible
+    #     to the resolver from the start, never even reaching the
+    #     (already-correct) deny-by-default payload/write check. ──
+
+    "21_tuple_unpack_from_helper": '''
+import json
+
+def _channel_and_mode(eng):
+    return eng.ctx.worker_inbox, "a"
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    path, mode = _channel_and_mode(eng)
+    with open(path, mode) as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "22_tuple_unpack_plain": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    path, mode = eng.ctx.worker_inbox, "a"
+    with open(path, mode) as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "23_manifest_tuple_unpack": '''
+def bad(eng, case_id, verb):
+    m, _extra = eng.manifest, None
+    m["cases"][case_id]["decision"] = {"verb": verb}
+''',
+
+    "24_manifest_tuple_container": '''
+def bad(eng, case_id, verb):
+    refs = (eng.manifest,)
+    refs[0]["cases"][case_id]["decision"] = {"verb": verb}
+''',
+
+    "25_chained_assignment": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    a = path = eng.ctx.worker_inbox
+    with open(path, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "26_self_attribute_storage": '''
+import json
+
+class Reporter:
+    def __init__(self, eng):
+        self.dest = eng.ctx.worker_inbox
+
+    def bad(self):
+        rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+        with open(self.dest, "a") as fh:
+            fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "27_for_loop_binding": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    for dest in (eng.ctx.worker_inbox,):
+        with open(dest, "a") as fh:
+            fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "28_walrus_binding": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    if (p := eng.ctx.worker_inbox):
+        with open(p, "a") as fh:
+            fh.write(json.dumps(rep) + "\\n")
 ''',
 }
 

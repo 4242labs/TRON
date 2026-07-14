@@ -13,12 +13,12 @@ a harness that mutates persisted engine state (`manifest[...]`) directly,
 instead of letting the real drain (tick -> classify -> router) apply the
 effect, skips the door entirely.
 
-DESIGN (block 01-40 T1, REBUILT a second time after a hostile review): the
-FIRST rebuild inverted "deny by default" correctly for the PAYLOAD (a
+DESIGN (block 01-40 T1, REBUILT a THIRD time after a THIRD hostile review):
+the FIRST rebuild inverted "deny by default" correctly for the PAYLOAD (a
 sender's kind must be a statically-provable dict literal, or it is denied),
 but still recognized the WRITE MECHANISM ITSELF (what counts as "a write to
 the inbox" at all) via a small ENUMERATED set of shapes: `open()`/`.write()`,
-`json.dump()`, `append_jsonl()`, a shelled `>>` redirect. A second hostile
+`json.dump()`, `append_jsonl()`, a shelled `>>` redirect. A SECOND hostile
 review proved 9/10 plain rewrites of the exact same violation defeat
 mechanism-enumeration: `print(obj, file=handle)` (a real idiom already used
 elsewhere in this very tree — `core/sim/launch.py`, `core/sim/live.py`),
@@ -27,21 +27,52 @@ elsewhere in this very tree — `core/sim/launch.py`, `core/sim/live.py`),
 (mirroring the ALREADY-CLOSED payload-helper-indirection case, but on the
 TARGET side, which had no equivalent tracing), a manifest handle wrapped in a
 throwaway `dict`/`list` container, and an `os.replace()` tmp-file swap onto
-the real inbox path.
+the real inbox path. The SECOND rebuild fixed all of that by inverting the
+MECHANISM check itself: any call touching a traced channel is in scope
+unless it is one of a small, explicit, provably-safe allow-list.
 
-THIS rebuild inverts the MECHANISM the same way the first rebuild inverted the
-payload: DENY BY DEFAULT, allow a small, explicit, statically-provable legal
-surface — never enumerate illegal shapes and chase the next rewrite.
-Concretely, one whole-file, bounded-depth alias/call-graph trace
-(`_resolve_channel` / `_resolve_manifest`, sharing the same substrate:
-`_nearest_assign_value`, `_resolve_param_inbound`, `_resolve_call_return`)
-answers ONE question for any expression: does it denote (directly, via an
-aliased Name, via a `dict`/`list` container wrapping it, via a bounded
-same-file call-site trace of an inbound function parameter, or via a bounded
-trace of a same-file function's `return` value) the real `ctx.worker_inbox`,
-`ctx.operator_inbox`, or `manifest`?
+A THIRD hostile review then proved the second rebuild's inversion was real
+but sat on top of an ENUMERATED BINDING WALK it never noticed was narrow:
+`_collect_all_bindings` recorded only a bare single-target `Name = <expr>`
+`Assign` and a `with <expr> as name:` — so the "deny by default" call-scan
+never even SAW a channel/manifest alias reached through a tuple/list
+unpack (`path, mode = eng.ctx.worker_inbox, "a"`), a chained assignment
+(`a = path = eng.ctx.worker_inbox`), a `for`-loop target
+(`for dest in (eng.ctx.worker_inbox,):`), a walrus binding
+(`if (p := eng.ctx.worker_inbox):`), an attribute-storage target
+(`self.dest = eng.ctx.worker_inbox` in `__init__`, read back later as
+`self.dest`), or a `manifest` reference wrapped in a `tuple` (the container
+check traced `dict`/`list` only). Each of those 8 shapes SKIPPED the alias
+silently — the call-scan below is correctly deny-by-default once it has a
+resolved channel/manifest to check, but a binding shape the walk never
+records never PRODUCES that resolution in the first place, so the whole
+downstream deny-by-default machinery never even fires. This is the root
+inconsistency the module's mandate exists to kill: unresolvable PAYLOADS
+were denied, but unrecognized BINDING SHAPES were skipped, not denied.
 
-Given that resolver, the DETECTION step is structural, not shape-based:
+THIS (third) rebuild closes that inconsistency at its root, not by adding
+five more enumerated shapes to a still-finite list, but by replacing the
+binding walk with a GENERIC one that captures every construct Python's own
+grammar uses to bind a name (`_flatten_bind_targets` + `_collect_all_bindings`
+below: `Assign` with any number of targets of any shape — `Name`,
+`Attribute`, or `Tuple`/`List`/`Starred` recursively flattened —, `AnnAssign`,
+`NamedExpr`, `For`/`AsyncFor`, `With`/`AsyncWith`), plus widening the
+container-unwrap check (`_resolve_channel`/`_resolve_manifest`) from
+`dict`/`list` to also `tuple`/`set`. Binding-shape recognition is now
+explicitly an OPTIMIZATION for PROVING an occurrence safe, never the GATE
+that decides whether an occurrence is even considered: every compound target
+is bound, conservatively and WITHOUT trying to positionally destructure it,
+to the WHOLE right-hand-side expression — so a shape this walk cannot
+precisely resolve can only make MORE names resolve to a channel/manifest
+(a false RED on an unrelated sibling binding), never FEWER (a missed alias,
+the failure mode that sank all three prior rounds). A construct genuinely
+outside this generic walk's coverage (a comprehension target, an
+`except ... as e:`, a `del`) simply contributes no binding at all, which
+means a use of that name resolves as UNPROVEN — and unproven touches of a
+call already fall through to DENIED (see step 1 below), never a silent pass.
+
+Given that generalized resolver, the DETECTION step is unchanged in kind
+from the second rebuild — structural, not shape-based:
 
   1. `_check_channel_writes` walks EVERY call in the file. A call is
      considered "write-capable, in scope" the instant its RECEIVER, or ANY
@@ -64,6 +95,12 @@ Given that resolver, the DETECTION step is structural, not shape-based:
      still touches a traced channel, the operation is DENIED outright
      unless its payload is a statically-provable safe dict literal — an
      unresolvable touch is treated as illegal, never a silent pass-through.
+     An `open()`/`.open()` call whose MODE argument cannot itself be
+     resolved to a literal string (traced through the same generalized
+     binding walk, `_resolve_str_literal`) is now conservatively treated as
+     a POSSIBLE write, not assumed read-only — this closed the last piece
+     of the tuple-unpack evasion, where the write mode itself (`"a"`) was
+     reached only through a binding shape the old lookup could not follow.
   2. Within scope, `ctx.operator_inbox` is ALWAYS illegal
      (`OPERATOR_INBOX_WRITE`) — there is no real operator transport a rig or
      driver may legitimately use yet (R8), so no payload shape makes this
@@ -75,17 +112,20 @@ Given that resolver, the DETECTION step is structural, not shape-based:
      use) or carries `sender.kind` as the string literal `"worker"`. ANY
      other outcome is DENIED (`INBOX_FABRICATED_SENDER`).
   4. `manifest[...]` direct-write is unchanged in kind (any subscript
-     assignment/`AugAssign`/`.update()` at ANY depth >= 1) but now shares
-     the SAME resolver as the channel side, so a manifest reference wrapped
-     in a throwaway `dict`/`list` container (`bag = {"m": eng.manifest};
-     bag["m"][...] = ...`) or obtained via a same-file helper's `return` is
-     traced exactly like an aliased Name is — no separate, narrower
-     mechanism for the manifest side.
+     assignment/`AugAssign`/`.update()` at ANY depth >= 1) but shares the
+     SAME resolver as the channel side, so a manifest reference wrapped in a
+     throwaway `dict`/`list`/`tuple`/`set` container (`bag = {"m":
+     eng.manifest}; bag["m"][...] = ...`), reached through a tuple-unpack,
+     chained assign, `for`-target, walrus, or attribute-storage binding, or
+     obtained via a same-file helper's `return`, is traced exactly like a
+     plain aliased Name is — no separate, narrower mechanism for the
+     manifest side.
 
 Two illegal-ingress classes remain the visible violation vocabulary
 (`INBOX_FABRICATED_SENDER` + `OPERATOR_INBOX_WRITE` for the reporting door;
 `MANIFEST_DIRECT_WRITE` for direct state mutation) — only the DETECTION
-underneath them was rebuilt, twice now.
+underneath them, and now the BINDING WALK feeding it, was rebuilt, three
+times.
 
 NOT flagged: calling an internal function directly with a constructed
 argument (e.g. `classify.classify(eng, {...}, manifest)` to unit-test
@@ -98,67 +138,97 @@ whitebox unit tests and fixture setup never claim to drive the real inbox ->
 drain path, so they cannot lie about one.
 
 REAL, HONESTLY-DISCLOSED REMAINING LIMITS (not closed by this rebuild — this
-list names EXACTLY what is still open, not an aspirational "mostly done"):
+list names EXACTLY what is still open, not an aspirational "mostly done").
+The bar this rebuild was held to is that BINDING-SHAPE gaps may now only
+cause a false RED (an unprovable occurrence denied even though a human could
+see it is safe), never a false GREEN (a real violation silently passed) —
+every limit below is checked against that bar explicitly:
 
   - The alias/call-graph trace (`_nearest_assign_value`,
-    `_resolve_param_inbound`, `_resolve_call_return`) is a flat, whole-file,
-    NAME-based walk with a bounded hop count (`_MAX_TRACE_DEPTH`) — not real
-    scope-aware/interprocedural dataflow. Two functions in the same file
-    that happen to share a name are treated as the same call target
-    (matches call sites by bare name / bare attribute name only, never by
-    class or module qualification); a chain of aliasing/forwarding deeper
-    than the bound is treated as unresolved (and therefore denied if it
-    touches a channel op, but silently unresolved — i.e. invisible — if it
-    does not reach a channel-shaped operation at all within the bound).
+    `_resolve_param_inbound`, `_resolve_call_return`, and now the generic
+    `_flatten_bind_targets`/`_collect_all_bindings` binding walk) is a flat,
+    whole-file, NAME-based walk with a bounded hop count
+    (`_MAX_TRACE_DEPTH`) — not real scope-aware/interprocedural dataflow.
+    Two functions (or two attribute-storage targets, e.g. `self.dest` on
+    two unrelated classes) in the same file that happen to share a bare
+    name are treated as the same target — matched by bare name only, never
+    by class or module qualification. This is a FALSE-RED risk (an
+    unrelated same-named binding can borrow another's provenance and get
+    conservatively flagged), never a false-GREEN one, per the bar above. A
+    chain of aliasing/forwarding deeper than the bound is treated as
+    unresolved, and an unresolved touch of an in-scope call is DENIED (see
+    design section, step 1) — it is no longer silently invisible.
   - `_resolve_channel`/`_resolve_manifest` do NOT descend into arbitrary
     compound expressions looking for a buried taint — an f-string
     (`JoinedStr`) or a `BinOp` (e.g. `path + ".suffix"`) is not traced
     through. This is deliberate (an f-string log message quoting
     `ctx.worker_inbox` for a human to read is not a write, and flagging it
-    would defeat real diagnostic logging), but it also means a derived path
-    built via string concatenation or an f-string (`open(f"{inbox}.tmp")`)
-    is invisible to this lint even where it legitimately should be traced
-    further (e.g. a tmp-file swap where the SWAP call itself, not the tmp
-    write, is what gets caught — proven by the adversarial fixture, but the
-    general case of an arbitrarily-derived path is not covered).
+    would defeat real diagnostic logging). Because such an expression is
+    UNRESOLVED (not provably safe), any call it reaches that is otherwise
+    in scope is still DENIED by step 1's deny-by-default fallthrough — the
+    remaining gap is narrower than it looks: a derived path built via
+    string concatenation is invisible ONLY in the sense that this lint
+    cannot name WHICH channel it derives from (so it cannot distinguish a
+    legitimate unrelated write from a channel-derived one by that route
+    alone); it is not a route back to a false GREEN on a call this lint
+    already put in scope some other way (the `os.replace()` tmp-swap
+    fixture proves the SWAP call itself, not the tmp write, is what must be
+    and is caught).
   - The recognized ingress-state markers are exactly `worker_inbox`,
     `operator_inbox`, and `manifest` — the concrete real doors/state this
     ADR names. Other `ctx` fields the engine also owns and appends to
-    (`event_log`, `home_log`, `message_log`, ...) are NOT covered.
+    (`event_log`, `home_log`, `message_log`, ...) are NOT covered — this is
+    a scope limit (this lint enforces R3/R6/R8, not every field), not a
+    detection gap within scope.
   - The two allow-lists (`_SAFE_READ_METHODS`, `_SAFE_READ_OSPATH_FUNCS`)
     that keep ordinary reads/introspection from being flagged are
     necessarily enumerated too — but they enumerate PROVABLY SAFE, side-
     effect-free operations (existence/stat/read checks), which is the
     designed-for kind of small allow-list ("deny by default, allow a small
     explicit legal surface"), not a deny-list of known offenders chasing
-    the next rewrite. A genuinely new READ-only idiom not on this list would
-    be denied (a false positive, fixed by widening the allow-list) rather
-    than silently passed — the fail-closed direction the whole rebuild
-    exists to guarantee.
+    the next rewrite. A genuinely new READ-only idiom not on this list is
+    denied (a false positive, fixed by widening the allow-list) rather than
+    silently passed.
   - The subprocess/shell-redirect check (`_check_subprocess_redirect`) is
     still a textual/AST pattern match for a `>`/`>>` operator plus an
     ingress-marker reference inside a `subprocess.*`/`os.system`/`os.popen`
-    call — it is not a shell parser (e.g. a redirect hidden behind further
-    indirection, like a `.sh` script file the rig writes and then executes,
-    is out of scope). This is a fundamentally different mechanism (shell
-    text, not a Python call graph) from the structural rebuild above and is
-    unchanged by it.
-  - When a rig's `manifest` alias/call-site trace resolves a case with a
-    MIX of distinct call sites (e.g. a helper whose parameter receives
-    `ctx.worker_inbox` at one call site and something unrelated at
+    call — it is not a shell parser. A redirect hidden behind further
+    indirection (e.g. a computed/concatenated command string, or a `.sh`
+    script file the rig writes and then executes) is genuinely a remaining
+    false-GREEN route — this is shell TEXT, a fundamentally different
+    mechanism from the structural Python call-graph scan above, and is
+    unchanged by this or the prior rebuild.
+  - When a rig's `manifest`/channel alias/call-site trace resolves a case
+    with a MIX of distinct call sites (e.g. a helper whose parameter
+    receives `ctx.worker_inbox` at one call site and something unrelated at
     another), channel-KIND resolution (`_resolve_param_inbound`) returns
     the FIRST match found, not the union of every call site's kind — an
     all-real-call-sites-agree assumption, true of every current harness
-    (re-verified against the whole `core/` proof surface + all 20
+    (re-verified against the whole `core/` proof surface + all 28
     adversarial fixtures below when this rebuild landed) but not a
     completeness guarantee if a future helper is ever called with BOTH a
     worker- and an operator-inbox target.
-  - This is a static AST lint, not a dynamic/runtime enforcement layer — a
-    sufficiently obfuscated adversarial rewrite (e.g. `exec`/`eval`-based
-    indirection, or reflection through a data structure this trace does not
-    unwrap) can still defeat static analysis in principle. The design goal
-    is to catch the ILLEGAL CLASS as it is actually written by a developer
-    trying to pass CI, not to be a covert-channel-proof sandbox.
+  - This is a static AST lint, not a dynamic/runtime enforcement layer.
+    After this rebuild, the remaining routes to a false GREEN are narrowed
+    to genuinely adversarial obfuscation a developer would have to reach
+    for DELIBERATELY, not an ordinary rewrite: `exec`/`eval`-based
+    indirection; `getattr(obj, computed_expr)` where the attribute NAME
+    itself is not a statically-resolvable string literal (a LITERAL
+    `getattr(ctx, "worker_inbox")`, or one reached through a traced
+    constant, IS caught — see `_resolve_str_literal`); cross-file
+    indirection beyond the bounded same-file call-graph trace
+    (`_MAX_TRACE_DEPTH`, and same-file only — a channel/manifest reference
+    forwarded through a DIFFERENT module is not traced at all); and a
+    `subprocess`/shell command built from a computed or concatenated string
+    rather than one containing the marker name as literal text (the
+    textual redirect check above). Every OTHER unresolvable shape — an
+    unrecognized binding construct, an unresolvable open-mode, an
+    unresolvable payload, an unresolvable call target — now fails RED, not
+    invisible. The design goal is to catch the ILLEGAL CLASS as it is
+    actually written by a developer trying to pass CI, not to be a
+    covert-channel-proof sandbox; what remains after this rebuild is
+    false-RED ergonomics (a legitimate pattern this lint cannot yet prove
+    safe and must be taught to), not an escape hatch for the illegal class.
   - `core/scaffold_src.py` vendors a COPY of tron-meta's real
     `trivial-tip-converter` fixture project (see that module's own
     docstring) — this lint has no way to notice if the vendored copy
@@ -232,19 +302,75 @@ def harness_files():
 _MAX_TRACE_DEPTH = 5
 
 
+def _flatten_bind_targets(target):
+    """Every bindable KEY a single assignment-target expression introduces —
+    a `str` for a plain `Name`, or `("attr", <attrname>)` for an `Attribute`
+    (the `self.dest = ...` shape, keyed by bare attribute name the same
+    whole-file-simplified way functions are already keyed by bare name).
+    Recurses into `Tuple`/`List`/`Starred` targets so EVERY name a compound
+    target binds is captured — never just the first, never none. A
+    `Subscript` target (`x[0] = ...`) binds no NEW alias (it mutates
+    something that already exists) and is intentionally not a key here; it
+    is handled, when relevant, by the manifest-direct-write check itself."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Attribute):
+        return [("attr", target.attr)]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        out = []
+        for elt in target.elts:
+            out.extend(_flatten_bind_targets(elt))
+        return out
+    if isinstance(target, ast.Starred):
+        return _flatten_bind_targets(target.value)
+    return []
+
+
 def _collect_all_bindings(tree):
-    """Flat `(lineno, name, value_expr)` list — EVERY simple `name = <expr>`
-    assignment AND `with <expr> as name:` binding, sorted by line. The
-    single shared substrate every trace in this module walks."""
+    """Flat `(lineno, key, value_expr)` list — EVERY name-or-attribute a
+    binding construct introduces anywhere in the file, sorted by line. The
+    single shared substrate every trace in this module walks.
+
+    DELIBERATELY GENERIC, not shape-enumerated: this walks every AST
+    construct Python itself uses to bind a name — `Assign` (ANY number of
+    targets, i.e. chained `a = b = expr`; each target flattened through
+    `Tuple`/`List`/`Starred`, i.e. `a, b = expr` and `self.x = expr`),
+    `AnnAssign`, `NamedExpr` (walrus `p := expr`), `For`/`AsyncFor` (loop
+    target bound to the whole `iter` expression), and `With`/`AsyncWith`
+    (`as` targets, same flattening). Each flattened target is bound to the
+    WHOLE right-hand-side expression, even when the target is a compound
+    tuple/list (never destructured element-by-element) — a deliberate
+    OVER-approximation: every name a binding could plausibly have received
+    from is treated as carrying the SAME provenance as the whole RHS, so a
+    shape this walk cannot precisely destructure can only make resolution
+    MORE conservative (a false RED on an unrelated sibling binding), never
+    LESS (a missed alias — the failure mode that sank three prior rounds).
+    This is the "binding-shape enumeration is an optimization for proving
+    safety, never a gate for detecting danger" inversion the module
+    docstring describes: an unrecognized shape (a comprehension target, a
+    `del`, an `except ... as e`) simply contributes no binding, which means
+    a use of that name resolves as UNPROVEN, and unproven is deny-by-
+    default (RED), never silently skipped."""
     out = []
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)):
-            out.append((node.lineno, node.targets[0].id, node.value))
-        elif isinstance(node, ast.With):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for key in _flatten_bind_targets(tgt):
+                    out.append((node.lineno, key, node.value))
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            for key in _flatten_bind_targets(node.target):
+                out.append((node.lineno, key, node.value))
+        elif isinstance(node, ast.NamedExpr):
+            for key in _flatten_bind_targets(node.target):
+                out.append((node.lineno, key, node.value))
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            for key in _flatten_bind_targets(node.target):
+                out.append((node.lineno, key, node.iter))
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
-                if isinstance(item.optional_vars, ast.Name):
-                    out.append((node.lineno, item.optional_vars.id, item.context_expr))
+                if item.optional_vars is not None:
+                    for key in _flatten_bind_targets(item.optional_vars):
+                        out.append((node.lineno, key, item.context_expr))
     out.sort(key=lambda t: t[0])
     return out
 
@@ -418,10 +544,16 @@ def _resolve_str_literal(expr, before_lineno, ctx, depth=0):
     return None
 
 
-def _open_call_path_mode(call):
+def _open_call_path_mode(call, before_lineno, ctx):
     """`open(<path>, <mode>)` / `io.open(<path>, <mode>)` — the 2-ARGUMENT
     convention: path/mode resolved from EITHER positional args OR
-    `file=`/`mode=` kwargs."""
+    `file=`/`mode=` kwargs. The mode is resolved through the SAME traced-
+    alias substrate as everything else (`_resolve_str_literal`) — a mode
+    passed via a Name/alias to a literal string is no longer treated as
+    non-literal just because it is not spelled inline at the call site
+    (closes the exact gap `path, mode = eng.ctx.worker_inbox, "a"` used:
+    the mode WAS a real, resolvable `"a"` literal, just reached through a
+    tuple-unpack binding the old lookup never walked)."""
     path_arg = call.args[0] if len(call.args) >= 1 else None
     mode_arg = call.args[1] if len(call.args) >= 2 else None
     for kw in call.keywords:
@@ -430,28 +562,36 @@ def _open_call_path_mode(call):
         if kw.arg == "mode" and mode_arg is None:
             mode_arg = kw.value
     if mode_arg is None:
-        mode = "r"          # open()'s own default
-    elif isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str):
-        mode = mode_arg.value
+        mode = "r"          # open()'s own default — a real, provable literal
     else:
-        mode = "<non-literal>"
+        lit = _resolve_str_literal(mode_arg, before_lineno, ctx)
+        mode = lit if lit is not None else "<unresolved>"
     return path_arg, mode
 
 
-def _method_open_mode(call):
+def _method_open_mode(call, before_lineno, ctx):
     """`<receiver>.open(<mode>)` — the 1-ARGUMENT convention (no separate
-    path argument at all; the receiver itself IS the path/handle)."""
+    path argument at all; the receiver itself IS the path/handle). Mode
+    resolution shares `_open_call_path_mode`'s traced-alias lookup."""
     mode_arg = call.args[0] if call.args else next(
         (kw.value for kw in call.keywords if kw.arg == "mode"), None)
     if mode_arg is None:
         return "r"
-    if isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str):
-        return mode_arg.value
-    return "<non-literal>"
+    lit = _resolve_str_literal(mode_arg, before_lineno, ctx)
+    return lit if lit is not None else "<unresolved>"
 
 
 def _is_write_mode(mode):
-    return isinstance(mode, str) and any(c in mode for c in "wax+")
+    """DENY BY DEFAULT: a mode this lint could not resolve to a literal
+    string (`"<unresolved>"`) is treated as a POSSIBLE write — unprovable
+    is illegal, never silently assumed read-only. Only a mode PROVEN not to
+    contain w/a/x/+ (including the real, provable `open()` default `"r"`
+    used when no mode argument is present at all) is read-only."""
+    if not isinstance(mode, str):
+        return True
+    if mode == "<unresolved>":
+        return True
+    return any(c in mode for c in "wax+")
 
 
 def _is_open_call(node):
@@ -474,8 +614,19 @@ def _resolve_channel(expr, before_lineno, ctx, depth=0):
     other function in this module treats its answer as ground truth."""
     if expr is None or depth > _MAX_TRACE_DEPTH:
         return None
-    if isinstance(expr, ast.Attribute) and expr.attr in _INBOX_ATTRS:
-        return _INBOX_ATTRS[expr.attr]
+    if isinstance(expr, ast.Attribute):
+        if expr.attr in _INBOX_ATTRS:
+            return _INBOX_ATTRS[expr.attr]
+        # ANY other attribute name — an aliased instance-storage occurrence
+        # (`self.dest = eng.ctx.worker_inbox` ... `self.dest`) — traced via
+        # the SAME whole-file binding substrate, keyed by bare attribute
+        # name (matches the file's existing bare-name simplification for
+        # functions; see module docstring). NOT a special case: this is the
+        # identical alias lookup a bare Name gets, below.
+        val = _nearest_assign_value(ctx.assigns, ("attr", expr.attr), before_lineno)
+        if val is not None:
+            return _resolve_channel(val, before_lineno, ctx, depth + 1)
+        return None
     if isinstance(expr, ast.Call):
         func = expr.func
         # getattr(<obj>, "worker_inbox"/"operator_inbox"[, default]) — the
@@ -485,7 +636,7 @@ def _resolve_channel(expr, before_lineno, ctx, depth=0):
             return _INBOX_ATTRS.get(lit)
         # bare open(path, mode?) / io.open(path, mode?) — 2-arg convention.
         if _is_open_call(expr) or _is_io_open_call(expr):
-            path_arg, mode = _open_call_path_mode(expr)
+            path_arg, mode = _open_call_path_mode(expr, before_lineno, ctx)
             if _is_write_mode(mode):
                 return _resolve_channel(path_arg, before_lineno, ctx, depth + 1)
             return None
@@ -499,7 +650,7 @@ def _resolve_channel(expr, before_lineno, ctx, depth=0):
         # the path (a Path object, or anything else this trace resolves).
         if isinstance(func, ast.Attribute) and func.attr == "open":
             recv_kind = _resolve_channel(func.value, before_lineno, ctx, depth + 1)
-            if recv_kind and _is_write_mode(_method_open_mode(expr)):
+            if recv_kind and _is_write_mode(_method_open_mode(expr, before_lineno, ctx)):
                 return recv_kind
             return None
         # anything else: bounded call-RETURN-value trace (closes "helper
@@ -511,7 +662,7 @@ def _resolve_channel(expr, before_lineno, ctx, depth=0):
         if val is not None:
             return _resolve_channel(val, before_lineno, ctx, depth + 1)
         return _resolve_param_inbound(expr, before_lineno, ctx, _resolve_channel, depth)
-    if isinstance(expr, (ast.Dict, ast.List)):
+    if isinstance(expr, (ast.Dict, ast.List, ast.Tuple, ast.Set)):
         vals = expr.values if isinstance(expr, ast.Dict) else expr.elts
         for v in vals:
             k = _resolve_channel(v, before_lineno, ctx, depth + 1)
@@ -826,7 +977,15 @@ def _resolve_manifest(expr, before_lineno, ctx, depth=0):
         if val is not None:
             return _resolve_manifest(val, before_lineno, ctx, depth + 1)
         return bool(_resolve_param_inbound(cur, before_lineno, ctx, _resolve_manifest, depth))
-    if isinstance(cur, (ast.Dict, ast.List)):
+    if isinstance(cur, ast.Attribute):
+        # A non-"manifest"-named attribute storing a manifest-rooted alias
+        # (`self.dest = eng.manifest` ... `self.dest[...] = ...`) — same
+        # bare-attribute-name binding substrate as the channel side.
+        val = _nearest_assign_value(ctx.assigns, ("attr", cur.attr), before_lineno)
+        if val is not None:
+            return _resolve_manifest(val, before_lineno, ctx, depth + 1)
+        return False
+    if isinstance(cur, (ast.Dict, ast.List, ast.Tuple, ast.Set)):
         vals = cur.values if isinstance(cur, ast.Dict) else cur.elts
         return any(_resolve_manifest(v, before_lineno, ctx, depth + 1) for v in vals)
     if isinstance(cur, ast.Call):
