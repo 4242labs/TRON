@@ -12,14 +12,38 @@ Each poll it finds every case the engine has GENUINELY escalated to the operator
 `casestate.reping` uses, so it can NEVER act on an architect-owned case, and
 `casestate.settle` double-guards that anyway), hands the case's `detail` to a
 one-shot `claude` call, and injects the returned verb (resume/amend/abandon) +
-note as a real `operator.decision` report into the engine inbox. The decision
-then travels the SAME classify->router->settle path a real operator reply would.
+note as a REAL `scripts/report.sh --intake <path>` subprocess call — the exact
+same door a genuine operator reply would use. The decision then travels the
+SAME classify->router->settle path a real operator reply would.
+
+Block 01-38 T6 (R3 MODEL A — the honest rebuild): this module used to inject
+by calling `core.intake.write(eng.ctx, _OPERATOR_PROXY_WID, rep)` directly —
+a raw in-process append of a hand-built dict carrying a fabricated
+`sender.kind:"operator"` field, never through the real reporting door
+(`core/r3_lint.py`'s `INBOX_FABRICATED_SENDER` class, caught RED). That
+mechanism is gone. `_inject_decision` now shells out to the REAL
+`scripts/report.sh --intake <path> <wid> "<verb> <case_id> — <note>"` exactly
+as `core/sim/report_channel_rig.py`/`core/operator_channel_rig.py` already
+prove a genuine caller must. `--intake` is this proxy's OWN private intake
+(`_OPERATOR_PROXY_WID` == `"operator-proxy"`), which `core.intake.drain_all`
+resolves to `vocab.OPERATOR` KIND purely because the id is OPERATOR-prefixed
+(`agent_id.startswith(vocab.OPERATOR + "-")`, `core/intake.py`'s own
+documented pseudo-agent-id convention for a simulated operator actor) — never
+from anything the written line claims about itself. `report.sh` itself always
+stamps `sender.kind:"worker"` (the ONE sender kind the real door can ever
+produce) — this module writes NO `tag`/`slots`/`sender` payload of its own at
+all any more; the message is plain TEXT naming the verb + case id, the exact
+shape `core.classify._settle_from_text` already resolves for a genuine
+operator reply once `origin.kind == OPERATOR` (which the CHANNEL, not this
+payload, decided). The root invariant — identity is the door, never a claim
+the message makes — now holds for this rig exactly as it holds for a human.
 
 Honest-surface guarantees (why this cannot reintroduce the false-green disease):
   • acts ONLY on `owner=="operator" and decision is None` (engine-escalated);
-  • injects through the real inbox->classify->router->settle path (path A: a
-    TAGGED structured report, `sender.kind=="operator"`), never by mutating a
-    case dict directly;
+  • injects through a REAL `report.sh` subprocess into its own private
+    intake, drained -> classified -> routed -> settled by the SAME
+    classify->router->settle path a real operator reply travels — never a
+    fabricated tag/sender payload, never a direct case-dict mutation;
   • provides the DECISION and nothing else — orphans, escalation counts, the
     planted signature and `session_end` all stay the engine's to produce, so it
     can only green a run a real operator settling the same case would also green;
@@ -56,6 +80,7 @@ _OPERATOR_PROXY_WID = "operator-proxy"
 _DECIDE_TIMEOUT_S = 90.0               # one-shot claude call ceiling (RD)
 _MAX_ATTEMPTS = 3                      # per case: guard a malformed-output retry storm (RC)
 _DECIDE_MODEL = "claude-opus-4-8"      # the operator is an LLM; opus by design
+_REPORT_TIMEOUT_S = 20.0               # a real report.sh subprocess call ceiling (T6 honest door)
 
 
 def _needs_operator(case):
@@ -139,30 +164,43 @@ def _claude_decide(case):
 
 
 def _inject_decision(eng, case_id, decision):
-    """Path A honest injection: append a TAGGED `operator.decision` report to
-    this proxy's OWN private intake (`core.intake`, block 01-38 T1 —
-    `_OPERATOR_PROXY_WID`'s own file, never the deleted shared drop-box).
-    `classify` short-circuits on the tag (no model spend) and
-    `router._route_decision` -> `casestate.settle` applies it. `sender.kind ==
-    "operator"` marks it a genuine operator reply, exactly as a human's would.
-    Returns True on a written line, False if the intake append failed (mirrors
-    the courier's own tolerant append — an IO fault must not raise out of the
-    poll loop, and the caller must NOT mark a case decided on a write that
-    never landed; the case simply stays open and is retried)."""
-    rep = {
-        "tag": "operator.decision",
-        "slots": {
-            "case_id": case_id,
-            "verb": decision["verb"],
-            "note": decision.get("note") or "operator-proxy (moderate SIM)",
-        },
-        "sender": {"kind": "operator", "id": _OPERATOR_PROXY_WID},
-    }
+    """R3 MODEL A honest injection (block 01-38 T6): send the decision through
+    a REAL `scripts/report.sh --intake <path>` subprocess — the exact door a
+    genuine worker/operator reply uses — into this proxy's OWN private intake
+    (`core.intake`, block 01-38 T1; `_OPERATOR_PROXY_WID` == `"operator-proxy"`).
+    `core.intake.drain_all` resolves THAT filename's `Origin` to `vocab.
+    OPERATOR` kind purely because the id is OPERATOR-prefixed (`agent_id.
+    startswith(vocab.OPERATOR + "-")`, `core/intake.py`'s own documented
+    pseudo-agent-id convention for a simulated operator actor) — never from
+    anything this call claims about itself. The message handed to `report.sh`
+    is PLAIN TEXT naming the verb + case id (`"<verb> <case_id> — <note>"`),
+    the EXACT shape `core.classify._settle_from_text` already resolves for a
+    genuine operator reply once `origin.kind == OPERATOR` — no fabricated
+    `tag`/`slots`/`sender` payload of any kind; `report.sh` itself always
+    stamps `sender.kind:"worker"` (the ONE sender kind the real door can ever
+    produce), and it is the CHANNEL, never that field, that decides this is an
+    operator reply. Returns True on an exit-0 `report.sh` call, False on ANY
+    failure (a missing script, a timeout, a nonzero exit) — mirrors the
+    courier's own tolerant append: an injection fault must not raise out of
+    the poll loop, and the caller must NOT mark a case decided on a report
+    that never landed; the case simply stays open and is retried."""
+    script = eng.ctx.p("scripts", "report.sh")
+    path = intake.intake_path(eng.ctx, _OPERATOR_PROXY_WID)
+    note = decision.get("note") or "operator-proxy (moderate SIM)"
+    msg = f"{decision['verb']} {case_id} — {note}"
     try:
-        intake.write(eng.ctx, _OPERATOR_PROXY_WID, rep)
-    except OSError as e:
-        eng.log("flow", f"operator-proxy: intake write FAILED for case {case_id!r} "
+        r = subprocess.run(
+            ["bash", script, "--intake", path, _OPERATOR_PROXY_WID, msg],
+            capture_output=True, text=True, timeout=_REPORT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        eng.log("flow", f"operator-proxy: report.sh call FAILED for case {case_id!r} "
                         f"({e}) — decision NOT injected, case stays open (retried)")
+        return False
+    if r.returncode != 0:
+        eng.log("flow", f"operator-proxy: report.sh refused for case {case_id!r} "
+                        f"(rc={r.returncode} stderr={r.stderr!r}) — decision NOT "
+                        f"injected, case stays open (retried)")
         return False
     return True
 

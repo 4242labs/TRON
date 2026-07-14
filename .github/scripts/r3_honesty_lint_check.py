@@ -114,11 +114,17 @@ case can only cause a false RED, never a false GREEN. Proves, live:
              not also hide a real evasion — rule 3's OWN call-graph
              propagation still catches it independently.
   GREEN/tree the real `core/` proof-harness tree is clean except the
-             explicit, visible KNOWN_RED list (core/sim/operator_proxy.py
-             + core/architect_rig.py, at minimum — see core/r3_lint.py's
-             KNOWN_RED for the latter's block-01-40-introduced entry) —
-             every KNOWN_RED entry is re-verified genuinely red on THIS
-             run, never a silent whitelist.
+             explicit, visible KNOWN_RED list (core/architect_rig.py, at
+             minimum — see core/r3_lint.py's KNOWN_RED for its
+             block-01-40-introduced entry) — every KNOWN_RED entry is
+             re-verified genuinely red on THIS run, never a silent
+             whitelist. `core/sim/operator_proxy.py` — the ADR's originally
+             named offender — is CONCRETELY CLEAN now (block 01-38
+             T6-completion rebuilt it onto a real `report.sh` subprocess;
+             see `core/sim/operator_proxy_rig.py`'s own
+             `test:<rigs_honest_by_construction>` for the runtime-level
+             proof), never re-added as a KNOWN_RED entry the lint no
+             longer earns.
   MECHANISM  the lint's own stale/unlisted detectors fire correctly — a
              known-red entry that has gone clean is caught, and a red file
              missing from KNOWN_RED is caught — proven with synthetic
@@ -933,15 +939,23 @@ def main():
         print("GREEN proof (tree) confirmed: the proof-harness tree is clean "
               f"except the tracked KNOWN_RED set: {sorted(r3_lint.KNOWN_RED)}")
 
-    # ── the named offender is, concretely, red ──
+    # ── the ADR's originally named offender is, concretely, CLEAN now
+    #     (block 01-38 T6-completion: `core/sim/operator_proxy.py` no
+    #     longer calls `core.intake.write` at all — it shells out to a real
+    #     `scripts/report.sh` subprocess, R3 MODEL A's honest rebuild) —
+    #     this is the flip side of the OLD "is it red" assertion this check
+    #     used to make; a regression back to a direct/fabricated-sender
+    #     write must reappear here as a violation, not silently pass. ──
     op_proxy = "core/sim/operator_proxy.py"
-    if op_proxy not in result.violations_by_file:
-        print(f"AC-2 FAILURE: {op_proxy} (the ADR's named offender) is NOT "
-              "flagged red.", file=sys.stderr)
+    if op_proxy in result.violations_by_file:
+        print(f"AC-2 FAILURE: {op_proxy} (rebuilt honest in block 01-38 "
+              f"T6-completion) is flagged red again — a regression back to "
+              f"a direct/fabricated-sender write: "
+              f"{[str(v) for v in result.violations_by_file[op_proxy]]}", file=sys.stderr)
         failed = True
     else:
-        print(f"Previously-dishonest rig confirmed RED: {op_proxy} -> "
-              f"{[str(v) for v in result.violations_by_file[op_proxy]]}")
+        print(f"Rebuilt-honest rig confirmed CLEAN: {op_proxy} (routes only "
+              f"through a real report.sh subprocess — no violation)")
 
     # ── mechanism self-test: stale-entry detection (synthetic KNOWN_RED,
     #     never touches the real list) ──
@@ -961,10 +975,17 @@ def main():
         r3_lint.KNOWN_RED = orig_known_red
 
     # ── mechanism self-test: unlisted-offender detection (synthetic) ──
+    # block 01-38 T6-completion: `core/sim/operator_proxy.py` is genuinely
+    # CLEAN now, so it can no longer serve as this self-test's target (it
+    # would never appear as an offender at all, listed or not — that would
+    # prove nothing about the DETECTOR). `core/architect_rig.py` (block
+    # 01-40, out of this block's scope, still genuinely red) is the one
+    # remaining real offender in the tree — the same detector, a different
+    # still-true fixture.
     try:
         r3_lint.KNOWN_RED = {}
         unlisted_check = r3_lint.run()
-        if "core/sim/operator_proxy.py" not in unlisted_check.unlisted_offenders:
+        if "core/architect_rig.py" not in unlisted_check.unlisted_offenders:
             print("AC-2 REGRESSION: unlisted-offender detection did not fire "
                   "when KNOWN_RED was emptied.", file=sys.stderr)
             failed = True

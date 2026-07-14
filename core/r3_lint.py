@@ -9,23 +9,20 @@ every `core/*_rig.py`/`core/sim/*.py` fixture, `core/sim/operator_proxy.py`
 write` is an entirely different AST shape (a function call, not an
 attribute-write) from `ctx.worker_inbox`/`ctx.operator_inbox`'s own
 Attribute shape, so T1 through T5 left this lint BLIND to a
-fabricated-sender payload routed through it. T6 closes this:
-`_intake_write_payload_arg` (below) recognizes `intake.write(ctx, agent_id,
-obj)`/`intake_mod.write(...)` as a write-sink in its own right — every
-agent's own private intake is inescapably a real WORKER-shaped channel
-(T1's own design), so the call itself IS the sink, unconditionally; its
-`obj` argument gets the IDENTICAL `_payload_is_safe` fabricated-sender
-proof a `ctx.worker_inbox` write always had. `core/sim/operator_proxy.py`
-is caught RED again (restored to `KNOWN_RED`, below, with an updated
-reason) for the SAME underlying dishonesty it always had — the mechanism
-(direct injection, never through the real `scripts/report.sh` door) is
-still R3-illegal even though block 01-38 T2 already made the FABRICATED
-IDENTITY itself harmless downstream (a `Report`'s `sender` key is
-stripped/unreadable regardless of what a raw line claims). Rebuilding
-`core/sim/operator_proxy.py` (and any other still-KNOWN_RED-or-undiscovered
-direct-injection rig) onto a real door subprocess is R3 MODEL A's fuller
-rig-by-rig honesty rebuild — open work this reseed does not itself
-complete, tracked via `KNOWN_RED`, never silently declared done.
+fabricated-sender payload routed through it. T6's reseed closed the LINT's
+own blind spot (`_intake_write_payload_arg`, below, recognizes `intake.
+write(ctx, agent_id, obj)`/`intake_mod.write(...)` as a write-sink in its
+own right) and caught `core/sim/operator_proxy.py` RED again for the
+dishonesty it always had.
+
+T6-COMPLETION (this rebuild): `core/sim/operator_proxy.py`'s
+`_inject_decision` no longer calls `core.intake.write` at all — it shells
+out to a REAL `scripts/report.sh --intake <path>` subprocess, exactly the
+door a genuine operator reply uses (R3 MODEL A's own rig-by-rig honesty
+rebuild). The file is CLEAN now, for real — its `KNOWN_RED` entry is
+removed below, not because the lint stopped looking, but because the
+underlying mechanism is honest. `core/architect_rig.py` (owning block
+01-40, out of this block's scope) remains the one tracked `KNOWN_RED` entry.
 
 The only legal ingress into the engine is the real reporting door:
 `scripts/report.sh` writes a JSON line to an agent's own private intake
@@ -303,46 +300,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # it regressed silently); a red file NOT listed here is an unlisted offender
 # (FAIL, add it with its owning block or fix it).
 KNOWN_RED = {
-    # RESTORED 01-38 T6 (was briefly REMOVED across T1-T5, see git history):
-    # T1 deleted `ctx.worker_inbox` from the live `core/` path and moved
-    # every rig's direct injection (this one included) to `core.intake.
-    # write(ctx, agent_id, obj)` — a call shape this lint's
-    # `INBOX_FABRICATED_SENDER` seed (keyed exclusively on the `ctx.
-    # worker_inbox`/`operator_inbox` ATTRIBUTE shape) could not see, so the
-    # fixture read CLEAN for T1-T5, not because the underlying dishonesty
-    # was fixed. T6 reseeds the SAME taint-union machinery onto `core.
-    # intake.write`'s own payload argument (`_intake_write_payload_arg`,
-    # above) — this file is caught again, RED, for the SAME reason it
-    # always was: `_inject_decision` (core/sim/operator_proxy.py:162)
-    # fabricates `sender.kind="operator"` into a real per-agent intake via
-    # `intake.write(eng.ctx, _OPERATOR_PROXY_WID, rep)` — a raw injection
-    # bypassing the real `scripts/report.sh` door (R3 MODEL A: "the only
-    # way anything enters the engine — tests included — is the real
-    # reporting door"). The underlying identity resolution is no longer
-    # forgeable post-T2 (a Report's `sender` key is stripped/unreadable
-    # regardless), but the INJECTION MECHANISM itself is still dishonest by
-    # R3's own letter — this stays KNOWN_RED until `core/sim/operator_
-    # proxy.py` is rebuilt to inject through a real report.sh subprocess
-    # (the not-yet-built real operator TRANSPORT this module's own
-    # docstring already calls out, T5's scope) — the full R3 MODEL A
-    # rig-by-rig rebuild is open work beyond this reseed, tracked
-    # separately, not resolved by this entry.
-    "core/sim/operator_proxy.py": {
-        "owning_block": "01-38",
-        "reason": ("_inject_decision (line ~162) writes a `sender.kind="
-                   "\"operator\"` payload into a real per-agent intake via "
-                   "`intake.write(eng.ctx, _OPERATOR_PROXY_WID, rep)` — a "
-                   "raw injection, never through the real `scripts/report.sh` "
-                   "door a genuine operator reply would use (R3 MODEL A). "
-                   "The identity itself is no longer forgeable downstream "
-                   "(block 01-38 T2's typed Report strips/refuses `sender` "
-                   "regardless of what this line writes), but the injection "
-                   "MECHANISM is still dishonest by R3's own letter. Stays "
-                   "KNOWN_RED until this rig is rebuilt onto a real report.sh "
-                   "subprocess — open work beyond block 01-38's own scope "
-                   "(no real operator transport a genuine reply would arrive "
-                   "on yet lives outside this engine, T5's own scope note)."),
-    },
+    # REMOVED 01-38 T6-COMPLETION (was: "core/sim/operator_proxy.py",
+    # owning_block "01-38" — see git history for the full RESTORED-in-T6
+    # reasoning this superseded): `_inject_decision` no longer calls `core.
+    # intake.write` at all. It now shells out to a REAL `scripts/report.sh
+    # --intake <path>` subprocess — the exact door a genuine operator reply
+    # uses — so `core.intake.drain_all` resolves its `Origin` purely from
+    # WHICH intake the line was drained from (the OPERATOR-prefixed
+    # `"operator-proxy"` channel), never from anything the written line
+    # claims. This lint now reads the file CLEAN because the underlying
+    # injection mechanism is genuinely honest, not because the lint's own
+    # blind spot reopened (see `.github/scripts/r3_honesty_lint_check.py`'s
+    # own AC-2, which still requires a KNOWN_RED file to be re-verified RED
+    # every run — this entry's removal is a real regression risk it would
+    # catch: reintroducing `intake.write` here would come back RED, unlisted,
+    # and fail the CI check outright). Kept only as a comment, never re-added
+    # as a live entry unless the mechanism actually regresses.
     "core/architect_rig.py": {
         "owning_block": "01-40",
         "reason": ("RIG2-C2 (run_seq_reconcile_rig) monkeypatches "

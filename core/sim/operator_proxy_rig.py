@@ -11,6 +11,22 @@ fabricates NOTHING else. So this rig's flagship proofs are the HONEST-PATH ones
 `core.router` + `core.casestate.settle` and actually settles the case — no
 faked trunk, no direct case-dict mutation.
 
+Block 01-38 T6 (R3 MODEL A — the honest rebuild): `_inject_decision` no longer
+writes a hand-built dict straight into an intake file (`core.intake.write`) —
+it now shells out to a REAL `scripts/report.sh --intake <path>` subprocess,
+exactly the door a genuine operator reply uses. Every proof that exercises
+injection now runs over a REAL canon-installed instance (`_fresh_ctxroot`
+below calls `core.sim.seed_canon.install_canon`, so `scripts/report.sh` +
+`vocab.schema.json` genuinely exist on disk) — no more bare scratch dir a
+Python-level `intake.write` call alone could satisfy. `G1`-`G3` (bottom) are
+the block's own named proof, `test:<rigs_honest_by_construction>`: the
+runtime write-guard (`core/r3_guard.py`) genuinely trips on a direct
+fabricated-sender write to this proxy's own intake file, a genuine unprotected
+write is unaffected (non-vacuity), and the REBUILT `_inject_decision` still
+lands its line under the SAME guard — because it never performs an in-process
+write at all, only a real `report.sh` child-process call the guard's own
+documented per-interpreter boundary does not (and structurally cannot) reach.
+
 Token-free throughout via the `decide_fn` seam: every proof injects a stub
 decision, so the rig asserts the WIRING (predicate -> inject -> settle; gating;
 idempotency; architect-refusal; malformed-drop), never a model's judgment.
@@ -20,7 +36,7 @@ Proofs:
   P2  _needs_operator: architect-owned + open               -> False (never bypass architect-first)
   P3  _needs_operator: operator-owned + already-settled      -> False
   P4  _parse_decision: clean / fenced / prose / bad-verb / empty (tolerance lock)
-  P5  _inject_decision writes a well-formed tagged operator.decision line
+  P5  _inject_decision runs a REAL report.sh call — plain text, no fabricated tag/sender
   T1  tick on an operator-owned open case (stub resume)     -> injects 1, marks decided
   T2  tick again, case already decided this run             -> no-op (idempotent)
   T3  tick on an ARCHITECT-owned case                       -> no inject, decide_fn NEVER called
@@ -32,11 +48,13 @@ Proofs:
   E3  HONEST negative: a bad-verb decision never settles -> case stays OPEN (honest REJECT surface)
   E4  DEFENSE LAYER 2: a bad-verb report routed through the REAL router is refused by
       `casestate.settle` ITSELF (independent of the proxy's own layer-1 filter) -> case stays OPEN
+  G1-G3 test:<rigs_honest_by_construction> — the block's AC-4 proof (see below)
 
 `ok(name, cond, detail)`; `main()` prints `PASS (n/m)`, exits non-zero on fail.
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -53,6 +71,8 @@ import router                          # noqa: E402 — core/router.py, the real
 import operator_proxy as op            # noqa: E402 — core/sim/operator_proxy.py, unit under test
 import intake                          # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
 import vocab                           # noqa: E402 — core/vocab.py, OPERATOR kind (block 01-38 T2's typed Origin)
+import r3_guard                        # noqa: E402 — core/r3_guard.py, the runtime write-guard under proof (G1-G3)
+from seed_canon import install_canon   # noqa: E402 — core/sim/seed_canon.py, installs a REAL scripts/report.sh
 
 _results = []
 
@@ -97,11 +117,18 @@ def _op_case(cid, block="01-02", owner="operator", decision=None):
 
 
 def _fresh_ctxroot():
-    """A fresh scratch dir — block 01-38 T1's `core.intake` mints
-    `_OPERATOR_PROXY_WID`'s own private intake underneath it on first
-    write, never a bare pre-created inbox FILE (there is no shared one
-    any more)."""
-    return tempfile.mkdtemp(prefix="opproxy_ctxroot_")
+    """A fresh scratch dir with the REAL canon installed (`scripts/report.sh`
+    + `vocab.schema.json`, `core.sim.seed_canon.install_canon`) — block 01-38
+    T6's honest rebuild routes every injection through a genuine `report.sh`
+    subprocess, so every proof that exercises `_inject_decision`/`tick()`
+    needs the real door PRESENT on disk, not just a bare directory `core.
+    intake` can mint a private intake file under. `core.intake` still mints
+    `_OPERATOR_PROXY_WID`'s own private intake underneath it lazily, on
+    first write — never a bare pre-created inbox FILE (there is no shared
+    one any more)."""
+    root = tempfile.mkdtemp(prefix="opproxy_ctxroot_")
+    install_canon(root)
+    return root
 
 
 def _last_line(ctx):
@@ -118,6 +145,150 @@ def _count_lines(path):
         return 0
     with open(path) as f:
         return len([ln for ln in f.read().splitlines() if ln.strip()])
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# test:<rigs_honest_by_construction> (block 01-38 T6, the AC-4 proof) —
+# G1-G3, below. Each leg spawns a FRESH child interpreter: `core/r3_guard.py`
+# `install()` is a per-process singleton (a second call in an already-
+# guarded process — e.g. this rig running under `scripts/l1.sh`'s OWN guard,
+# which protects a DIFFERENT path — is a silent no-op), so only a fresh
+# child can install a hook over OUR OWN chosen protected-path spec, exactly
+# the `.github/scripts/r3_guard_runtime_check.py` pattern.
+# ═══════════════════════════════════════════════════════════════════════
+def _guarded_env(protect_spec):
+    site_dir = tempfile.mkdtemp(prefix="rhbc_site_")
+    r3_guard.materialize_site_dir(site_dir, core_dir=_CORE_DIR)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([site_dir, env.get("PYTHONPATH", "")])
+    env["R3_GUARD_PROTECT"] = protect_spec
+    env["R3_GUARD_RIG"] = "rigs_honest_by_construction-proof"
+    return env
+
+
+def _run_child(code, protect_spec, timeout=25):
+    env = _guarded_env(protect_spec)
+    return subprocess.run([sys.executable, "-c", code], env=env,
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def _direct_write_code(root, wid):
+    """The OLD, dishonest mechanism T6 removed: a raw in-process
+    `core.intake.write` call carrying a fabricated `sender.kind="operator"`
+    payload — never through `scripts/report.sh`. G1 proves the runtime
+    guard denies exactly this shape."""
+    return f"""
+import sys
+sys.path.insert(0, {_CORE_DIR!r})
+import intake
+
+class _C:
+    def __init__(self, d):
+        self.dir = d
+    def p(self, *parts):
+        import os
+        return os.path.join(self.dir, *parts)
+
+ctx = _C({root!r})
+intake.write(ctx, {wid!r}, {{"tag": "operator.decision",
+                             "slots": {{"case_id": "X", "verb": "resume"}},
+                             "sender": {{"kind": "operator", "id": {wid!r}}}}})
+print("WROTE-OK")
+"""
+
+
+def _inject_code(root, wid):
+    """The REBUILT, honest mechanism: calls `operator_proxy._inject_decision`
+    itself — which only ever shells out to a real `scripts/report.sh`
+    subprocess, never an in-process write. G3 proves this still lands its
+    line even while the SAME file is guard-protected."""
+    return f"""
+import sys
+sys.path.insert(0, {_CORE_DIR!r})
+sys.path.insert(0, {_HERE!r})
+import operator_proxy as op
+
+class _C:
+    def __init__(self, d):
+        self.dir = d
+    def p(self, *parts):
+        import os
+        return os.path.join(self.dir, *parts)
+
+class _E:
+    def __init__(self, d):
+        self.ctx = _C(d)
+    def log(self, ch, msg):
+        pass
+
+eng = _E({root!r})
+ok = op._inject_decision(eng, "CASE-G3", {{"verb": "resume", "note": "door-proof"}})
+print("INJECT-OK" if ok else "INJECT-FAIL")
+"""
+
+
+def run_rigs_honest_by_construction():
+    # G1 — THE TRIP: a direct, in-process, fabricated-sender write (the
+    # mechanism this module used BEFORE T6) dies under the guard.
+    g1_root = tempfile.mkdtemp(prefix="rhbc_direct_")
+    protected_path = intake.intake_path(_DuckCtx(g1_root), op._OPERATOR_PROXY_WID)
+    r_g1 = _run_child(_direct_write_code(g1_root, op._OPERATOR_PROXY_WID), protected_path)
+    g1_landed = os.path.exists(protected_path) and os.path.getsize(protected_path) > 0
+    ok("test:<rigs_honest_by_construction> G1 (THE GUARD TRIPS): a direct "
+       "in-process fabricated-sender write to this proxy's own intake file "
+       "— the SAME mechanism T6 removed — is DENIED by core/r3_guard.py's "
+       "runtime write-guard: the child dies, 'WROTE-OK' never prints, and "
+       "the protected file is never created/written",
+       r_g1.returncode != 0 and "WROTE-OK" not in (r_g1.stdout or "") and not g1_landed,
+       f"rc={r_g1.returncode} stdout={r_g1.stdout!r} "
+       f"stderr_tail={(r_g1.stderr or '')[-300:]!r} landed={g1_landed}")
+
+    # G2 — NON-VACUITY: the IDENTICAL direct-write code, run under an
+    # ACTIVE guard whose spec names a genuinely UNRELATED path, succeeds
+    # normally — proves G1's failure is the real guard tripping on a real
+    # match, never an incidental bug (missing module, bad code, wrong
+    # interpreter, ...).
+    g2_root = tempfile.mkdtemp(prefix="rhbc_unprotected_")
+    g2_target = intake.intake_path(_DuckCtx(g2_root), op._OPERATOR_PROXY_WID)
+    unrelated_spec = os.path.join(g2_root, "__nothing_writes_here__.jsonl")
+    r_g2 = _run_child(_direct_write_code(g2_root, op._OPERATOR_PROXY_WID), unrelated_spec)
+    g2_landed = os.path.exists(g2_target) and os.path.getsize(g2_target) > 0
+    ok("test:<rigs_honest_by_construction> G2 (NON-VACUITY): the IDENTICAL "
+       "direct-write code, run under an ACTIVE guard whose spec names a "
+       "genuinely UNRELATED path, succeeds normally ('WROTE-OK' prints, "
+       "the line lands) — G1's failure is the guard matching a real "
+       "protected path, not a broken proof",
+       r_g2.returncode == 0 and "WROTE-OK" in (r_g2.stdout or "") and g2_landed,
+       f"rc={r_g2.returncode} stdout={r_g2.stdout!r} landed={g2_landed}")
+
+    # G3 — THE REBUILT RIG PASSES THROUGH THE DOOR: under the EXACT SAME
+    # guard protecting the SAME file G1 just proved unwritable in-process,
+    # the REBUILT `_inject_decision` still lands its line — because it
+    # never performs a protected write itself, only a real `report.sh`
+    # CHILD-PROCESS call (a fresh OS process, outside this guarded
+    # interpreter's own per-process audit hook — `core/r3_guard.py`'s own
+    # module docstring names this as a real, structural limit of an
+    # in-process mechanism, not a loophole this rig exploits: shelling out
+    # to the real door IS the honest mechanism, not a bypass of it).
+    g3_root = _fresh_ctxroot()
+    protected_path2 = intake.intake_path(_DuckCtx(g3_root), op._OPERATOR_PROXY_WID)
+    r_g3 = _run_child(_inject_code(g3_root, op._OPERATOR_PROXY_WID), protected_path2)
+    g3_line = None
+    if os.path.exists(protected_path2):
+        with open(protected_path2) as fh:
+            g3_lines = [json.loads(ln) for ln in fh if ln.strip()]
+        g3_line = g3_lines[-1] if g3_lines else None
+    ok("test:<rigs_honest_by_construction> G3 (REBUILT RIG PASSES THROUGH "
+       "THE DOOR): under the SAME guard protecting the SAME file G1 proved "
+       "unwritable in-process, the REBUILT operator_proxy._inject_decision "
+       "still lands a REAL report.sh-produced line (sender.kind='worker', "
+       "genuinely produced by report.sh's own jq — never JSON this rig "
+       "built by hand) — it never performs an in-process write, only a "
+       "real subprocess call through the door",
+       r_g3.returncode == 0 and "INJECT-OK" in (r_g3.stdout or "")
+       and g3_line is not None and g3_line.get("sender", {}).get("kind") == "worker"
+       and "CASE-G3" in g3_line.get("text", ""),
+       f"rc={r_g3.returncode} stdout={r_g3.stdout!r} g3_line={g3_line}")
 
 
 def main():
@@ -141,15 +312,23 @@ def main():
     ok("P4e: empty text -> None",
        op._parse_decision("") is None)
 
-    # ── P5: injection shape (the real router reads tag + slots) ──
+    # ── P5: injection shape (block 01-38 T6 — a REAL report.sh call, plain
+    # text, NO fabricated tag/slots/sender payload; report.sh itself always
+    # stamps sender.kind="worker" — the honest rebuild's whole point is that
+    # the OPERATOR classification comes from the intake CHANNEL, never this
+    # payload) ──
     ctxroot = _fresh_ctxroot()
     eng = _DuckEng(ctxroot)
-    op._inject_decision(eng, "CASE-9", {"verb": "resume", "note": "unblock it"})
+    injected_p5 = op._inject_decision(eng, "CASE-9", {"verb": "resume", "note": "unblock it"})
     line = _last_line(eng.ctx)
-    ok("P5: _inject_decision writes a tagged operator.decision with operator sender + slots",
-       line and line.get("tag") == "operator.decision"
-       and line.get("sender", {}).get("kind") == "operator"
-       and line["slots"] == {"case_id": "CASE-9", "verb": "resume", "note": "unblock it"},
+    ok("P5: _inject_decision runs a REAL report.sh call — the raw written "
+       "line is PLAIN TEXT naming the verb+case id, report.sh's own "
+       "hardcoded sender.kind='worker' (never a fabricated 'operator' "
+       "sender, never a tag/slots payload this module built by hand)",
+       injected_p5 is True and line
+       and line.get("sender", {}).get("kind") == "worker"
+       and line.get("sender", {}).get("id") == op._OPERATOR_PROXY_WID
+       and "resume" in line.get("text", "") and "CASE-9" in line.get("text", ""),
        f"line={line}")
 
     # ── T1/T2: inject once, then idempotent ──
@@ -222,8 +401,9 @@ def main():
     n6 = op.tick(eng, manifest, set(), {}, decide_fn=stub_resume)
     injected = _last_line(eng.ctx)
     ok("T6: over a mixed manifest, ONLY the operator-owned open case is injected",
-       n6 == 1 and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 1 and injected["slots"]["case_id"] == "OP-OPEN",
-       f"n6={n6} injected={injected and injected['slots']['case_id']}")
+       n6 == 1 and _count_lines(intake.intake_path(eng.ctx, op._OPERATOR_PROXY_WID)) == 1
+       and injected and "OP-OPEN" in injected.get("text", ""),
+       f"n6={n6} injected_text={injected and injected.get('text')}")
 
     # ══ E1: THE HONEST PATH — injected {resume} routed by REAL classify+router+settle ══
     ctxroot = _fresh_ctxroot()
@@ -276,6 +456,8 @@ def main():
        "CASE-E4" in manifest.get("cases", {})
        and manifest["cases"]["CASE-E4"].get("decision") is None,
        f"case={manifest.get('cases', {}).get('CASE-E4')}")
+
+    run_rigs_honest_by_construction()
 
     passed = sum(1 for _, c, _ in _results if c)
     print(f"\ncore.sim.operator_proxy_rig: {'PASS' if passed == len(_results) else 'FAIL'} "
