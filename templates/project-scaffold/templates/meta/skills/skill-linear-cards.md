@@ -105,7 +105,7 @@ any scope/session labels together, or you'll drop the ones you omit.
 - `team: <LINEAR_TEAM>` · **`project: <LINEAR_PROJECT>` — MANDATORY. Never create a project-less card** (unless the project is explicitly configured `<LINEAR_PROJECT> = none`).
 - `state: <DEFAULT_STATE>` · `assignee: <DEFAULT_ASSIGNEE>` · `priority: <DEFAULT_PRIORITY>`
 - `labels`: the resolved §4 set (universal + persona + project + scope/session)
-- `description`: Markdown — real newlines, **not** `\n`. **End with the signature (§6).**
+- `description`: Markdown — real newlines, **not** `\n`. **Open with the owner line and end with the signature history (§6).**
 
 **Multi-step work** → create the parent, then each sub-issue with `parentId: <parent identifier>`.
 Order sub-issues with `blockedBy` where a real dependency exists. Progress rolls up to the parent.
@@ -117,32 +117,65 @@ the team has them).
 
 ---
 
-## 6. Agent Signature (MUST)
+## 6. Custody — Owner line + Signature history (MUST)
 
-**Every card description ends with a signature line**, after a `---`, so any card is traceable
-back to the agent, model, host, and session that produced it:
+Two marks, and both are mandatory. The **Owner line** says who holds the card *now*. The
+**Signature history** says who has touched it, ever. Neither substitutes for the other: a
+history alone forces a reader to guess that the last line is the current owner, and an owner
+line alone destroys the trail.
+
+### 6a. Owner line — first line of the description
+
+The description **opens** with the owner line. Exactly one exists at any time; taking over
+**rewrites it in place**.
+
+```markdown
+> **Owner:** <AGENT_ROLE> · Session `<SESSION_ID>` · since <YYYY-MM-DD HH:MM UTC>
+```
+
+Use `Owner: unassigned` when a card is deliberately parked with no session holding it.
+
+### 6b. Signature history — end of the description
+
+The description **ends** with an append-only list, after a `---`. Newest last. **Never edit or
+delete an existing line** — the history is the audit trail.
 
 ```markdown
 ---
-🤖 _<AGENT_ROLE> · <MODEL> @ <HOST> · Session `<SESSION_ID>` · <YYYY-MM-DD HH:MM UTC>_
+🤖 _<AGENT_ROLE> · <MODEL> @ <HOST> · Session `<SESSION_ID>` · <YYYY-MM-DD HH:MM UTC> — <EVENT>_
 ```
 
 - `<MODEL>` — human name of the model running (e.g. `Claude Opus 4.8`).
 - `<HOST>` — the machine the agent is running on (e.g. its hostname).
 - `<SESSION_ID>` — the current session id (short prefix is enough); this is the traceability
-  anchor — it ties the card to the exact transcript that created it.
+  anchor — it ties the card to the exact transcript that produced the change.
 - `<YYYY-MM-DD HH:MM UTC>` — legible timestamp, always in **UTC** (e.g. `2026-07-08 13:07 UTC`).
+- `<EVENT>` — one of `created` · `took ownership` · `updated` · `handed off` · `closed`.
 
-Fill these from the live runtime at create time, not from the placeholder literals. On an
-**update** that materially changes the card, you may append a second signature line rather than
-overwrite the first.
+Fill all of these from the live runtime, never from the placeholder literals.
+
+### 6c. When to stamp
+
+| Situation | Owner line | Signature |
+|:--|:--|:--|
+| You create the card | write it — you are the owner | append `created` |
+| You pick up a card another session owns | **rewrite** to you | append `took ownership` |
+| You materially change a card you already own | leave it | append `updated` |
+| You park the card / hand it back | set `unassigned` | append `handed off` |
+| You close the card | leave it | append `closed` |
+| You only read it, or only change state | leave it | none |
+
+**Never take ownership silently.** Picking up someone else's card without rewriting the owner
+line and appending `took ownership` is a malformed update — the same class of defect as a
+missing signature.
 
 ---
 
 ## 7. Updating & Retiring
 
 - **Transition / edit:** `save_issue` with `id` (identifier, e.g. `<TEAM>-123`). Send only the
-  fields you're changing — except `labels`, which is a full replace (§4).
+  fields you're changing — except `labels`, which is a full replace (§4). Any material edit
+  carries its §6 stamp; taking a card over carries the owner-line rewrite too.
 - **Comments:** `save_comment` for discussion / status notes; supports the same Markdown,
   threading (`parentId`), and @mentions.
 - **Retire:** no hard-delete. Obsolete → `state: Canceled`; done → `state: Done`; genuine
@@ -153,9 +186,10 @@ overwrite the first.
 ## 8. Optional — agent-app delegation (future)
 
 Assignee resolves to the **authenticated OAuth identity** (the operator), so `assignee: "me"`
-is the operator, not the agent — which is why authorship is carried by the **label + signature**,
-not the assignee. If the workspace later installs a Linear **agent app**, the `delegate` field
-can attribute cards to that agent user; until then, label + signature are the mechanism.
+is the operator, not the agent — which is why authorship and custody are carried by the
+**label + owner line + signature history** (§4, §6), not the assignee. If the workspace later
+installs a Linear **agent app**, the `delegate` field can attribute cards to that agent user;
+until then, those three are the mechanism.
 
 ---
 
@@ -169,14 +203,20 @@ can attribute cards to that agent user; until then, label + signature are the me
 - **Every card MUST have a project.** A project-less card is never acceptable. Sub-issues do
   NOT inherit the parent's project — set it explicitly on each (§5). The only exception is a
   project explicitly configured `<LINEAR_PROJECT> = none`.
-- **Universal label + persona label + signature are non-negotiable** — they are what make an
-  agent-authored card identifiable, filterable by author, and traceable. A card missing any of
-  the three is malformed.
+- **Universal label + persona label + owner line + signature history are non-negotiable** — they
+  are what make an agent-authored card identifiable, filterable by author, currently-owned by a
+  known session, and traceable. A card missing any of the four is malformed.
+- **Custody is never silent.** Taking over another session's card without rewriting the owner
+  line and appending a `took ownership` signature is malformed (§6c).
+- **The signature history is append-only.** Never rewrite or delete a prior line.
 - **Description Markdown uses literal newlines**, never `\n` escape sequences.
 
 ---
 
-**Last Updated:** 2026-07-12 — §4 label model extended to five tiers: a **persona label** (the
-authoring agent's own `<AGENT_ROLE>`, e.g. `tron` / `architect` / `engineer` / `data-architect`)
-is now mandatory alongside `🤖 beep-boop`, so card authorship is filterable and not only visible
-in the signature. Earlier 2026-07-08 — initial authoring. Reusable across projects; fill §3 per project.
+**Last Updated:** 2026-07-14 — §6 replaced the single optional signature with a **mandatory
+custody model**: an **owner line** at the top of every description naming the session that holds
+the card now (rewritten on takeover), plus an **append-only signature history** at the bottom
+with an explicit event (`created` / `took ownership` / `updated` / `handed off` / `closed`).
+Previously a second signature on handover was only *permitted*, so a card could change hands with
+nothing on it to say so. Earlier 2026-07-12 — §4 label model extended to five tiers (mandatory
+persona label). Earlier 2026-07-08 — initial authoring. Reusable across projects; fill §3 per project.
