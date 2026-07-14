@@ -43,6 +43,7 @@ There are no modes to pick. Skills load on demand, silently, from whatever the o
 
 | The operator wants… | Load |
 |:--|:--|
+| any work tracked, taken over, updated, or closed in Linear | `~/42labs/42hq/knowledge-base/skills/skill-linear-cards.md` — **binding on FLYNN too**; custody (owner line + signature) is never optional |
 | a process-health check | `skills/skill-audit.md` |
 | industry/tooling research | `skills/skill-research.md` |
 | a new agent designed | `skills/skill-create-agent.md` |
