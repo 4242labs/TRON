@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.6.0](https://github.com/4242labs/TRON/compare/v0.5.0...v0.6.0) (2026-07-14)
+
+
+### Features
+
+* **01-40-t1:** runtime write-guard + R3 lint receiver-provenance fix (ruling-independent half) ([f813ab1](https://github.com/4242labs/TRON/commit/f813ab10ab33b7a546362278f16e2ef71ab98769))
+* **modes:** add SCAFFOLD mode — /tron-scaffold stands up a new project ([5675452](https://github.com/4242labs/TRON/commit/56754527d82cbd71a6e6816962e117505937339a))
+* **modes:** add TRON-ALFREDO — the generalist mode ([#153](https://github.com/4242labs/TRON/issues/153)) ([8e2572c](https://github.com/4242labs/TRON/commit/8e2572cf4222a2560f2992d5a18a64105fb9dc03))
+* **modes:** add TRON-KONDO — tidy an existing project up to canon ([#154](https://github.com/4242labs/TRON/issues/154)) ([1805396](https://github.com/4242labs/TRON/commit/18053968b42f394deb205ae63199e8ade3c50d04))
+* **modes:** install.sh wires the terminal shortcuts too — one command on a fresh machine ([55f212b](https://github.com/4242labs/TRON/commit/55f212b512a17fabc402d40f2299bf8ef9c988eb))
+* **modes:** one-command install — slash commands + terminal shortcuts ([178fa67](https://github.com/4242labs/TRON/commit/178fa676f132ee929da8870171697ac88431999e))
+* **modes:** SCAFFOLD mode — /tron-scaffold ([8fa1dc5](https://github.com/4242labs/TRON/commit/8fa1dc590b8fd59e4f787a72c5210a128a1ce18d))
+
+
+### Bug Fixes
+
+* **01-40-t1:** close 4 hostile-review bypasses in the runtime guard + R3 lint ([279c6db](https://github.com/4242labs/TRON/commit/279c6db73c29a63806152558c2476e209532e7cd))
+* **01-40-t1:** close R3 lint's binding-shape blindness — deny at the mention ([572ee9c](https://github.com/4242labs/TRON/commit/572ee9c9ce94b6123af144b3435de58107b1b1c0))
+* **01-40-t1:** close second-review bypasses — symlink/hardlink src, glob-spec inode alias, chmod/chown, container-mutation taint ([7261f3a](https://github.com/4242labs/TRON/commit/7261f3a8136b7bf3f58d2cc3cd1e1c6451a656d7))
+* **01-40-t1:** make CI actually run the proof steps + rebuild R3 lint as a class guard ([efd9ded](https://github.com/4242labs/TRON/commit/efd9ded61537ebb1e5e0f2b8184757c6a2d17efd))
+* **01-40-t1:** rebuild R3 lint on flow-insensitive taint UNION (4th rebuild) ([aeb6360](https://github.com/4242labs/TRON/commit/aeb6360b9f9134d4cdf93ca8695bfa49aa4cf951))
+* **01-40-t1:** rebuild R3 lint's write-mechanism detection structurally ([b40a554](https://github.com/4242labs/TRON/commit/b40a5548968bb10a82cf9679e09cebcc77f0358d))
+* **01-40-t1:** STOP THE CLASS — deny-by-default runtime guard; close .update() container-taint gap ([6197b9b](https://github.com/4242labs/TRON/commit/6197b9bbdb8dfb0fa51b45eabf29a2235522d4a1))
+* **01-40-t1:** THIRD hostile review — generalize container-mutation taint from an enumerated method-name set to arg-taints-receiver ([34c1f98](https://github.com/4242labs/TRON/commit/34c1f98b6bceba9d38965abf8451f7a981c59901))
+* **01-40-t1:** vendor the real scaffold fixture instead of a cross-org checkout ([d93b1f7](https://github.com/4242labs/TRON/commit/d93b1f7b89c8e9677d0018916870c09d29e0917e))
+* **licence:** stop hiding the bpmn.io watermark ([#144](https://github.com/4242labs/TRON/issues/144)) ([9da474b](https://github.com/4242labs/TRON/commit/9da474b911f3809341753f329c853ab734972ef0))
+* **licence:** stop the version stamp overlapping the bpmn.io watermark ([#145](https://github.com/4242labs/TRON/issues/145)) ([fab4584](https://github.com/4242labs/TRON/commit/fab45846b75aa5c27b1e61b6a88b756142dbdcaa))
+* **modes:** close the review findings on the scaffold procedure ([f2bb90c](https://github.com/4242labs/TRON/commit/f2bb90caa95a96bc07405886b11add334d7d61fe))
+* **modes:** install.sh robustness + scaffold log dir + stale refs ([10a0210](https://github.com/4242labs/TRON/commit/10a0210e26d522c55536c478a484277e823d92a3))
+* **modes:** install.sh robustness, scaffold log dir, stale refs ([c6e7090](https://github.com/4242labs/TRON/commit/c6e7090ea6a94cab1541a3a9366b12e30a80fc9d))
+* **modes:** scaffold appends CLAUDE.md to the app .gitignore ([94e066c](https://github.com/4242labs/TRON/commit/94e066cb09c6a29fbacc99b9731c6fc0d32496f7))
+* **scaffold:** protect-branches.sh must require checks, not zero of them ([#151](https://github.com/4242labs/TRON/issues/151)) ([96be836](https://github.com/4242labs/TRON/commit/96be83653f6a64d4058aa5ccce759c31c4a4c17e))
+* **security:** vendor bpmn-js, add CSP, fix annot-btn contrast (U-TRN-7) ([#143](https://github.com/4242labs/TRON/issues/143)) ([0f95e8d](https://github.com/4242labs/TRON/commit/0f95e8dde1e6c0b9c2ba045363305175e05b500c))
+* **test:** drop two more SHAs the history rewrite killed ([b9dd131](https://github.com/4242labs/TRON/commit/b9dd13179ac15f5055e5cae3c40a1eb410e1c6b4))
+* **test:** resolve 01-26's parent from the log instead of a pinned SHA ([05fcb47](https://github.com/4242labs/TRON/commit/05fcb47a2ef759e96e485f9af27b44adde2e8520))
+* **test:** unpin the 01-26 A/B SHA — trunk is red ([02f2322](https://github.com/4242labs/TRON/commit/02f2322bf73d48c55606421170c655c867a2efcf))
+* **ui:** move the version stamp to the bottom-left corner ([#146](https://github.com/4242labs/TRON/issues/146)) ([34c4234](https://github.com/4242labs/TRON/commit/34c4234324c1a115a7fda5152c03753184128b08))
+
 ## [0.5.0](https://github.com/4242labs/TRON/compare/v0.4.1...v0.5.0) (2026-07-12)
 
 
