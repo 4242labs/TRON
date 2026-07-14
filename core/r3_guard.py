@@ -74,11 +74,36 @@ higher-level write (`open().write`, `Path.write_text`, `csv.writer`,
                  unprotected path (destruction-by-move-away — the bytes
                  under the protected name are gone either way).
   'os.truncate'  guards args[0] (path).
-  'os.link'      guards args[1] (dst) — a hardlink is a second directory
-                 entry for the SAME inode; blocking it stops a rig from
-                 aliasing a fresh path onto the protected file's bytes.
-  'os.symlink'   guards args[1] (dst) — same reasoning, one level of
-                 indirection.
+  'os.link'      guards BOTH args[1] (dst — a hardlink is a second
+                 directory entry for the SAME inode; blocking it stops a
+                 rig from aliasing a fresh path onto the protected file's
+                 bytes) AND args[0] (src — block 01-40 T1, hostile-review
+                 closure: hardlinking the PROTECTED file itself under a
+                 fresh, unprotected name has no legitimate use and would
+                 otherwise create an alias invisible to a naive
+                 string-only spec match).
+  'os.symlink'   guards BOTH args[1] (dst, same reasoning as os.link, one
+                 level of indirection) AND args[0] (src — block 01-40 T1,
+                 hostile-review closure: the dir_fd/openat bypass
+                 `os.symlink("operator-inbox.jsonl", "sneaky.tmp",
+                 dir_fd=dfd)` creates a link whose OWN name never matches
+                 any protected basename/glob, but POINTS AT a protected
+                 file; a later `os.open("sneaky.tmp", O_WRONLY,
+                 dir_fd=dfd)` realpath-resolves against the wrong base
+                 (this process's CWD, not dfd's real directory) and misses
+                 the write entirely even though it lands on the protected
+                 file's bytes. Denied at link-CREATION instead, before any
+                 open can reach it — a rig has no legitimate reason to
+                 symlink anything AT a protected ingress file).
+  'os.chmod'     guards args[0] (path).
+  'os.chown'     guards args[0] (path). Both added block 01-40 T1, second
+                 hostile review: `os.chmod(protected, 0o000)` is a
+                 channel-breaking DoS that leaves CONTENT and EXISTENCE
+                 both unchanged (the exact two properties every other DIES
+                 proof in this module treats as "the write never landed")
+                 — with no branch here it would permanently lock even the
+                 real door (scripts/report.sh) out of the path, invisible
+                 to every existing content/existence-snapshot proof.
   'os.remove'    guards args[0] (path). CPython raises the SAME
                  'os.remove' audit event for `os.unlink` (verified
                  empirically — `os.unlink` is a bare alias for
@@ -110,6 +135,30 @@ basename) for closing a real, demonstrated bypass; every legitimate
 relative write in this tree uses a temp filename that does not collide
 with a protected basename — verified by `scripts/l1.sh` staying 30/30
 green with this rule active.
+
+ALIAS-RESOLUTION ROOT FIX — inode identity for "glob" specs too (block
+01-40 T1, second hostile review): `_same_file` already proved "exact"
+specs by BOTH realpath-string equality AND, when both sides exist,
+`(st_dev, st_ino)` identity — but `_matches`'s "glob" branch (the spec
+KIND `scripts/l1.sh` actually exports in production,
+`R3_GUARD_PROTECT="$SANDBOX/*operator-inbox.jsonl"`) was pure `fnmatch`
+STRING compare with no inode fallback at all. A hardlink whose OWN path
+does not textually match the glob pattern — `os.link(protected,
+"unrelated")` then `open("unrelated", "w")` — shares the SAME inode as the
+protected file yet sailed through: the `os.link` call's dst ("unrelated")
+never matched the glob string, and the later `open`'s candidate
+("unrelated") never matched it either. Worse, this defeats even a
+hardlink this process's own hook never SAW get created at all (one
+pre-existing before `install()` ran, or built by an unguarded child per
+this module's own documented subprocess hole below) — no creation event
+to deny in the first place, only the alias-identity check at the point of
+use can catch it. `_glob_inode_match` closes this GENERICALLY, the same
+way `_same_file` already does for "exact": whenever the candidate
+physically exists, also match if its `(st_dev, st_ino)` equals that of any
+CURRENTLY-EXISTING real file the glob pattern textually matches (`glob.
+glob(spec)`, stat each hit, compare identity) — additive to the existing
+fnmatch string check, never a replacement for it (a file that has not yet
+been created still needs the string-based proof, exactly as before).
 
 NON-BYPASSABLE FROM RIG CODE: install() is idempotent (a module-level
 sentinel — `sys.modules` caches this module, so a second `import
@@ -146,6 +195,7 @@ unguarded child that writes the protected path, and the proof asserts
 that SUCCEEDS) — an acknowledged gap, never a silently-assumed one.
 """
 import fnmatch
+import glob as glob_mod
 import os
 import sys
 
@@ -227,6 +277,42 @@ def _same_file(candidate_real, exact_spec):
     return False
 
 
+def _glob_inode_match(candidate_real, glob_spec):
+    """ALIAS-CLOSING fallback for "glob" specs — the ROOT fix for the
+    hardlink-via-glob bypass (a second hostile review): `fnmatch` is a pure
+    STRING compare, with NO `(st_dev, st_ino)` identity check, unlike the
+    "exact" branch's `_same_file`. A hardlink whose OWN path does not
+    textually match the glob pattern — created either by THIS process
+    (`os.link` with a non-matching dst name) or entirely OUTSIDE this
+    process's audit visibility (a pre-existing alias, or one built by an
+    unguarded child per this module's own documented subprocess hole) — is
+    otherwise invisible to the glob rule even though it shares the exact
+    same inode as a real, currently-protected file. Whenever the candidate
+    physically exists, ALSO treat it as matched if its `(st_dev, st_ino)`
+    identity equals that of ANY currently-existing real file the glob
+    pattern textually matches — generalizing `_same_file`'s proof from
+    "exact" to "glob", since "glob" is the spec kind `scripts/l1.sh`
+    actually exports in production
+    (`R3_GUARD_PROTECT="$SANDBOX/*operator-inbox.jsonl"`)."""
+    try:
+        if not os.path.exists(candidate_real):
+            return False
+        cand_stat = os.stat(candidate_real)
+    except OSError:
+        return False
+    for hit in glob_mod.glob(glob_spec):
+        try:
+            hit_real = os.path.realpath(hit)
+            if hit_real == candidate_real:
+                continue   # already caught by the direct fnmatch string compare
+            hit_stat = os.stat(hit_real)
+        except OSError:
+            continue
+        if (cand_stat.st_dev, cand_stat.st_ino) == (hit_stat.st_dev, hit_stat.st_ino):
+            return True
+    return False
+
+
 def _matches(specs, candidate_real):
     if candidate_real is None:
         return False
@@ -239,6 +325,8 @@ def _matches(specs, candidate_real):
                 return True
         elif kind == "glob":
             if fnmatch.fnmatchcase(candidate_real, val):
+                return True
+            if _glob_inode_match(candidate_real, val):
                 return True
     return False
 
@@ -359,13 +447,53 @@ def install():
             if matched:
                 _deny("os.truncate", display)
         elif event == "os.link":
+            # guard BOTH slots: dst (a fresh directory entry aliased ONTO
+            # the protected file) AND src (block 01-40 T1, hostile-review
+            # closure — a rig hardlinking a protected file's bytes under a
+            # FRESH, unprotected name has no legitimate reason to; the
+            # created alias would otherwise be invisible to every check
+            # downstream that resolves the NEW name instead of the
+            # protected one — see `_glob_inode_match` for the general,
+            # inode-identity backstop for aliases this process never saw
+            # created at all).
             matched, display = _protected(specs, args[1])
             if matched:
                 _deny("os.link (hardlink) onto", display)
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny("os.link (hardlink) of protected source", display)
         elif event == "os.symlink":
+            # guard BOTH slots: dst (a fresh symlink ONTO the protected
+            # path) AND src (block 01-40 T1, hostile-review closure — the
+            # dir_fd/openat bypass: `os.symlink("operator-inbox.jsonl",
+            # "sneaky.tmp", dir_fd=dfd)` creates a link whose OWN name
+            # ("sneaky.tmp") never matches any protected basename/glob, but
+            # POINTS AT a protected ingress file; a subsequent
+            # `os.open("sneaky.tmp", O_WRONLY, dir_fd=dfd)` then realpath-
+            # resolves against the wrong base (this process's CWD, not
+            # dfd's real directory) and misses entirely, even though the
+            # write lands on the protected file's bytes via the dir_fd's
+            # real directory. A rig creating a symlink that POINTS AT a
+            # protected ingress file has no legitimate reason to — denied
+            # at link-creation, before any open can ever reach it).
             matched, display = _protected(specs, args[1])
             if matched:
                 _deny("os.symlink onto", display)
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny("os.symlink pointing at protected target", display)
+        elif event in ("os.chmod", "os.chown"):
+            # block 01-40 T1, second hostile review: os.chmod(protected,
+            # 0o000) is a channel-breaking DoS that leaves CONTENT and
+            # EXISTENCE both unchanged — the exact two properties every
+            # other DIES proof in this module asserts as "unharmed" — so it
+            # would otherwise permanently lock even the real door
+            # (scripts/report.sh) out of a protected ingress path with no
+            # write/rename/unlink event ever firing. args[0] is the path
+            # slot for BOTH events.
+            matched, display = _protected(specs, args[0])
+            if matched:
+                _deny(f"{event} of", display)
         elif event == "os.remove":
             # covers os.unlink too (same audit event — see module
             # docstring) — also the unlink half of shutil.move's

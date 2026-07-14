@@ -76,6 +76,27 @@ case can only cause a false RED, never a false GREEN.
      `sender.kind == "worker"`. A manifest-rooted subscript store/
      augstore, or a write-sink call on manifest-rooted state, is always
      illegal.
+  6. CONTAINER MUTATION (block 01-40 T1, second hostile review) — rule 2's
+     binding forms only ever recorded taint for a name FRESHLY bound to a
+     tainted value; a name whose already-bound container was MUTATED in
+     place afterward (`.append`/`.extend`/`.insert`/`.add`, or a
+     `Subscript` STORE `d[k] = v`) read as permanently clean forever —
+     `argv = []; argv.append(eng.ctx.worker_inbox); subprocess.run(argv)`
+     was a GREEN miss (`argv` never "bound" to anything tainted; the
+     taint arrived via mutation, invisible to rule 2's binding walk). Now
+     closed: each such mutation registers its VALUE as an ADDITIONAL
+     taint source for the receiver's key, in a SEPARATE substrate
+     (`container_bindings`, folded into the same monotone fixed point)
+     that contributes ONLY `{"worker", "operator"}` — deliberately NEVER
+     `"manifest"`. Manifest's own sink checks (`_CONTAINER_MUTATE_ATTRS`
+     in rule 5, and `_check_manifest_stores`) are about receiver ALIASING
+     ("is this container itself manifest-rooted state" — rule 1's seed
+     plus rule 4's subscript-READ aliasing, both of which stay real
+     Python reference semantics), never about "did some element/value
+     ever pass through it" — conflating the two (tried, then reverted,
+     in this same fix) false-REDs every ordinary `results.append(some_
+     manifest_derived_summary)` reporting/iteration pattern across nearly
+     every `core/*_rig.py`, none of which is a manifest write at all.
 
 The fixture suite in `.github/scripts/r3_honesty_lint_check.py` — every
 evasion four hostile reviews produced, plus the required-GREEN controls —
@@ -153,6 +174,22 @@ these a false-RED risk, never a false-GREEN one):
     call sites — rename the reused bare name (`f` -> `bf`) so the two
     bindings are no longer the same key at all. False-RED (an occasional
     forced rename) is the accepted cost; false-GREEN is not.
+  - CONTAINER MUTATION (rule 6) is now tracked for `.append`/`.extend`/
+    `.insert`/`.add` and `Subscript`-STORE — a container is no longer
+    silently clean forever after a tainted element/value passes through
+    it. Two deliberate, honest scope limits remain: (1) `.update(...)`
+    (dict merge) is NOT a container-mutation taint SOURCE — only used, as
+    before, by the pre-existing manifest-receiver sink check (rule 5) —
+    so `d.update({"k": eng.ctx.worker_inbox})` does not itself taint `d`
+    for a LATER `subprocess.run(d)`-style use (a genuine, narrow gap,
+    same shape as the four fixed PoCs but via `.update` instead of
+    `.append`/`.extend`/`.insert`/`.add`; not closed here — scope was the
+    four hostile-review PoCs exactly). (2) a nested-subscript store
+    (`x[a][b] = v`) taints only the ROOT container `x` as a whole, never
+    a specific key path — the SAME flow-insensitive, whole-object
+    granularity every other binding form in this module already accepts
+    (see the mutually-exclusive-rebindings limit above), never a
+    per-key/per-index precision this design was never meant to have.
 """
 import ast
 import glob
@@ -296,6 +333,35 @@ def _flatten_bind_targets(target):
     if isinstance(target, ast.Starred):
         return _flatten_bind_targets(target.value)
     return []
+
+
+_CONTAINER_MUTATE_TAINT_METHODS = {"append", "extend", "insert", "add"}
+
+
+def _container_receiver_key(expr):
+    """The bindable KEY a container-MUTATION (never a fresh bind) should
+    taint — block 01-40 T1, second hostile review's `argv.append(eng.ctx.
+    worker_inbox)` / `env["P"] = tainted` miss: rule 2's binding forms only
+    ever recorded taint for a name/attribute BOUND to a tainted value, never
+    for a name whose already-bound container was MUTATED in place with
+    tainted content afterward (`.append`/`.extend`/`.insert`/`.add`, or a
+    `Subscript` STORE `d[k] = v`) — `subprocess.run(argv)` then read `argv`
+    itself, which the fixed point had never touched, straight through as
+    clean. Unwraps nested `Subscript`s (`x[a][b] = v` / `x[a].append(v)`
+    taints the ROOT `x`, consistent with this module's flow-insensitive
+    UNION design — the exact same containing object, whichever key/index
+    was touched) down to the nearest `Name`/`Attribute`, returning the SAME
+    key shape `_flatten_bind_targets` already uses (`str` for a bare name,
+    `("attr", name)` for `self.x`/`Cls.x`) so it feeds the identical
+    `bindings`/union-taint substrate, or `None` if no such root exists
+    (e.g. a mutation on a call result/literal — nothing to taint)."""
+    while isinstance(expr, ast.Subscript):
+        expr = expr.value
+    if isinstance(expr, ast.Name):
+        return expr.id
+    if isinstance(expr, ast.Attribute):
+        return ("attr", expr.attr)
+    return None
 
 
 def _destructured_bindings(target, iter_expr):
@@ -444,12 +510,57 @@ def _build_ctx(tree):
         if value is not None:
             bindings.setdefault(key, []).append((value, value_scope))
 
+    # CONTAINER-MUTATION taint (block 01-40 T1, second hostile review) —
+    # a SEPARATE substrate from `bindings`, deliberately: `argv.append(eng.
+    # ctx.worker_inbox)` / `.extend(...)`/`.insert(i, ...)`/`.add(...)`
+    # (sets), and `d[k] = v` subscript-STORE, mutate an EXISTING receiver
+    # in place — no assignment target exists for rule 2's aliasing walk to
+    # ever see, so `argv`/`env` read as permanently clean once bound, even
+    # after a tainted element/value is stored into them. Feeding this into
+    # the SAME `bindings` dict as real aliasing binds (Assign `x = y`) was
+    # tried and REJECTED (round-1 of this fix): it broke the real tree —
+    # `_results.append(some_manifest_derived_summary)` made `_results`
+    # itself carry the "manifest" MARKER, and every LATER, unrelated
+    # `.append()`/subscript-store on `_results` anywhere in the file was
+    # then flagged as a manifest-rooted mutation by the PRE-EXISTING
+    # `_CONTAINER_MUTATE_ATTRS`/`_check_manifest_stores` receiver-taint
+    # checks — a container that merely COLLECTS manifest-DERIVED VALUES
+    # (ordinary, legitimate reporting/iteration code throughout `core/
+    # *_rig.py`) is not thereby an ALIAS of the real manifest; MANIFEST's
+    # sink checks are specifically about receiver ALIASING (rule 1 seed +
+    # rule 4 subscript-read aliasing — a dict/list a real read returned IS
+    # still the same mutable object), never about "was some element ever
+    # a manifest-derived value". WORKER/OPERATOR taint has no such
+    # aliasing meaning to violate — those markers exist to answer "does
+    # this expression carry an ingress-channel PATH that could reach a
+    # sink", pure content/value flow, which container mutation legitimately
+    # is. So: `container_bindings` feeds ONLY {"worker", "operator"} into
+    # the taint fixed point (`_compute_taint`), NEVER "manifest" — see its
+    # own docstring.
+    container_bindings = {}
+
+    def add_container(key, value, value_scope):
+        if value is not None:
+            container_bindings.setdefault(key, []).append((value, value_scope))
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             scope_id = scope_of(node)
             for tgt in node.targets:
                 for fk in _flatten_bind_targets(tgt):
                     add(target_key(fk, scope_id), node.value, scope_id)
+                if isinstance(tgt, ast.Subscript):
+                    # `d[k] = v` binds no NEW alias (per
+                    # `_flatten_bind_targets`'s own contract, unchanged) —
+                    # but the RECEIVER container `d` must union `v`'s
+                    # worker/operator taint, or `env["P"] = tainted;
+                    # f(env)` reads `env` as clean forever. See
+                    # `_container_receiver_key` and `container_bindings`
+                    # above for why this is NOT the same substrate as a
+                    # real alias-bind.
+                    rk = _container_receiver_key(tgt.value)
+                    if rk is not None:
+                        add_container(target_key(rk, scope_id), node.value, scope_id)
             if (isinstance(node.value, ast.Lambda) and len(node.targets) == 1
                     and isinstance(node.targets[0], ast.Name)):
                 lam = node.value
@@ -459,6 +570,24 @@ def _build_ctx(tree):
             scope_id = scope_of(node)
             for fk in _flatten_bind_targets(node.target):
                 add(target_key(fk, scope_id), node.value, scope_id)
+            if isinstance(node.target, ast.Subscript):
+                rk = _container_receiver_key(node.target.value)
+                if rk is not None:
+                    add_container(target_key(rk, scope_id), node.value, scope_id)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in _CONTAINER_MUTATE_TAINT_METHODS:
+            # `.append`/`.extend`/`.insert`/`.add` — see `container_bindings`
+            # above for why this is a SEPARATE, worker/operator-only
+            # substrate, never unioned into the general aliasing `bindings`.
+            scope_id = scope_of(node)
+            rk = _container_receiver_key(node.func.value)
+            if rk is not None:
+                if node.func.attr == "insert":
+                    val = node.args[1] if len(node.args) >= 2 else None
+                else:
+                    val = node.args[0] if node.args else None
+                if val is not None:
+                    add_container(target_key(rk, scope_id), val, scope_id)
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             scope_id = scope_of(node)
             for fk in _flatten_bind_targets(node.target):
@@ -507,7 +636,7 @@ def _build_ctx(tree):
                     arg = next((kw.value for kw in node.keywords if kw.arg == pname), None)
                 add(("var", info.scope_id, pname), arg, caller_scope)
 
-    return bindings, returns
+    return bindings, returns, container_bindings
 
 
 def _lookup(bindings, scope, name):
@@ -616,13 +745,26 @@ def _expr_taint(node, nt, rt, bindings, scope):
     return _union((c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)), nt, rt, bindings, scope)
 
 
-def _compute_taint(bindings, returns):
+_CONTAINER_MUTATION_KINDS = frozenset({"worker", "operator"})
+
+
+def _compute_taint(bindings, returns, container_bindings=None):
     """The monotone fixed point (rule 2/3): relax every binding's and every
     function's return taint against the CURRENT snapshot, repeatedly, until
     no key's kind-set grows. Taint only ever gets ADDED — guaranteed to
     terminate (finite keys x finite kinds) and guaranteed, by construction,
-    to be an over-approximation of every real taint path in the file."""
+    to be an over-approximation of every real taint path in the file.
+    `container_bindings` (block 01-40 T1, second hostile review) folds
+    into the SAME fixed point, but each of its keys' contribution is
+    INTERSECTED with `_CONTAINER_MUTATION_KINDS` ({"worker", "operator"})
+    before unioning — never "manifest": a container-MUTATION (`.append`/
+    `d[k]=v`/...) is a content-flow relationship ("this container now
+    holds a value that carries an ingress-channel path"), not an ALIASING
+    one ("this container IS manifest-rooted state") — see
+    `_build_ctx`'s own `container_bindings` docstring for why conflating
+    the two false-REDs the entire real tree."""
     nt, rt = {}, {}
+    container_bindings = container_bindings or {}
     changed = True
     while changed:
         changed = False
@@ -630,6 +772,13 @@ def _compute_taint(bindings, returns):
             new = nt.get(key, frozenset())
             for v, vscope in values:
                 new = new | _expr_taint(v, nt, rt, bindings, vscope)
+            if new != nt.get(key, frozenset()):
+                nt[key] = new
+                changed = True
+        for key, values in container_bindings.items():
+            new = nt.get(key, frozenset())
+            for v, vscope in values:
+                new = new | (_expr_taint(v, nt, rt, bindings, vscope) & _CONTAINER_MUTATION_KINDS)
             if new != nt.get(key, frozenset()):
                 nt[key] = new
                 changed = True
@@ -1137,8 +1286,8 @@ def _local_class_names(tree):
 
 def lint_source(source, path="<fixture>"):
     tree = ast.parse(source, filename=path)
-    bindings, returns = _build_ctx(tree)
-    nt, rt = _compute_taint(bindings, returns)
+    bindings, returns, container_bindings = _build_ctx(tree)
+    nt, rt = _compute_taint(bindings, returns, container_bindings)
     parent_scope = _build_parent_scope(tree)
     local_classes = _local_class_names(tree)
     return (_check_calls(tree, nt, rt, bindings, returns, local_classes, parent_scope, path)

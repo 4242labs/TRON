@@ -249,6 +249,91 @@ protected = {protected!r}
 shutil.move(protected, protected + ".moved-by-shutil")
 """)
 
+    # ── DIES (block 01-40 T1, THIRD pass — hostile-review closure #1):
+    #     `os.symlink("operator-inbox.jsonl", "sneaky.tmp", dir_fd=dfd)` —
+    #     the symlink's OWN name ("sneaky.tmp") matches no protected
+    #     basename/glob at all, but it POINTS AT the protected file
+    #     (args[0]/src). A later `os.open("sneaky.tmp", O_WRONLY,
+    #     dir_fd=dfd)` would realpath-resolve against the wrong base (this
+    #     process's CWD, not dfd's real directory) and miss the write
+    #     entirely even though it lands on the protected file's bytes via
+    #     the dir_fd's real directory — so this must die AT THE SYMLINK
+    #     ITSELF, before any open is ever attempted. ──
+    expect_dies("symlink_dirfd_pointing_at_protected", f"""
+import os
+protected = {protected!r}
+protected_dir = os.path.dirname(protected)
+protected_base = os.path.basename(protected)
+dfd = os.open(protected_dir, os.O_RDONLY)
+os.symlink(protected_base, "sneaky.tmp", dir_fd=dfd)
+fd = os.open("sneaky.tmp", os.O_WRONLY | os.O_TRUNC, dir_fd=dfd)
+os.write(fd, b"pwned-symlink-dirfd")
+os.close(fd)
+os.close(dfd)
+""")
+
+    # ── DIES (hostile-review closure #2, THIRD pass): os.link hardlinking
+    #     the PROTECTED file itself (args[0]/src) under a fresh,
+    #     unprotected name — no dir_fd needed at all. The OLD hook only
+    #     guarded args[1] (dst onto the protected path); a rig had no
+    #     legitimate reason to hardlink the protected file's bytes under a
+    #     brand-new name, and the resulting alias would otherwise be
+    #     invisible to a plain string-based spec match. ──
+    expect_dies("hardlink_of_protected_source", f"""
+import os
+protected = {protected!r}
+unrelated = os.path.join(os.path.dirname(protected), "hardlink-unrelated-name.txt")
+os.link(protected, unrelated)
+""")
+
+    # ── DIES (THIRD pass): absolute path name handed alongside a dir_fd —
+    #     the OS IGNORES dir_fd entirely when the name is already absolute,
+    #     so this must resolve (and die) exactly like a plain absolute-path
+    #     open, never fall through the relative-basename dir_fd logic. ──
+    expect_dies("absolute_name_with_dir_fd_still_dies", f"""
+import os
+protected = {protected!r}
+dfd = os.open(os.path.dirname(protected), os.O_RDONLY)
+fd = os.open(protected, os.O_WRONLY | os.O_TRUNC, dir_fd=dfd)
+os.write(fd, b"pwned-abs-dirfd")
+os.close(fd)
+os.close(dfd)
+""")
+
+    # ── DIES (second hostile review, coordinator finding): os.chmod is a
+    #     channel-breaking DoS that leaves CONTENT and EXISTENCE both
+    #     unchanged — the exact two properties `expect_dies` already checks
+    #     as "the write never landed" — so it would otherwise permanently
+    #     lock even the real door (scripts/report.sh) out of the protected
+    #     path with no write/rename/unlink event ever firing. ──
+    expect_dies("chmod_locks_out_protected", f"""
+import os
+os.chmod({protected!r}, 0o000)
+""")
+
+    # ── DIES (second hostile review, coordinator finding): os.chown,
+    #     same guarded event family as chmod. ──
+    expect_dies("chown_of_protected", f"""
+import os
+os.chown({protected!r}, os.getuid(), os.getgid())
+""")
+
+    # ── SURVIVES (THIRD pass, no-false-RED proof): a symlink/hardlink
+    #     between two genuinely UNPROTECTED paths — and a chmod of an
+    #     unprotected file — must still work; these new branches guard the
+    #     PROTECTED path only, never touch/aliasing of ordinary files. ──
+    expect_survives("unprotected_symlink_and_hardlink_survive", f"""
+import os
+a = {unprotected!r} + ".a"
+b = {unprotected!r} + ".b"
+c = {unprotected!r} + ".c"
+open(a, "w").write("a")
+os.symlink(a, b)
+os.link(a, c)
+os.chmod(a, 0o644)
+print("unprotected alias ops ok")
+""", check=lambda r: "unprotected alias ops ok" in r.stdout)
+
     # ── SURVIVES: read-mode open of the protected path ──
     expect_survives("read_mode_open_survives", f"""
 data = open({protected!r}, "r").read()
@@ -313,6 +398,59 @@ print("GRANDCHILD_STDERR", grandchild.stderr)
               "argument at all, undetectable by either module.".format(before, after))
         with open(protected, "w", encoding="utf-8") as fh:
             fh.write("seed\n")   # reset for any later case in this run
+
+    # ── ROOT FIX (second hostile review): "glob" specs must ALSO close a
+    #     hardlink alias by (st_dev, st_ino) IDENTITY, not just by fnmatch
+    #     STRING compare — `_same_file` already did this for "exact" specs;
+    #     "glob" is the spec kind `scripts/l1.sh` actually exports in
+    #     production (`R3_GUARD_PROTECT="$SANDBOX/*operator-inbox.jsonl"`).
+    #     The alias here is created BEFORE the guarded child even starts —
+    #     this process's own hook NEVER sees an os.link event for it at
+    #     all (proving the fallback fires at the point of USE, not just at
+    #     creation-time denial) — the sharpest form of the bypass: a
+    #     hardlink built by an earlier, unguarded step (or, per the
+    #     documented subprocess hole above, by an unguarded child) that a
+    #     LATER guarded process then opens by its own, non-matching name. ──
+    glob_work = tempfile.mkdtemp(prefix="r3-guard-proof-glob-")
+    glob_site_dir = os.path.join(glob_work, "site")
+    glob_instance = os.path.join(glob_work, "instance")
+    os.makedirs(glob_instance, exist_ok=True)
+    glob_protected = os.path.join(glob_instance, "operator-inbox.jsonl")
+    with open(glob_protected, "w", encoding="utf-8") as fh:
+        fh.write("seed\n")
+    glob_alias = os.path.join(glob_instance, "unrelated-alias-name.txt")
+    os.link(glob_protected, glob_alias)   # pre-existing alias, created OUTSIDE any guarded process
+    glob_spec = os.path.join(glob_instance, "*operator-inbox.jsonl")
+    glob_env = _guarded_env([glob_spec], glob_site_dir, rig="r3_guard_runtime_check_glob")
+
+    before_glob_exists, before_glob = _snapshot(glob_protected)
+    r_glob = _run(f"""
+open({glob_alias!r}, "w").write("pwned-via-preexisting-hardlink-alias")
+print("ALIAS_WRITE_SUCCEEDED")
+""", glob_env)
+    after_glob_exists, after_glob = _snapshot(glob_protected)
+    if r_glob.returncode == 0:
+        print("REGRESSION [glob_spec_hardlink_inode_bypass]: expected the guard's "
+              "inode-identity fallback to kill a write through a pre-existing "
+              f"hardlink alias under a 'glob' spec, but the child exited 0 "
+              f"(protected file now {after_glob!r}). stdout={r_glob.stdout!r} "
+              f"stderr={r_glob.stderr!r}", file=sys.stderr)
+        failed = True
+    elif not after_glob_exists or after_glob != before_glob:
+        print(f"REGRESSION [glob_spec_hardlink_inode_bypass]: child died "
+              f"(rc={r_glob.returncode}) but the protected file changed anyway "
+              f"(before={before_glob!r} after={after_glob!r}, exists={after_glob_exists}) "
+              "— the write landed before the guard fired.", file=sys.stderr)
+        failed = True
+    elif "r3_guard" not in r_glob.stderr and "PermissionError" not in r_glob.stderr:
+        print(f"REGRESSION [glob_spec_hardlink_inode_bypass]: child died "
+              f"(rc={r_glob.returncode}) but not via the guard's PermissionError — "
+              f"stderr={r_glob.stderr!r}", file=sys.stderr)
+        failed = True
+    else:
+        print("DIES confirmed [glob_spec_hardlink_inode_bypass]: rc="
+              f"{r_glob.returncode}, protected file's content unchanged via the "
+              "(st_dev, st_ino) identity fallback on a 'glob' spec.")
 
     print(f"\nr3_guard_runtime_check: {'PASS' if not failed else 'FAIL'}")
     return 1 if failed else 0

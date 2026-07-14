@@ -472,6 +472,57 @@ def bad(eng):
     code = "import sys; open(sys.argv[1], 'a').write(sys.argv[2])"
     subprocess.run([sys.executable, "-c", code, eng.ctx.worker_inbox, json.dumps(rep)])
 ''',
+
+    # ── block 01-40 T1, SECOND hostile-review evasions — the CONTAINER-
+    #     MUTATION taint miss: rule 2's binding forms (Assign/AugAssign/
+    #     AnnAssign/NamedExpr/For/With/comprehension/params) never treated
+    #     list/dict/set MUTATION (`.append`/`.extend`/`.insert`/`.add`, or
+    #     a `Subscript` STORE) as taint-propagating INTO the receiver
+    #     container — only a fresh BINDING of the name itself. `argv = [];
+    #     argv.append(eng.ctx.worker_inbox); subprocess.run(argv)` read
+    #     `argv` as permanently clean, since nothing ever "bound" argv to a
+    #     tainted value — the mutation happened to an object the fixed
+    #     point had already stopped tracking. Fixed: `.append`/`.extend`/
+    #     `.insert`/`.add` calls and `d[k] = v` subscript-stores now UNION
+    #     their value's taint into the RECEIVER key, via the identical
+    #     union-bindings substrate every other binding form already uses
+    #     (see `core/r3_lint.py`'s `_container_receiver_key`). ──
+    "37_container_mutation_append": '''
+import subprocess
+
+def bad(eng):
+    argv = ["cat"]
+    argv.append(eng.ctx.worker_inbox)
+    subprocess.run(argv)
+''',
+
+    "38_container_mutation_insert": '''
+import subprocess
+
+def bad(eng):
+    argv = ["cat", "-"]
+    argv.insert(1, eng.ctx.worker_inbox)
+    subprocess.run(argv)
+''',
+
+    "39_container_mutation_extend": '''
+import subprocess
+
+def bad(eng):
+    argv = ["cat"]
+    argv.extend([eng.ctx.worker_inbox])
+    subprocess.run(argv)
+''',
+
+    "40_container_mutation_subscript_store": '''
+import os
+import subprocess
+
+def bad(eng):
+    env = dict(os.environ)
+    env["P"] = eng.ctx.worker_inbox
+    subprocess.run(["cat"], env=env)
+''',
 }
 
 # ── ROUND-5 PoCs (Opus design review, pending the operator's MODEL A/B
@@ -490,7 +541,7 @@ def bad(eng):
 #     prints LOUDLY the moment either the ruling lands and ships a fix, or
 #     a future rebuild accidentally closes (or widens) this unnoticed.
 ROUND5_PENDING_RULING_FIXTURES = {
-    "37_pending_payload_subscript_mutation": '''
+    "41_pending_payload_subscript_mutation": '''
 import json
 
 def bad(eng):
@@ -500,7 +551,7 @@ def bad(eng):
         ib.write(json.dumps(rep) + "\\n")
 ''',
 
-    "38_pending_payload_update_mutation": '''
+    "42_pending_payload_update_mutation": '''
 import json
 
 def bad(eng):
