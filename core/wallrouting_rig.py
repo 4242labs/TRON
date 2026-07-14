@@ -112,7 +112,9 @@ import classify                       # noqa: E402 — core/classify.py, the unc
 import router                          # noqa: E402 — core/router.py, ADR-0010 Invariant B (_route_wall)
 from engine import Engine, BootupError   # noqa: E402 — core/engine.py, the REAL Engine (_page_operator UNSTUBBED)
 
-SCAFFOLD_SRC = "/home/anderson/42labs/tron/tron-meta/sims/_sources/trivial-tip-converter"
+import scaffold_src               # noqa: E402 — core/scaffold_src.py, the ONE resolver
+
+SCAFFOLD_SRC = scaffold_src.resolve()
 MAIN = "main"
 PIPELINE_REL = "meta/pipeline.md"
 BLOCKS_REL = "meta/blocks"
@@ -356,12 +358,12 @@ def make_adhoc_doc(root, branch, block, title):
     _git(["checkout", "-B", branch, MAIN], root)
     ppath = os.path.join(root, PIPELINE_REL)
     with open(ppath) as f:
-        content = f.read()
+        original = f.read()
     row = ADHOC_ROW_TEMPLATE.format(block=block, title=title)
-    if "## Ad-hoc" not in content:
-        content = content.rstrip("\n") + "\n" + ADHOC_PIPELINE_SECTION + row
+    if "## Ad-hoc" not in original:
+        content = original.rstrip("\n") + "\n" + ADHOC_PIPELINE_SECTION + row
     else:
-        lines = content.splitlines(keepends=True)
+        lines = original.splitlines(keepends=True)
         idx = next(i for i, ln in enumerate(lines) if ln.strip().startswith("## Ad-hoc"))
         j = idx + 1
         while j < len(lines) and not lines[j].strip().startswith("|:"):
@@ -372,8 +374,8 @@ def make_adhoc_doc(root, branch, block, title):
         f.write(content)
     bpath = os.path.join(root, BLOCKS_REL, f"{block}.md")
     os.makedirs(os.path.dirname(bpath), exist_ok=True)
-    with open(bpath, "w") as f:
-        f.write(ADHOC_BLOCK_DOC_TEMPLATE.format(block=block, title=title))
+    with open(bpath, "w") as bf:
+        bf.write(ADHOC_BLOCK_DOC_TEMPLATE.format(block=block, title=title))
     _git(["add", "-A"], root)
     _git(["commit", "-m", f"arch(scope_forward): author adhoc block {block}"], root)
     tip = _git_out(["rev-parse", "HEAD"], root)
