@@ -244,6 +244,26 @@ EFFECTS = dict([
     # T4/AC-5: the must-be-zero router catch-all counter fired (an unroutable tag
     # reached route()) — `manifest["counters"]["router_catch_all"]` bumped.
     _reg("router_catch_all_counted", "state", counter_class="must_be_zero"),
+
+    # ── core/reviewers.py — cadence PULL reviewers + the DONE-REVIEW gate
+    #     (T7 sub-commit 8) ──
+    # A landed block was counted toward cadence: recorded in
+    # `manifest["cadence_seen_done"]` (dedupe) + every configured type's
+    # `manifest["cadence"]` counter bumped.
+    _reg("cadence_block_counted", "state"),
+    # A per-type reviewer dispatch sequence advanced
+    # (`manifest["reviewer_dispatch_seq"][typ]`).
+    _reg("reviewer_dispatch_seq_advanced", "state"),
+    # A reviewer's worker record was minted (`manifest["workers"][agent_id]`),
+    # BEFORE any process (mint-then-spawn).
+    _reg("reviewer_recorded", "state"),
+    # A type's cadence counter was reset to 0 on dispatch (consumed on dispatch).
+    _reg("cadence_reset", "state"),
+    # A reviewer's slot was freed — its `manifest["workers"]` record popped.
+    _reg("reviewer_released", "state"),
+    # DONE-REVIEW gate: the first hand-back HELD the reviewer (status "held" +
+    # findings stashed, pacing episode reset) pending its coverage attestation.
+    _reg("review_held", "state"),
 ])
 
 

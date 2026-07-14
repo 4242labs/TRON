@@ -134,6 +134,7 @@ if _HERE not in sys.path:
 import architect   # noqa: E402 — core/architect.py, the log-review queue this gate feeds on attest
 import knobs as knobs_mod   # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (wave 16)
 import intake as intake_mod   # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import emit         # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 
 def review_block(typ):
@@ -167,16 +168,19 @@ def bump_cadence(eng, manifest, landed_blocks):
     types = list(_cadence_cfg(eng).keys())
     if not types:
         return
-    seen = manifest.setdefault("cadence_seen_done", [])
-    seen_set = set(seen)
-    cadence = manifest.setdefault("cadence", {})
+    seen_set = set(manifest.get("cadence_seen_done") or [])
     for block in landed_blocks:
         if block in seen_set:
             continue
         seen_set.add(block)
-        seen.append(block)
-        for typ in types:
-            cadence[typ] = cadence.get(typ, 0) + 1
+        emit.append(eng, manifest, "cadence_block_counted", ("cadence_seen_done",),
+                    block, block=block)
+        # Re-read the live counters each iteration (emit.patch mutates
+        # manifest["cadence"] in place) so multiple landed blocks accumulate.
+        cadence = manifest.get("cadence") or {}
+        emit.patch(eng, manifest, "cadence_block_counted", ("cadence",),
+                   {typ: cadence.get(typ, 0) + 1 for typ in types},
+                   block=block, types=types)
         eng.log("flow", f"reviewers: {block!r} landed ✅ -> counted toward "
                         f"cadence {types} (seen_done dedupe)")
 
@@ -213,21 +217,21 @@ def dispatch(eng, manifest, typ):
     `core/switchboard.py::fill` already keeps), reset the type's cadence
     counter (consumed ON DISPATCH — blueprint's own words), and order the
     reviewer to work. Returns the freshly minted agent id."""
-    seq = manifest.setdefault("reviewer_dispatch_seq", {})
-    n = int(seq.get(typ, 0)) + 1
-    seq[typ] = n
+    n = int((manifest.get("reviewer_dispatch_seq") or {}).get(typ, 0)) + 1
+    emit.put(eng, manifest, "reviewer_dispatch_seq_advanced",
+             ("reviewer_dispatch_seq",), typ, n, typ=typ, n=n)
     agent_id = f"reviewer-{typ}-{n}"
 
-    workers = manifest.setdefault("workers", {})
     # `wid` mirrors `core/gate.py`'s own `gate_state["wid"]` field — trivially
     # self-referential here (a reviewer's own agent id), but it lets
     # `core/sentry.py::_nudge` (shared, block-gate-and-review alike) address
     # the re-order to the right worker without a reviewer-specific branch.
-    workers[agent_id] = {"block": review_block(typ), "type": typ, "status": "reviewing",
-                         "wid": agent_id}
+    emit.put(eng, manifest, "reviewer_recorded", ("workers",), agent_id,
+             {"block": review_block(typ), "type": typ, "status": "reviewing",
+              "wid": agent_id}, agent_id=agent_id, typ=typ)
     intake_mod.create(eng.ctx, agent_id)   # block 01-38 T1 — the intake IS the identity
 
-    manifest.setdefault("cadence", {})[typ] = 0   # consumed on dispatch
+    emit.put(eng, manifest, "cadence_reset", ("cadence",), typ, 0, typ=typ)   # consumed on dispatch
 
     eng._spawn_worker(agent_id, review_block(typ))   # STUBBED — no real process
     eng._to_worker(
@@ -247,8 +251,8 @@ def _release(eng, manifest, agent_id, reason):
     `core/pipeline.py::in_flight_blocks`'s terminal-stage shortcut to key
     off instead) PLUS `eng._release_worker` for external bookkeeping parity
     with every other release site in this stack."""
-    workers = manifest.get("workers") or {}
-    workers.pop(agent_id, None)
+    emit.drop(eng, manifest, "reviewer_released", ("workers",), agent_id,
+              agent_id=agent_id, reason=reason)
     if agent_id:
         eng._release_worker(agent_id, reason=reason)
 
@@ -292,11 +296,14 @@ def on_review_done(eng, manifest, rep):
         return
 
     if w.get("status") != "held":
-        # FIRST hand-back -> the DONE-REVIEW gate holds (attest coverage).
-        w["status"] = "held"
-        w["findings"] = slots.get("findings") or []
-        w.pop("holding_since", None)   # fresh pacing episode (core/sentry.py)
-        w.pop("nudged_at", None)
+        # FIRST hand-back -> the DONE-REVIEW gate holds (attest coverage). The
+        # pacing keys are set to None (not popped) — no reader distinguishes
+        # absent from None (`core/sentry.py` reads them via `.get()`), matching
+        # the sentry `_drop_pacing` None-guard precedent (T7).
+        emit.patch_obj(eng, "review_held", w,
+                       {"status": "held", "findings": slots.get("findings") or [],
+                        "holding_since": None, "nudged_at": None},
+                       agent_id=agent_id, typ=typ)
         if not eng.dry:
             eng.emit(
                 "gate.review",
