@@ -295,6 +295,113 @@ EFFECTS = dict([
     # the tick a gate is first needed) — the load-bearing alias every gate
     # write and the tick plan share.
     _reg("gates_section_seeded", "state"),
+
+    # ── core/architect.py — the persistent coordinator (T7 sub-commit 12) ──
+    # This module's OWN lazy-install site for `manifest["architect"]`
+    # (`_ensure_installed`, used by all four of its entry points) — a
+    # SEPARATE effect from `engine_architect_installed` (core/engine.py's
+    # explicit bootup install); the two never collide, each only fires
+    # while the key is still absent.
+    _reg("architect_installed", "state"),
+    # A clear-ahead `forward` job was queued (`architect_queue` append).
+    _reg("architect_forward_job_enqueued", "state"),
+    # An M-05 `reconcile` job was queued after a block landed ✅.
+    _reg("architect_reconcile_job_enqueued", "state"),
+    # GAP-E: a `triage` (PMT-TRIAGE) job was queued — architect-first, never
+    # an immediate operator page.
+    _reg("architect_triage_job_enqueued", "state"),
+    # Wave 10: a `log` (log-review) job was queued off an attested review.
+    _reg("architect_log_job_enqueued", "state"),
+    # `manifest["triage_seq"]` advanced — the deterministic triage-job id
+    # counter (`_next_triage_id`).
+    _reg("architect_triage_seq_advanced", "state"),
+    # `manifest["adhoc_seq"][<type>]` advanced — the deterministic adhoc
+    # block-id counter shared by the triage scope_forward path and log-review.
+    _reg("architect_adhoc_seq_advanced", "state"),
+    # This module's OWN pluggable-clock fallback (`manifest["architect_clock"]
+    # ["clock"]`) ticked — a separate counter from sentry's/liveness's own.
+    _reg("architect_clock_advanced", "state"),
+    # ADR-0009 R-B: a job (or one of its order-requiring sub-entries) was
+    # stamped with the dispatch_seq/order-text/order-kind just used to send
+    # it — optionally folding in the same-transition `ordered=True` flip.
+    _reg("architect_dispatch_stamped", "state"),
+    # ADR-0009 R-C/R-E: the SAME outstanding order was re-sent (respawn or
+    # idle-gated re-deliver) — `last_sent_at` re-anchored.
+    _reg("architect_redelivered", "state"),
+    # ADR-0009 R-G: the no-progress accumulator's anchor fields were first
+    # seeded (`unconsumed_since`/`last_sample`/`last_sent_at`).
+    _reg("architect_delivery_anchored", "state"),
+    # ADR-0009 R-G: one working-excluded integration step sampled
+    # (`last_sample`/`unconsumed_work_excluded` advanced).
+    _reg("architect_delivery_integrated", "state"),
+    # ADR-0009 R-C: a clean respawn of the architect was counted.
+    _reg("architect_respawn_recorded", "state"),
+    # ADR-0009 R-G: the no-progress budget tripped — paged ONCE.
+    _reg("architect_no_progress_paged", "state"),
+    # ADR-0009 R-G: the no-progress accumulator + respawn count reset on a
+    # genuine delivery flip (`_reset_delivery_state`).
+    _reg("architect_delivery_reset", "state"),
+    # T10: a settled triage turn with no routed verdict was re-ordered
+    # (bounded, `_verdict_reorders` bumped) — never a silent guess.
+    _reg("architect_triage_reorder_bumped", "state"),
+    # T10: re-orders exhausted RESPAWN_CAP with still no structured verdict
+    # — paged LOUD (verdict forced to "operator"), never fabricated.
+    _reg("architect_triage_reorder_exhausted", "state"),
+    # T10: a bounded re-order was armed (`ordered` reset so the next
+    # `advance` call re-sends the triage order).
+    _reg("architect_triage_reorder_retried", "state"),
+    # A routed `architect.triage_verdict` report was applied to the job.
+    _reg("architect_triage_verdict_recorded", "state"),
+    # ADR-0008: a stale landing worker.wall's "operator" verdict was
+    # downgraded to "answer" on durable trunk truth revalidation.
+    _reg("architect_triage_verdict_downgraded_stale", "state"),
+    # A triage job (case-bearing or case-less) reached its terminal
+    # resolution (`answer`/`operator`/`scope_forward`-landed).
+    _reg("architect_triage_resolved", "state"),
+    # scope_forward: the job's own adhoc sub-entry was minted.
+    _reg("architect_triage_adhoc_created", "state"),
+    # scope_forward: the adhoc entry's content-bound land case-id was bound.
+    _reg("architect_triage_adhoc_case_bound", "state"),
+    # scope_forward: the adhoc entry's land_via_grant observed "landed".
+    _reg("architect_triage_adhoc_landed", "state"),
+    # A forward job's target branch was (re-)bound.
+    _reg("architect_forward_branch_bound", "state"),
+    # A forward job's content-bound land case-id was bound.
+    _reg("architect_forward_case_bound", "state"),
+    # A forward job's latest land_via_grant poll outcome was recorded (R1d
+    # started-then-refused-authoring backstop reads this).
+    _reg("architect_forward_outcome_recorded", "state"),
+    # A forward job's block file was observed landed on trunk.
+    _reg("architect_forward_landed", "state"),
+    # A log-review job was ordered: its adhoc entries minted + `ordered` set
+    # (folds in `landed_all=True` for a clean review with zero findings).
+    _reg("architect_log_ordered", "state"),
+    # A log-review adhoc entry's content-bound land case-id was bound.
+    _reg("architect_log_entry_case_bound", "state"),
+    # A log-review adhoc entry's land_via_grant observed "landed".
+    _reg("architect_log_entry_landed", "state"),
+    # A log-review job's aggregate poll outcome was recorded (`landed_all` +
+    # `last_outcome`, the R1d backstop's own read).
+    _reg("architect_log_poll_recorded", "state"),
+    # M-05: a reconcile's target block was recorded into
+    # `manifest["reconciled"]` (either a routed `architect.reconciled`
+    # report via core/router.py, or this module's own no-op backstop).
+    _reg("architect_reconciled_recorded", "state"),
+    # The architect's own `current_job` was cleared back to idle (any job
+    # kind's terminal transition — reconcile-observed, forward/log landed,
+    # forward/log refused-authoring, triage resolved).
+    _reg("architect_job_cleared", "state"),
+    # A queued job was popped off `manifest["architect_queue"]`'s FIFO front
+    # and became the architect's new `current_job`.
+    _reg("architect_job_popped", "state"),
+    # The architect's `current_job` was set busy with a just-popped job.
+    _reg("architect_job_dispatched", "state"),
+    # `eng._spawn_architect()` was called for the first time (`spawned`
+    # latched true) — never a second real spawn off this same flag.
+    _reg("architect_spawned_marked", "state"),
+    # R5: the batched visibility-flag digest was sent and its queue drained
+    # (`manifest["architect_flags"]` reset to empty).
+    _reg("architect_flags_digest_sent", "state"),
 ])
 
 
@@ -432,5 +539,23 @@ def drop(eng, manifest, effect, path, key, **fields):
     except (KeyError, TypeError):
         target = None
     popped = target.pop(key, None) if isinstance(target, dict) else None
+    _write(eng.events, effect, fields)
+    return popped
+
+
+def pop_index(eng, manifest, effect, path, index=0, **fields):
+    """Remove and return the item at `index` (default `0` — a FIFO's front)
+    from the LIST at `manifest<path>` AND write the typed `effect` event —
+    the list-shaped counterpart to `drop`'s dict-key pop (T7 sub-commit 12,
+    `core/architect.py`'s `manifest["architect_queue"]`, the one `core/`
+    FIFO this exists for). Absent/empty-safe: a missing or empty list is a
+    no-op that still records the intended effect, mirroring `drop`'s own
+    absent-safe discipline. Returns the popped value (or None)."""
+    _spec(effect)
+    try:
+        target = _nav(manifest, path, create=False)
+    except (KeyError, TypeError):
+        target = None
+    popped = target.pop(index) if isinstance(target, list) and target else None
     _write(eng.events, effect, fields)
     return popped
