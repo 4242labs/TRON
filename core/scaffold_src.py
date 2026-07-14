@@ -66,6 +66,13 @@ Resolution order:
 exists as a real directory — one obvious failure at the one place this is
 resolved, instead of 18 different confusing `FileNotFoundError`s deep inside
 unrelated `shutil.copytree` calls.
+
+DRIFT RISK (honestly disclosed, block 01-40 T1): this vendored copy is a
+point-in-time `git clone` of tron-meta's real `trivial-tip-converter`
+source — nothing here re-syncs it if the upstream fixture changes later, so
+it CAN silently drift from tron-meta's original over time. There is no
+automated check for that drift; re-vendoring (a fresh clone + commit here)
+is a manual step if/when the upstream fixture is intentionally updated.
 """
 import os
 import shutil

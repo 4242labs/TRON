@@ -4,20 +4,37 @@
 `core/r3_lint.py` is the R3 honesty lint: a harness may not fabricate a
 sender kind the real door (scripts/report.sh) could never produce, write
 `ctx.operator_inbox` at all (no real operator transport exists yet), nor
-mutate `manifest[...]` state directly. This is the REBUILT version (a hostile
-review proved the original pattern-matched a fingerprint of the one known
-offender, not the illegal CLASS — 10/10 plain evasions defeated it). Proves,
-live:
+mutate `manifest[...]` state directly. This is the SECOND rebuild — a first
+hostile review proved the original pattern-matched a fingerprint of the one
+known offender (10/10 plain evasions defeated it); a SECOND hostile review
+then proved that rebuild still enumerated the WRITE MECHANISM itself (a
+small, fixed set of shapes: open/write, json.dump, append_jsonl, a shelled
+`>>`) rather than the illegal class — 9/10 further plain evasions (all
+touching a mechanism outside that enumerated set) defeated it too, including
+`print(obj, file=handle)`, an idiom already used elsewhere in this tree
+(`core/sim/launch.py`, `core/sim/live.py`). This SECOND rebuild replaces
+mechanism-enumeration with a structural, deny-by-default call scan (see
+`core/r3_lint.py`'s own docstring). Proves, live:
 
-  RED (x10)  each of the 10 evasions the review demonstrated against the OLD
-             lint is caught by the rebuilt one: a renamed inbox-path
-             variable, a `file=` kwarg path, `json.dump` to the inbox
-             handle, a bare `open()` with no `with`, a same-file helper
-             function hiding the actual write, a `subprocess` shell `>>`
-             append, a `manifest` alias before subscripting, a depth-1
-             `manifest["cases"] = ...` wholesale overwrite, a `.update()`
-             call instead of a subscript assignment, and a `sender` dict
-             built via a helper call instead of an inline literal.
+  RED (x10)  each of the 10 evasions the FIRST review demonstrated is still
+             caught: a renamed inbox-path variable, a `file=` kwarg path,
+             `json.dump` to the inbox handle, a bare `open()` with no
+             `with`, a same-file helper function hiding the actual write, a
+             `subprocess` shell `>>` append, a `manifest` alias before
+             subscripting, a depth-1 `manifest["cases"] = ...` wholesale
+             overwrite, a `.update()` call instead of a subscript
+             assignment, and a `sender` dict built via a helper call
+             instead of an inline literal.
+  RED (x10)  each of the 10 FURTHER evasions the SECOND review demonstrated
+             is caught: `print(obj, file=handle)`, a chained
+             `pathlib.Path(...).open(...).write(...)`, `.write_text()`,
+             a target-path (not payload) helper-indirection, a
+             `getattr()`-obscured attribute name, `manifest` wrapped in a
+             throwaway `dict` container, `manifest` wrapped in a throwaway
+             `list` container, `manifest` obtained via a same-file helper's
+             `return`, an `os.replace()` tmp-file swap onto the real inbox
+             path, and `io.open` (an `Attribute` call, not the bare `open`
+             Name).
   GREEN      two legal shapes stay clean: a door-only report (worker sender,
              or no sender key at all — report.sh's own shape) written
              straight, AND the identical "helper indirection" MECHANISM used
@@ -125,6 +142,105 @@ def bad(eng):
     rep = {"tag": "operator.decision", "sender": _build_sender()}
     with open(eng.ctx.worker_inbox, "a") as ib:
         ib.write(json.dumps(rep) + "\\n")
+''',
+
+    # ── SECOND-REVIEW evasions (block 01-40 T1, second rebuild) — each one
+    #     defeated the FIRST rebuild's enumerated-mechanism design by using
+    #     a write/target-resolution SHAPE outside its fixed shape list. ──
+
+    "11_print_file_kwarg": '''
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    with open(eng.ctx.worker_inbox, "a") as ib:
+        print(json.dumps(rep), file=ib)
+''',
+
+    "12_pathlib_open_chain": '''
+import json
+import pathlib
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    pathlib.Path(eng.ctx.worker_inbox).open("a").write(json.dumps(rep) + "\\n")
+''',
+
+    "13_pathlib_write_text": '''
+import json
+import pathlib
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    p = pathlib.Path(eng.ctx.worker_inbox)
+    existing = p.read_text() if p.exists() else ""
+    p.write_text(existing + json.dumps(rep) + "\\n")
+''',
+
+    "14_target_path_helper_indirection": '''
+import json
+
+def _channel(eng):
+    return eng.ctx.worker_inbox
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    dest = _channel(eng)
+    with open(dest, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "15_getattr_constant_indirection": '''
+import json
+
+_CHANNEL_ATTR = "worker_inbox"
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    with open(getattr(eng.ctx, _CHANNEL_ATTR), "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+''',
+
+    "16_manifest_wrapped_in_dict": '''
+def bad(eng, case_id, verb):
+    bag = {"m": eng.manifest}
+    bag["m"]["cases"][case_id]["decision"] = {"verb": verb}
+''',
+
+    "17_manifest_wrapped_in_list": '''
+def bad(eng, case_id, verb):
+    refs = [eng.manifest]
+    refs[0]["cases"][case_id]["decision"] = {"verb": verb}
+''',
+
+    "18_manifest_via_helper_call": '''
+def _state(eng):
+    return eng.manifest
+
+def bad(eng, case_id, verb):
+    _state(eng)["cases"][case_id]["decision"] = {"verb": verb}
+''',
+
+    "19_write_tmp_then_rename_onto_inbox": '''
+import json
+import os
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    tmp = eng.ctx.worker_inbox + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(rep) + "\\n")
+    os.replace(tmp, eng.ctx.worker_inbox)
+''',
+
+    "20_io_open": '''
+import io
+import json
+
+def bad(eng):
+    rep = {"tag": "operator.decision", "sender": {"kind": "operator", "id": "x"}}
+    with io.open(eng.ctx.worker_inbox, "a") as fh:
+        fh.write(json.dumps(rep) + "\\n")
 ''',
 }
 
