@@ -34,7 +34,7 @@ An item may be proposed for **DISCARD** only when all three hold, and the report
 | Test | How to establish it |
 |:--|:--|
 | **Canon doesn't ask for it** | It is not in the scaffold kit (`templates/project-scaffold/templates/`), not in the audit checklist, and not required by a service in the locked profile |
-| **Nothing references it** | Grep the whole workspace — both repos, docs, CI, scripts, `package.json`, agent docs, skills. Zero live references. Cite the command you ran |
+| **Nothing references it** | Grep the whole workspace — both repos, docs, CI, scripts, the app's dependency manifest (`package.json` / `pyproject.toml` / `go.mod` / …), agent docs, skills. Zero live references. Cite the command you ran |
 | **It isn't live** | No open PR, no commit in the last 7 days, not an active session's worktree, not claimed by the operator when asked |
 
 Fail any one → the item is **UNCERTAIN**. Report it with what you found and let the operator rule.
@@ -113,8 +113,8 @@ Every service the operator did *not* confirm in the profile, but whose wiring is
 - [ ] Its env vars in `.env.example` — and its keys in the CI secret list
 - [ ] Its setup sections in `services-setup.md` / `mcp-setup.md`
 - [ ] Its MCP entries in `.mcp.json` / `.claude/settings.json`
-- [ ] Its dependencies in `package.json` — verify with a source-wide grep for the import before proposing;
-      a transitive or build-time dependency is not an unused one
+- [ ] Its dependencies in the app's manifest (`package.json` / `pyproject.toml` / `go.mod` / …) — verify with a
+      source-wide grep for the import before proposing; a transitive or build-time dependency is not an unused one
 
 A service that is *planned but not yet wired* is not a leftover. Ask before proposing.
 
@@ -123,8 +123,8 @@ A service that is *planned but not yet wired* is not a leftover. Ask before prop
 ## Sweep 6 — Filesystem junk
 
 - [ ] Committed `.DS_Store`, editor swap files, `*.orig` / `*.rej` merge residue
-- [ ] Committed build output, coverage reports, or `node_modules` — and the missing `.gitignore` line that
-      let them in (the ignore line is a **Gap**, the committed files are a **discard**)
+- [ ] Committed build output, coverage reports, or dependency directories (`node_modules`, `.venv`, `target/`, `dist/`) —
+      and the missing `.gitignore` line that let them in (the ignore line is a **Gap**, the committed files are a **discard**)
 - [ ] Scratch, temp, and one-off script files at a repo root with no reference anywhere
 - [ ] Empty directories left by a move, and `.gitkeep` files holding open a directory nothing writes to
 

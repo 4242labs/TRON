@@ -8,6 +8,13 @@ Service profile locked.
 
 **Templates source of truth:** `tron/tron-app/templates/project-scaffold/templates/`.
 
+**Toolchain-scoped, like the audit.** The kit's templates are written for the Node/Next stack. When the
+confirmed toolchain (profile Step 1) is something else, apply the **obligation** each template carries in
+that toolchain's own form — the app-repo hooks, the CI steps, the install-time bootstrap — and never copy
+a Node file into a non-Node project. `<root>` below means the `app/` subdir for a monorepo layout, the
+repo root for a flat one. Where the kit has no template for the toolchain, that gap is a **kit** defect:
+name it, hand it to FLYNN, and don't hand-write a one-off (shared law — a one-off is a defect).
+
 Additions first, removals last — see **Removals** below for why. Within the additions, apply Critical gaps
 first, then Important, then Nice-to-have; within each tier, follow the ordering below.
 
@@ -57,12 +64,12 @@ EOF
 ### 2. `.claude/settings.json` + PostToolUse hook
 
 Copy `templates/.claude/settings.json` to workspace root `.claude/settings.json`.
-Fill `<ABSOLUTE_PATH_TO_APP_SUBDIR>` with the absolute path to the Next.js `app/` subdir.
+Fill the app-path token with the absolute path to `<root>` (the `app/` subdir for a monorepo layout, the repo root for a flat one).
 Remove Vercel plugin if non-Vercel project.
 
 After writing: instruct user to open `/hooks` in Claude Code → dismiss. The watcher requires this to reload config.
 
-Verify: make a harmless Edit → confirm `npm test` runs in Claude terminal with no path errors.
+Verify: make a harmless Edit → confirm the hook fires in Claude terminal with no path errors.
 
 ### 3. `meta/pipeline.md`
 
@@ -80,15 +87,15 @@ Copy all 6 core agent files and 10 core skill files from templates. Fill `<PROJE
 
 Branch: `chore/upgrade-meta-agents-skills`
 
-### 5. `lefthook.yml` + `commitlint.config.js`
+### 5. Git hooks — commit-message + pre-push soundness check
 
-- Copy `templates/app/lefthook.yml` to app repo root (no dot prefix)
-- Copy `templates/app/app/commitlint.config.js` to Next.js `app/` subdir
-- Install: `cd <app_repo_root> && npx lefthook install`
+- Copy `templates/app/lefthook.yml` to the app repo root (no dot prefix). Lefthook is the kit's runner and is toolchain-independent — it shells out to whatever the confirmed toolchain uses.
+- Set the two hooks to the toolchain's commands: commit-message = a conventional-commit check (kit form: `commitlint`, needing the config from `templates/app/app/commitlint.config.js` copied to `<root>`); pre-push = the soundness check (Node `tsc --noEmit`, Python `ruff`/`mypy`, Go `go vet`, …).
+- Install: `cd <app_repo_root> && lefthook install`
 
-Verify: `git commit --allow-empty -m "BAD FORMAT"` → blocked by commitlint.
+Verify: `git commit --allow-empty -m "BAD FORMAT"` → blocked by the commit-message hook.
 
-Branch: `chore/upgrade-app-lefthook`
+Branch: `chore/upgrade-app-hooks`
 
 ### 6. `ci.yml` + `pr-base-guard.yml`
 
@@ -107,9 +114,9 @@ Implements `42hq/knowledge-base/principles-base.md §14 Portability`. Apply to *
 
 1. Create `<workspace>/worktrees/` if missing.
 2. Copy `tron/tron-app/templates/project-scaffold/templates/meta/scripts/setup-repo.sh` → `<repo>/scripts/setup-repo.sh` (`chmod +x`). Body must remain byte-identical to canonical; only the leading comment block and final echo line may be project-localized.
-3. **App repo only:** add `"prepare": "../scripts/setup-repo.sh"` to the `scripts` object in `<app>/app/package.json`. (Path is `../scripts/setup-repo.sh` because `package.json` is in the Next.js subdir.)
-4. **App repo:** run `cd <app>/app && npm install` (or `pnpm install`) — triggers the `prepare` hook which runs the bootstrap.
-   **Meta repo:** run `cd <meta> && ./scripts/setup-repo.sh` manually (no Node package manager).
+3. **App repo, toolchain with an install hook (Node):** add `"prepare": "../scripts/setup-repo.sh"` to the `scripts` object in `<root>/package.json`. **Toolchain without one:** wire the equivalent post-install hook, or document a one-time `./scripts/setup-repo.sh` run in the app README.
+4. **App repo:** trigger the bootstrap — `cd <root> && npm install` (or `pnpm install`) where the install hook exists; otherwise run `./scripts/setup-repo.sh` once.
+   **Meta repo:** run `cd <meta> && ./scripts/setup-repo.sh` manually (no package manager).
 5. Verify on both: `git config --local worktree.useRelativePaths` returns `true`.
 6. If existing worktrees were created before this upgrade, the script's `git worktree repair` call converts their pointers to relative paths automatically.
 7. Update `meta/skills/skill-worktree-and-branching.md` so worktree base is `<workspace>/worktrees/` (not `~/worktrees/`) and includes a §Setup section pointing to `scripts/setup-repo.sh`. If existing worktrees live under `~/worktrees/`, migrate them: `git worktree move ~/worktrees/<repo>--<branch> <workspace>/worktrees/<repo>--<branch>` (or remove + recreate if dirty).
@@ -125,9 +132,9 @@ After all Critical gaps are closed:
 
 - `meta/context.md` (if missing, or missing its `## Deploy` section — Enabled + Success check), `meta/principles.md` (ensure the definition-of-done carries the deploy gate: merged ≠ done; deploy-clean + verify required when a block declares a deploy check), `meta/CLAUDE.md` (if missing)
 - `meta/blocks/block-template.md` — ensure it carries the `Merge:` (`self | needs-user`) and `Deploy:` (`none | check`) header fields after `Reviewer class:`
-- `app/.nvmrc` at repo root (if missing or wrong location)
-- `app/.env.example` (if missing or incomplete)
-- `app/app/CLAUDE.md` (if missing)
+- The pinned language-version file at the app repo root, where the toolchain pins one (Node `.nvmrc`, Python `.python-version`, …) — if missing or in the wrong location
+- The app's `.env.example` (if missing or incomplete)
+- `<root>/CLAUDE.md` (if missing)
 - `mcp-setup.md` + MCP configuration (if missing)
 - `services-setup.md` (if missing)
 - `docs/playbook-infra.md` (if missing)
