@@ -139,6 +139,7 @@ import casestate      # noqa: E402 — core/casestate.py, wave 8's parked-case F
 import architect      # noqa: E402 — core/architect.py, wave 9's persistent pool-excluded architect
 import reviewers      # noqa: E402 — core/reviewers.py, wave 10's cadence-PULL reviewers
 import liveness        # noqa: E402 — core/liveness.py, wave 11's worker-silence side-system
+import emit            # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 _TERMINAL_STAGES = (gate.STAGE_CLOSED, gate.STAGE_ESCALATED)
 
@@ -224,8 +225,9 @@ def tick(eng):
             wid = gate_state.get("wid")
             wrec = (snap.manifest.get("workers") or {}).get(wid) if wid else None
             if wrec is not None:
-                wrec["status"] = "released"
-                wrec["reason"] = "close-confirmed"
+                emit.patch_obj(eng, "worker_slot_released", wrec,
+                               {"status": "released", "reason": "close-confirmed"},
+                               wid=wid, block=block)
         elif outcome == "escalate":
             result["escalated"].append((block, detail))
 
@@ -304,7 +306,8 @@ def tick(eng):
     marker = session.check(snap.manifest, view)
     result["session_end"] = marker
     if marker is not None:
-        snap.manifest["session"] = marker
+        emit.put(eng, snap.manifest, "session_ended", (), "session", marker,
+                 reason=marker.get("reason"))
         state.save(eng.ctx, snap.manifest)
         eng.log("flow", f"tick: clean SESSION-END — {marker['reason']}")
 

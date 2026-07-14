@@ -282,6 +282,13 @@ EFFECTS = dict([
     _reg("worker_stall_released", "state"),
     # A silent worker was pinged once for its episode (`pinged_at` marked).
     _reg("worker_pinged", "state"),
+
+    # ── core/tick.py — the bounded tick host (T7 sub-commit 10) ──
+    # A closed block's worker record was marked `released` (the slot-freeing
+    # half the real _release_worker can't do without a manifest handle).
+    _reg("worker_slot_released", "state"),
+    # The clean SESSION-END terminal marker was written (`manifest["session"]`).
+    _reg("session_ended", "state"),
 ])
 
 
