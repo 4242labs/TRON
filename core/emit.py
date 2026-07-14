@@ -289,6 +289,12 @@ EFFECTS = dict([
     _reg("worker_slot_released", "state"),
     # The clean SESSION-END terminal marker was written (`manifest["session"]`).
     _reg("session_ended", "state"),
+
+    # ── core/snapshot.py — the per-tick observe view (T7 sub-commit 11) ──
+    # The manifest["gates"] section was first established (fires once per run,
+    # the tick a gate is first needed) — the load-bearing alias every gate
+    # write and the tick plan share.
+    _reg("gates_section_seeded", "state"),
 ])
 
 

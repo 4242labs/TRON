@@ -62,7 +62,8 @@ piece of the DONE ladder that isn't purely git-observable"); everything else
 a gate stage needs is re-derived from real git/grants state on every call,
 so only THIS input needs the persist-gated release discipline.
 
-`gates` is a direct alias onto `manifest.setdefault("gates", {})` — mutating
+`gates` is a direct alias onto `manifest["gates"]` (established through the
+one emit API the tick a gate is first needed, block 01-38 T7) — mutating
 a `gate_state` dict inside it (exactly what `core.gate.advance` does)
 mutates the SAME object `core.tick`'s act phase later hands to
 `core.state.save`; no separate merge-back step, no copy skew.
@@ -92,6 +93,7 @@ import classify # noqa: E402 — core/classify.py, the structured-only door reso
 import vocab    # noqa: E402 — core/vocab.py, PROMOTED_SLOT_KEYS (block 01-37, T9)
 import intake   # noqa: E402 — core/intake.py, block 01-38 T1's per-agent drain + Origin
 import report as report_mod   # noqa: E402 — core/report.py, block 01-38 T2's identity-slot-free typed record
+import emit      # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 
 Snapshot = collections.namedtuple(
@@ -177,7 +179,15 @@ def build(eng):
     main_branch = eng.paths.get("main_branch", "main")
     trunk_tip = gitobs.tip_sha(root, main_branch, eng.dry)
 
-    gates = manifest.setdefault("gates", {})
+    # `gates` is a direct alias onto `manifest["gates"]` (see module docstring):
+    # every gate write (`core.gate.advance`, `core.router` via emit) and
+    # `core.tick`'s own plan read must share the SAME object. Establish it
+    # through emit the ONE tick it is first needed (fires once per run), then
+    # bind the alias to that real manifest-rooted dict; already-present ticks
+    # just bind (no re-emit).
+    if "gates" not in manifest:
+        emit.put(eng, manifest, "gates_section_seeded", (), "gates", {})
+    gates = manifest["gates"]
 
     # A worker.done/local-pass report is the ONE structural shape this brick
     # reads (core/gate.py's own `local_report` kwarg contract: a well-formed
