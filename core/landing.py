@@ -80,6 +80,7 @@ if _HERE not in sys.path:
 
 import grants   # noqa: E402  — respected contract, imported as-is (never forked)
 import gitobs   # noqa: E402  — core/gitobs.py, the ONE git-observation seam
+import emit      # noqa: E402  — core/emit.py, block 01-38 T7's single emit API (the forensic event)
 
 # Mirrors grants.CASE_ID_TOKEN's safe-token alphabet (land.sh's own
 # pre-interpolation guard) — used here only to SANITIZE a branch name into a
@@ -147,8 +148,8 @@ def _mint_or_reuse_grant(eng, case_id, block, branch, patch_id):
     g = grants.mint(eng.ctx.grants_dir, case_id, block, branch, patch_id,
                     ttl_min=eng._grant_ttl())
     if g:
-        eng.events.event("grant_minted", block=block, case=case_id,
-                         branch=branch, patch_id=patch_id)
+        emit.record(eng, "grant_minted", block=block, case=case_id,
+                    branch=branch, patch_id=patch_id)
         eng.log("flow", f"grant[{case_id}] minted for {block} ({branch} "
                         f"@ patch-id {patch_id[:12]})")
     return g, bool(g)

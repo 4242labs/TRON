@@ -40,6 +40,7 @@ if _HERE not in sys.path:
 
 import vocab       # noqa: E402 — core/vocab.py, the ONE closed vocabulary
 import casestate    # noqa: E402 — core/casestate.py, the parked-case FSM (reused, never forked)
+import emit          # noqa: E402 — core/emit.py, block 01-38 T7's single emit API (the forensic event)
 
 
 def admit(tag, slots, origin):
@@ -96,9 +97,9 @@ def refuse(eng, manifest, origin, attempted_tag, raw_text, reason):
     worker_id = origin.id if origin else None
     eng.log("flow", f"door: REFUSED a report from origin={origin!r} "
                     f"attempted_tag={attempted_tag!r} — {reason} — raw={text!r}")
-    eng.events.event("door_refusal",
-                     origin={"kind": origin.kind, "id": origin.id} if origin else None,
-                     attempted_tag=attempted_tag, reason=reason, raw=text)
+    emit.record(eng, "door_refusal",
+                origin={"kind": origin.kind, "id": origin.id} if origin else None,
+                attempted_tag=attempted_tag, reason=reason, raw=text)
     if manifest is None:
         return None
     durable_block = (manifest.get("workers") or {}).get(worker_id or "", {}).get("block")

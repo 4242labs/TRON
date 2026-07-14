@@ -420,9 +420,17 @@ def check_handshake(schema_path, events=None):
                  f"instance schema version={stamped!r} at {schema_path!r}"
                  + (f" ({err})" if err else ""))
         if events is not None:
-            events.event("must_be_zero", counter="vocab_version_handshake_failed",
-                         engine_version=VERSION, instance_version=stamped,
-                         schema_path=schema_path)
+            # block 01-38 T7: the counter event goes through the one emit API
+            # (its closed registry). Imported function-locally — `core/vocab.py`
+            # is foundational (imported very early by intake/door/...) and
+            # `core/emit.py` needs no place in its module-level import graph;
+            # this is the ONE pre-engine caller that holds a raw events sink
+            # and no `eng` yet, so `record_to` (not `record`) is the entry.
+            import emit
+            emit.record_to(events, "must_be_zero",
+                           counter="vocab_version_handshake_failed",
+                           engine_version=VERSION, instance_version=stamped,
+                           schema_path=schema_path)
         raise HandshakeError(detail)
 
 

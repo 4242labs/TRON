@@ -148,6 +148,7 @@ if _HERE not in sys.path:
 
 import gate   # noqa: E402 — core/gate.py, STAGE_ESCALATED/STAGE_CLOSED terminal vocabulary (read-only)
 import pipeline   # noqa: E402 — core/pipeline.py, ADR-0008 stale_landing_wall (read-only; pipeline imports only gitobs — no cycle)
+import emit   # noqa: E402 — core/emit.py, block 01-38 T7's single emit API (the must-be-zero counter event)
 
 VERBS = ("resume", "amend", "abandon")
 
@@ -634,9 +635,9 @@ def reping(eng, manifest, now):
                 "consecutive_fail": paging["consecutive_fail"], "at": now,
                 "snapshot": snapshot,
             }
-            eng.events.event("must_be_zero", counter="operator_page_permanent_fail",
-                             case_id=case_id, block=case.get("block"),
-                             consecutive_fail=paging["consecutive_fail"])
+            emit.record(eng, "must_be_zero", counter="operator_page_permanent_fail",
+                        case_id=case_id, block=case.get("block"),
+                        consecutive_fail=paging["consecutive_fail"])
             eng.log("operator", f"casestate: SAFE-PARK-AND-HALT for case {case_id!r} — {halt_detail}")
 
     return repinged

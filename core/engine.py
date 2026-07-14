@@ -138,6 +138,7 @@ import tick as core_tick       # noqa: E402 — core/tick.py, the whole per-tick
 import knobs as knobs_mod       # noqa: E402 — core/knobs.py, the ONE knobs.yaml seam (wave 16)
 import vocab                      # noqa: E402 — core/vocab.py, T2/T5's version handshake + emit-id set
 import intake as intake_mod        # noqa: E402 — core/intake.py, block 01-38 T1's private per-agent intake
+import emit                         # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 
 class BootupError(RuntimeError):
@@ -546,8 +547,8 @@ class Engine:
                               "detail": detail, "worker_id": worker_id, "kind": page_kind,
                               "receipt": receipt, "at": util.now_iso()}
 
-        self.events.event("operator_page", case=case_id, block=block, detail=detail,
-                          worker_id=worker_id, kind=page_kind, receipt=receipt, page_id=page_id)
+        emit.record(self, "operator_page", case=case_id, block=block, detail=detail,
+                    worker_id=worker_id, kind=page_kind, receipt=receipt, page_id=page_id)
         self.log("operator", f"PAGE[{page_kind}] case={case_id} block={block!r} "
                               f"worker={worker_id!r} receipt={receipt!r}: {detail}")
         return receipt
