@@ -167,6 +167,7 @@ if _HERE not in sys.path:
 
 import gitobs   # noqa: E402 — core/gitobs.py, the ONE git-observation seam
 import landing  # noqa: E402 — core/landing.py, Wave-1's ONE landing primitive
+import emit      # noqa: E402 — core/emit.py, block 01-38 T7's single emit API (patch_obj on gate_state)
 
 # NOTE (wave 7 consolidation): there is deliberately NO per-stage attempt cap
 # in this module — not here, not anywhere below. This gate is a PURE
@@ -263,9 +264,10 @@ def advance(eng, block, gate_state, local_report=None):
     raise ValueError(f"gate[{block}]: unknown stage {stage!r}")
 
 
-def _escalate(gate_state, detail):
-    gate_state["stage"] = STAGE_ESCALATED
-    gate_state["escalation"] = detail
+def _escalate(eng, gate_state, detail):
+    emit.patch_obj(eng, "gate_escalated", gate_state,
+                   {"stage": STAGE_ESCALATED, "escalation": detail},
+                   block=gate_state.get("block"), detail=detail)
     return "escalate", detail
 
 
@@ -311,11 +313,9 @@ def _churn_redrive_to_merge(eng, block, gate_state, stage_name):
              f"current trunk ancestor (churn — a force-push/rebase dropped "
              f"it after gate.merge observed it) — re-driving from gate.merge, "
              f"never reading stale content as landed (ADR-0009 §5 H2)")
-    gate_state["stage"] = STAGE_MERGE
-    gate_state["merged_sha"] = None
-    gate_state["trunk_verdict_sha"] = None
-    gate_state["trunk_verdict"] = None
-    gate_state["trunk_verdict_detail"] = None
+    emit.patch_obj(eng, "gate_churn_redriven", gate_state, {
+        "stage": STAGE_MERGE, "merged_sha": None, "trunk_verdict_sha": None,
+        "trunk_verdict": None, "trunk_verdict_detail": None}, block=block)
     eng.log("flow", detail)
     return "merge_churned", detail
 
@@ -343,7 +343,8 @@ def _advance_local(eng, block, gate_state, local_report):
                 slots={"block": block},
                 worker_id=wid,
                 kind="gate.local")
-        gate_state["local_ordered"] = True
+        emit.patch_obj(eng, "gate_local_ordered", gate_state,
+                       {"local_ordered": True}, block=block)
         eng.log("flow", f"gate[{block}] local: ordered local validation on {branch}")
 
     report = local_report if isinstance(local_report, dict) else None
@@ -352,8 +353,8 @@ def _advance_local(eng, block, gate_state, local_report):
     if verdict != "pass" or not evidence:
         return "local_waiting", "no well-formed local-pass report this call (bare/absent never advances)"
 
-    gate_state["local_report"] = report
-    gate_state["stage"] = STAGE_MERGE
+    emit.patch_obj(eng, "gate_local_passed", gate_state,
+                   {"local_report": report, "stage": STAGE_MERGE}, block=block)
     eng.log("flow", f"gate[{block}] local: accepted local-pass evidence on {branch} -> merge")
     return "local_passed", f"local evidence accepted: {evidence}"
 
@@ -376,14 +377,15 @@ def _advance_merge(eng, block, gate_state):
     # single-source in landing.stage_case_id, shared by all six landing callers).
     case_id = landing.stage_case_id(gate_state.get("merge_case_id"), "merge",
                                     branch, patch_id)
-    gate_state["merge_case_id"] = case_id
-    gate_state["merge_ordered"] = True
+    emit.patch_obj(eng, "gate_merge_ordered", gate_state,
+                   {"merge_case_id": case_id, "merge_ordered": True}, block=block)
 
     outcome = landing.land_via_grant(eng, case_id, block, branch, wid,
                                      "gate.merge", "gate-merge")
     if outcome == "landed":
-        gate_state["merged_sha"] = gitobs.tip_sha(eng.paths["root"], branch, eng.dry)
-        gate_state["stage"] = STAGE_TRUNK
+        emit.patch_obj(eng, "gate_merged", gate_state,
+                       {"merged_sha": gitobs.tip_sha(eng.paths["root"], branch, eng.dry),
+                        "stage": STAGE_TRUNK}, block=block)
         eng.log("flow", f"gate[{block}] merge: {branch} observed on trunk "
                         f"({str(gate_state['merged_sha'])[:8]}) -> trunk")
         return "merge_landed", f"{branch} observed on trunk @ {gate_state['merged_sha']}"
@@ -406,7 +408,7 @@ def _advance_trunk(eng, block, gate_state):
     suite."""
     sha = gate_state.get("merged_sha")
     if not sha:
-        return _escalate(gate_state,
+        return _escalate(eng, gate_state,
                          "gate.trunk reached with no merged_sha recorded — "
                          "gate.merge never observed a landing")
 
@@ -426,14 +428,15 @@ def _advance_trunk(eng, block, gate_state):
             eng.paths.get("test_env"), eng.paths.get("ci_check_name"),
             eng.dry, scratch_root=eng.ctx.scratch_dir)
         if status in ("pass", "fail"):
-            gate_state["trunk_verdict_sha"] = sha
-            gate_state["trunk_verdict"] = status
-            gate_state["trunk_verdict_detail"] = detail
+            emit.patch_obj(eng, "gate_trunk_verdict", gate_state,
+                           {"trunk_verdict_sha": sha, "trunk_verdict": status,
+                            "trunk_verdict_detail": detail}, block=block, status=status)
         eng.log("flow", f"gate[{block}] trunk: declared test on {str(sha)[:8]} -> "
                         f"{status}: {detail}")
 
     if status == "pass":
-        gate_state["stage"] = STAGE_RECORD
+        emit.patch_obj(eng, "gate_trunk_passed", gate_state,
+                       {"stage": STAGE_RECORD}, block=block)
         return "trunk_passed", detail
     if status == "fail":
         return "trunk_failed", detail
@@ -476,8 +479,9 @@ def _advance_record(eng, block, gate_state):
         # branch tip — a flip a worker committed eagerly, pre-order, is NOT yet
         # on trunk and must still be detectable as the record commit) means only
         # a block-doc commit BEYOND trunk counts as the flip.
-        gate_state["record_base_sha"] = gitobs.last_touching_sha(
-            eng.paths["root"], truth_ref, block_file)
+        emit.patch_obj(eng, "gate_record_rebased", gate_state,
+                       {"record_base_sha": gitobs.last_touching_sha(
+                           eng.paths["root"], truth_ref, block_file)}, block=block)
         if wid and not eng.dry:
             eng.emit(
                 "gate.record",
@@ -490,7 +494,8 @@ def _advance_record(eng, block, gate_state):
                 slots={"block": block, "record_path": block_file},
                 worker_id=wid,
                 kind="gate.record")
-        gate_state["record_ordered"] = True
+        emit.patch_obj(eng, "gate_record_ordered", gate_state,
+                       {"record_ordered": True}, block=block)
         eng.log("flow", f"gate[{block}] record: ordered ✅ status-flip on {branch}")
 
     cur_sha = gitobs.last_touching_sha(eng.paths["root"], branch, block_file)
@@ -507,7 +512,7 @@ def _advance_record(eng, block, gate_state):
                                          block_id=block,
                                          archive_dir=eng.paths.get("archive_rel"))
     if not ok:
-        return _escalate(gate_state,
+        return _escalate(eng, gate_state,
                          f"record commit on {branch} is out-of-gate: {detail}")
 
     patch_id = gitobs.patch_id(eng.paths["root"], branch, truth_ref, eng.dry)
@@ -515,13 +520,15 @@ def _advance_record(eng, block, gate_state):
     # single-source in landing.stage_case_id).
     case_id = landing.stage_case_id(gate_state.get("record_case_id"), "record",
                                     branch, patch_id)
-    gate_state["record_case_id"] = case_id
+    emit.patch_obj(eng, "gate_record_cased", gate_state,
+                   {"record_case_id": case_id}, block=block)
 
     outcome = landing.land_via_grant(eng, case_id, block, branch, wid,
                                      "gate.record", "gate-record")
     if outcome == "landed":
-        gate_state["record_landed_sha"] = gitobs.tip_sha(eng.paths["root"], branch, eng.dry)
-        gate_state["stage"] = STAGE_CLOSE
+        emit.patch_obj(eng, "gate_recorded", gate_state,
+                       {"record_landed_sha": gitobs.tip_sha(eng.paths["root"], branch, eng.dry),
+                        "stage": STAGE_CLOSE}, block=block)
         eng.log("flow", f"gate[{block}] record: ✅ observed on trunk "
                         f"({str(gate_state['record_landed_sha'])[:8]}) -> close")
         return "record_landed", f"✅ observed on trunk @ {gate_state['record_landed_sha']}"
@@ -566,7 +573,8 @@ def _advance_close(eng, block, gate_state):
                 slots={"block": block},
                 worker_id=wid,
                 kind="close.worker")
-        gate_state["close_ordered"] = True
+        emit.patch_obj(eng, "gate_close_ordered", gate_state,
+                       {"close_ordered": True}, block=block)
         eng.log("flow", f"gate[{block}] -> close (slot held)")
         return "close_ordered", f"ordered {wid or '(no worker)'} to close out"
 
@@ -583,7 +591,8 @@ def _advance_close(eng, block, gate_state):
         # fix; single-source in landing.stage_case_id).
         case_id = landing.stage_case_id(gate_state.get("close_case_id"), "close",
                                         branch, pid)
-        gate_state["close_case_id"] = case_id
+        emit.patch_obj(eng, "gate_close_cased", gate_state,
+                       {"close_case_id": case_id}, block=block)
         outcome = landing.land_via_grant(eng, case_id, block, branch, wid,
                                          "close.worker", "gate-close")
         if outcome == "pending":
@@ -602,6 +611,6 @@ def _advance_close(eng, block, gate_state):
 
     if wid:
         eng._release_worker(wid, reason="close-confirmed")
-    gate_state["stage"] = STAGE_CLOSED
+    emit.patch_obj(eng, "gate_closed", gate_state, {"stage": STAGE_CLOSED}, block=block)
     eng.log("flow", f"gate[{block}] close confirmed -> worker released")
     return "closed", f"replica clean on {branch}; {wid or '(no worker)'} released"

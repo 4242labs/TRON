@@ -142,6 +142,25 @@ EFFECTS = dict([
     _reg("case_page_permfailed", "state"),
     # R8 "seen" receipt: a genuine inbound reply named an open case.
     _reg("case_seen", "state"),
+
+    # ── core/gate.py — the DONE-gate ladder (T7 sub-commit 3) ──
+    # These patch the live `gate_state` (a manifest["gates"][block] sub-object
+    # the gate functions hold by reference) via emit.patch_obj.
+    _reg("gate_escalated", "state"),         # -> BLOCKED (out-of-gate / no merged_sha)
+    _reg("gate_churn_redriven", "state"),    # H2: stale merged_sha -> re-drive from merge
+    _reg("gate_local_ordered", "state"),     # local validation ordered
+    _reg("gate_local_passed", "state"),      # local evidence accepted -> merge
+    _reg("gate_merge_ordered", "state"),     # merge case-id bound + ordered
+    _reg("gate_merged", "state"),            # branch observed on trunk -> trunk
+    _reg("gate_trunk_verdict", "state"),     # trunk re-validation verdict cached
+    _reg("gate_trunk_passed", "state"),      # trunk green -> record
+    _reg("gate_record_rebased", "state"),    # record baseline re-anchored at order time
+    _reg("gate_record_ordered", "state"),    # ✅ status-flip ordered
+    _reg("gate_record_cased", "state"),      # record landing case-id bound
+    _reg("gate_recorded", "state"),          # ✅ observed on trunk -> close
+    _reg("gate_close_ordered", "state"),     # close-out ordered
+    _reg("gate_close_cased", "state"),       # close landing case-id bound
+    _reg("gate_closed", "state"),            # replica clean -> CLOSED
 ])
 
 
@@ -236,6 +255,21 @@ def patch(eng, manifest, effect, path, updates, **fields):
     patched dict."""
     _spec(effect)
     target = _nav(manifest, path, create=True)
+    target.update(updates)
+    _write(eng.events, effect, fields)
+    return target
+
+
+def patch_obj(eng, effect, target, updates, **fields):
+    """Like `patch`, but the caller holds the manifest SUB-OBJECT directly
+    (a `gate_state`, a `case`, ...) instead of the manifest root + a path —
+    the shape for a module handed one live state record to advance
+    (`core/gate.py::advance` gets `gate_state`, never `manifest`). Applies
+    `updates` onto `target` in place AND writes the typed event. `target`
+    MUST be the real manifest-rooted object (mutating a throwaway copy would
+    not persist) — the caller's responsibility, exactly as it already was
+    for the raw in-place mutation this replaces. Returns `target`."""
+    _spec(effect)
     target.update(updates)
     _write(eng.events, effect, fields)
     return target
