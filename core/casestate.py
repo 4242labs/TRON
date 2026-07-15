@@ -167,6 +167,17 @@ VERBS = ("resume", "amend", "abandon")
 #     FLOOR itself halt (see `PAGE_PERMANENT_FAIL_AFTER` below) — the case
 #     stays open forever either way (never dropped; `core/session.py`'s own
 #     R3 keeps a run alive on any open case, permanently-failed or not). ──
+# block 01-38 T19 W1 (H1 structural fix) — the VERIFIED set of `core/gate.py`
+# stages from which `landing.land_via_grant` is ever actually called
+# (`_advance_merge`/`_advance_record`/`_advance_close` — grep-confirmed
+# against `core/gate.py` itself, NOT assumed): `gate.trunk` (`_advance_trunk`)
+# only re-validates CI on an already-merged sha and never lands anything, so
+# it is deliberately EXCLUDED here despite an earlier draft of this fix
+# guessing it belonged. `open_case` below snapshots the raising worker's own
+# block gate stage against this set to derive `wall_landing` — see its own
+# comment for the full rationale.
+_LANDING_GATE_STAGES = frozenset({gate.STAGE_MERGE, gate.STAGE_RECORD, gate.STAGE_CLOSE})
+
 PAGE_REPING_AFTER = 1             # pace units an un-delivered page holds before a forced re-ping (bounded — at most once per pace() call, never a busy-loop)
 PAGE_CHANNEL_ESCALATE_AFTER = 3   # consecutive failed/absent deliveries -> escalate the CHANNEL — never terminal, never stops the ladder
 # R8 — "permanent transport failure is counted (must-be-zero) and drives a
@@ -336,6 +347,26 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
     gates = manifest.get("gates") or {}
     gate_state = gates.get(block) if block else None
     prev_stage = gate_state.get("stage") if gate_state else None
+    # block 01-38 T19 W1 (H1 structural fix) — ENGINE-OBSERVED landing-ness,
+    # never a worker's own free-text label. `prev_stage` above is ALREADY the
+    # raising worker's own block gate stage at THIS exact tick (`_route_wall`
+    # calls straight through to here, same tick, same manifest snapshot — no
+    # separate re-derivation, no second source of truth). `_LANDING_STAGES`
+    # is the VERIFIED (not assumed) set of stages `core/gate.py` itself calls
+    # `landing.land_via_grant` from — `gate.merge`/`gate.record`/`close.worker`
+    # (`_advance_merge`/`_advance_record`/`_advance_close`); `gate.trunk`
+    # (`_advance_trunk`) never lands anything (it only re-validates CI on an
+    # already-merged sha), so it is DELIBERATELY excluded despite an earlier
+    # draft of this fix assuming otherwise — a land.sh grant refusal can only
+    # ever be raised from one of the three stages that actually call it. A
+    # worker CANNOT mislabel this: the field is set from the engine's own
+    # durable gate state, never from anything the wall's free text claims.
+    # Fail-safe/migration story: a case whose block gate was NOT at one of
+    # these stages (or has no gate at all — a block-less wall) gets
+    # `wall_landing=False`, and `pipeline.stale_landing_wall` below treats
+    # any FALSY value (including a pre-migration case with the key entirely
+    # absent) identically — never suppressed, always pages.
+    wall_landing = prev_stage in _LANDING_GATE_STAGES
 
     emit.put(eng, manifest, "case_opened", ("cases",), case_id, {
         "case_id": case_id,
@@ -347,6 +378,7 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
         "decision": None,
         "opened_at": _now_iso(),
         "prev_stage": prev_stage,
+        "wall_landing": wall_landing,   # T19 W1 — engine-observed, NEVER worker-declared
         "owner": "architect",      # wave 18 (GAP-E): architect-first, always
     }, case_id=case_id, block=block, source=source)
 
@@ -392,7 +424,8 @@ def open_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
     # modules are always fully loaded by the time ANY function in either is
     # actually called, so a deferred import inside the function body is safe.
     import architect  # noqa: E402 (local, deliberately deferred — see above)
-    architect.enqueue_triage(eng, manifest, case_id, source, block, detail, worker_id=worker_id)
+    architect.enqueue_triage(eng, manifest, case_id, source, block, detail,
+                             worker_id=worker_id, wall_landing=wall_landing)
     eng.log("flow", f"casestate: opened case {case_id!r} for block={block!r} "
                     f"source={source!r} — routed ARCHITECT-FIRST (PMT-TRIAGE), "
                     f"never an immediate operator page: {detail}")
@@ -763,8 +796,11 @@ def reping(eng, manifest, now):
         # of an unanswered page — the thing paged about is provably resolved on
         # trunk (recorded as a distinct decision, loudly logged); the FLOOR's
         # invariant ("never silently drop an UNANSWERED page") holds.
+        # block 01-38 T19 W1: reads the case's own engine-observed
+        # `wall_landing` flag (persisted by `open_case` at case-creation time),
+        # never `case.get("detail")`'s free text.
         if pipeline.stale_landing_wall(manifest, case.get("source"),
-                                       case.get("worker_id"), case.get("detail")):
+                                       case.get("worker_id"), case.get("wall_landing")):
             emit.patch(eng, manifest, "case_stale_resolved", ("cases", case_id),
                        {"decision": "stale-resolved-on-trunk",
                         "settled_at": _now_iso()}, case_id=case_id)

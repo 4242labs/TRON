@@ -62,30 +62,34 @@ def block_landed_closed(manifest, block):
     return ((manifest.get("gates") or {}).get(block) or {}).get("stage") == "closed"
 
 
-def _is_landing_wall(detail):
-    """A land.sh-refusal signature in a wall's free-text detail. Additive and
-    fail-safe: a landing wall whose text misses the signature simply pages
-    (ADR-0008 §3.2), so this only ever NARROWS suppression to genuine landing
-    walls — a dep-cycle / untestable-AC wall never matches."""
-    d = (detail or "").lower()
-    return "land.sh" in d or ("land" in d and ("grant" in d or "refus" in d
-                                               or "content mismatch" in d))
+def stale_landing_wall(manifest, source, worker_id, wall_landing_observed):
+    """ADR-0008 + block 01-38 T19 W1 (H1 structural fix): True iff a
+    `worker.wall` is a LANDING wall now moot — the raising `engineer-<block>`
+    worker's block has closed out on trunk. `wall_landing_observed` is the
+    ENGINE-OBSERVED flag `core/casestate.py::open_case` snapshots from the
+    raising worker's OWN block gate stage at case-creation time (`True` only
+    when that stage was one `land_via_grant` is actually called from —
+    `gate.merge`/`gate.record`/`close.worker`) — NEVER a substring sniff over
+    the wall's free-text detail (the old `_is_landing_wall`, DELETED here: a
+    worker's free text is untrusted and could incidentally carry landing
+    keywords for a genuinely non-landing ask, e.g. a credential-rotation
+    wall — the exact silent-page-drop class this fix closes).
 
-
-def stale_landing_wall(manifest, source, worker_id, detail):
-    """ADR-0008: True iff a `worker.wall` is a LANDING wall now moot — the
-    raising `engineer-<block>` worker's block has closed out on trunk. Every
-    unresolvable input fails TOWARD paging (returns False): a non-worker.wall
-    source, a non-`engineer-` worker (an architect self-escalation carries
-    ARCHITECT_WID → never suppressed), a detail without a landing signature, or
-    a block whose gate is not `"closed"`. The one signal it trusts — the gate
+    Every unresolvable input fails TOWARD paging (returns False): a
+    non-worker.wall source, a non-`engineer-` worker (an architect
+    self-escalation carries ARCHITECT_WID → never suppressed), a FALSY
+    `wall_landing_observed` (explicit `False` OR simply absent/`None` — the
+    migration story: any case/job that predates this fix, or was never
+    routed through `open_case`'s own snapshot at all, correctly fails open
+    and pages, no back-fill needed), or a block whose gate is not
+    `"closed"`. The one signal it trusts for the closed-check — the gate
     stage — is durable across branch teardown and correct in live and dry."""
     if source != "worker.wall":
         return False
     wid = worker_id or ""
     if not wid.startswith("engineer-"):
         return False
-    if not _is_landing_wall(detail):
+    if not wall_landing_observed:
         return False
     return block_landed_closed(manifest, wid[len("engineer-"):])
 

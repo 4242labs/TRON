@@ -956,15 +956,19 @@ def main():
                   "01-04": {"stage": "merge"},     # still in flight
                   "01-05": {"stage": "closed"}},   # closed but wall is non-landing
         "cases": {
+            # block 01-38 T19 W1: wall_landing=True on the two GENUINE landing
+            # walls (case-stale, case-wall-open) — the engine-observed flag a
+            # real `open_case` snapshot would have set for these; absent
+            # (default) on case-wall-nondetail, the genuinely non-landing one.
             "case-stale": {"case_id": "case-stale", "block": None, "source": "worker.wall",
-                           "worker_id": "engineer-01-03", "detail": _LAND, "owner": "operator",
-                           "decision": None, "paging": _paging()},
+                           "worker_id": "engineer-01-03", "detail": _LAND, "wall_landing": True,
+                           "owner": "operator", "decision": None, "paging": _paging()},
             "case-sentry": {"case_id": "case-sentry", "block": "09-09", "source": "sentry.cap",
                             "worker_id": "engineer-09-09", "detail": "gate cap", "owner": "operator",
                             "decision": None, "paging": _paging()},
             "case-wall-open": {"case_id": "case-wall-open", "block": "01-04", "source": "worker.wall",
-                               "worker_id": "engineer-01-04", "detail": _LAND, "owner": "operator",
-                               "decision": None, "paging": _paging()},
+                               "worker_id": "engineer-01-04", "detail": _LAND, "wall_landing": True,
+                               "owner": "operator", "decision": None, "paging": _paging()},
             "case-wall-nondetail": {"case_id": "case-wall-nondetail", "block": None,
                                     "source": "worker.wall", "worker_id": "engineer-01-05",
                                     "detail": "dependency cycle 01-06<->01-07", "owner": "operator",

@@ -891,7 +891,8 @@ def run_phantom_triage_grace_scenario():
            "gates": {"01-03": {"stage": "closed"}}}
     jobS0 = {"kind": "triage", "triage_id": "triage-stale-0", "source": "worker.wall",
              "block": None, "case_id": None, "worker_id": "engineer-01-03",
-             "detail": _WALL_LAND, "ordered": True, "dispatch_seq": True, "verdict": None, "resolved": False}
+             "detail": _WALL_LAND, "wall_landing": True,   # block 01-38 T19 W1: genuine landing wall, structurally observed
+             "ordered": True, "dispatch_seq": True, "verdict": None, "resolved": False}
     mS0["architect"]["current_job"] = jobS0
     _pages_before = len(getattr(eng, "operator_pages", []))
     for _ in range(architect.RESPAWN_CAP + 1):
@@ -914,7 +915,8 @@ def run_phantom_triage_grace_scenario():
                                       "owner": "architect", "decision": None}}}
     jobS1 = {"kind": "triage", "triage_id": "triage-stale-1", "source": "worker.wall",
              "block": None, "case_id": "case-stale-1", "worker_id": "engineer-01-03",
-             "detail": _WALL_LAND, "ordered": True, "dispatch_seq": True, "verdict": None, "resolved": False}
+             "detail": _WALL_LAND, "wall_landing": True,   # block 01-38 T19 W1: genuine landing wall, structurally observed
+             "ordered": True, "dispatch_seq": True, "verdict": None, "resolved": False}
     mS1["architect"]["current_job"] = jobS1
     for _ in range(architect.RESPAWN_CAP + 1):
         architect._advance_triage(eng, mS1, jobS1)
@@ -937,7 +939,8 @@ def run_phantom_triage_grace_scenario():
                                       "owner": "architect", "decision": None}}}
     jobS2 = {"kind": "triage", "triage_id": "triage-stale-2", "source": "worker.wall",
              "block": None, "case_id": "case-stale-2", "worker_id": "engineer-01-03",
-             "detail": _WALL_LAND, "ordered": True, "dispatch_seq": True, "verdict": None, "resolved": False}
+             "detail": _WALL_LAND, "wall_landing": True,   # block 01-38 T19 W1: genuine landing wall, structurally observed
+             "ordered": True, "dispatch_seq": True, "verdict": None, "resolved": False}
     mS2["architect"]["current_job"] = jobS2
     architect._advance_triage(eng, mS2, jobS2)
     paged = getattr(eng, "operator_pages", [])

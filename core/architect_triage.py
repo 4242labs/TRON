@@ -64,13 +64,24 @@ def _next_triage_id(eng, manifest):
     return f"triage-{n}"
 
 
-def enqueue_triage(eng, manifest, case_id, source, block, detail, worker_id=None):
+def enqueue_triage(eng, manifest, case_id, source, block, detail, worker_id=None,
+                   wall_landing=False):
     """Wave 18 (GAP-E): a raised wall/escalation becomes a PMT-TRIAGE job
     FIRST — NEVER an immediate operator page. Called from `core/
     casestate.py::open_case` (case-bearing, `case_id` set — worker.wall/
     sentry.cap/liveness-stall) and `core/classify.py::_triage_unclassified`
     (case-less, `case_id=None`, `block=None` — raw free text). Idempotent
-    for a case-bearing job only — see `_has_triage_job`'s own docstring."""
+    for a case-bearing job only — see `_has_triage_job`'s own docstring.
+
+    `wall_landing` (block 01-38 T19 W1, H1 structural fix): the ENGINE-
+    OBSERVED flag `open_case` snapshots from the raising worker's own block
+    gate stage at case-creation time (never a worker-declared label) —
+    threaded onto the job here so `_advance_triage`'s stale-wall downgrade
+    (below) can read it without a second manifest lookup. Defaults False —
+    the block-less/case-less caller (`core/router.py::_route_wall`'s
+    no-durable-block arm) has no gate to snapshot at all, so a block-less
+    wall is NEVER treated as a landing wall (fail-safe: absent ⇒ not
+    landing ⇒ pages)."""
     architect._ensure_installed(eng, manifest)
     # R1a (ADR-0005) final backstop: the architect can never be the SOURCE of a
     # triage — its own narration creates nothing. The call-site guards (classify /
@@ -86,8 +97,8 @@ def enqueue_triage(eng, manifest, case_id, source, block, detail, worker_id=None
     triage_id = _next_triage_id(eng, manifest)
     job = {"kind": "triage", "triage_id": triage_id, "case_id": case_id,
           "source": source, "block": block, "detail": detail,
-          "worker_id": worker_id, "ordered": False, "verdict": None,
-          "note": None, "adhoc": None, "resolved": False}
+          "worker_id": worker_id, "wall_landing": wall_landing, "ordered": False,
+          "verdict": None, "note": None, "adhoc": None, "resolved": False}
     emit.append(eng, manifest, "architect_triage_job_enqueued", ("architect_queue",),
                job, triage_id=triage_id, case_id=case_id, source=source, block=block)
     eng.log("flow", f"architect: PMT-TRIAGE queued (triage_id={triage_id!r}, "
@@ -205,8 +216,12 @@ def _advance_triage(eng, manifest, job):
     # block has already closed out on trunk is moot — revalidate against durable
     # trunk truth (the gate stage, which survives branch teardown) and retire it
     # benignly rather than paging the operator about a wall that no longer holds.
+    # block 01-38 T19 W1 (H1 structural fix): "genuine LANDING" is read off
+    # `job["wall_landing"]` — the engine-observed flag `open_case` snapshotted
+    # at case-creation time — NEVER a substring sniff over `job["detail"]`'s
+    # free text (a worker cannot mislabel a structural fact it never sets).
     if job["verdict"] == "operator" and pipeline.stale_landing_wall(
-            manifest, job.get("source"), job.get("worker_id"), job.get("detail")):
+            manifest, job.get("source"), job.get("worker_id"), job.get("wall_landing")):
         stale_note = ("stale landing worker.wall — block closed on trunk; "
                       "operator NOT paged (ADR-0008)")
         emit.patch_obj(eng, "architect_triage_verdict_downgraded_stale", job,
