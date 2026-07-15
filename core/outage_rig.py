@@ -938,15 +938,19 @@ def grep_proof():
     ok("SRC3 (NO-UNBOUNDED-RE-SPAWN KILLER — must be GREEN): `fill` checks "
        "the fleet-paused flag BOTH before the whole dispatch pass AND "
        "immediately after every failed spawn (mid-loop `break`) — never a "
-       "loop that could re-attempt past the threshold within one call",
-       fill_body.count("_fleet_paused(manifest)") >= 2,
-       f"_fleet_paused(manifest) occurrences in fill()="
-       f"{fill_body.count('_fleet_paused(manifest)')}")
+       "loop that could re-attempt past the threshold within one call "
+       "(block 01-38 T19 gate fix L2: retargeted to the single-source "
+       "`casestate.fleet_paused`, the local `_fleet_paused` byte-duplicate "
+       "was deleted — never a thin alias)",
+       fill_body.count("casestate.fleet_paused(manifest)") >= 2,
+       f"casestate.fleet_paused(manifest) occurrences in fill()="
+       f"{fill_body.count('casestate.fleet_paused(manifest)')}")
 
     ok("SRC4: `core/architect.py`'s clear-ahead forward-job scan is "
        "guarded by the SAME pause check ('spawn nothing new while paused' "
-       "extended to the architect's own queue)",
-       "if not _fleet_paused(manifest):" in src["architect"]
+       "extended to the architect's own queue) (L2: retargeted to "
+       "`casestate.fleet_paused`, the single source)",
+       "if not casestate.fleet_paused(manifest):" in src["architect"]
        and "_enqueue_forward_jobs(eng, manifest, view)" in src["architect"],
        "grep-equivalent scan of core/architect.py::enqueue")
 

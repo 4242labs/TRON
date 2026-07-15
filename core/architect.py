@@ -247,20 +247,6 @@ def gated_blocks(manifest):
     return gated
 
 
-def _fleet_paused(manifest):
-    """Wave 19 (GAP-C, fleet-outage self-release): True while a still-open
-    fleet-outage case sits on file — an IDENTICAL, deliberately duplicated
-    helper to `core/switchboard.py`'s own (never imported — keeps this
-    module's existing dependency direction, `casestate`/`pipeline`/
-    `gitobs`/`landing` only, unchanged); both read the SAME `manifest[
-    "cases"]` shape, so an operator resume or an architect self-resolve
-    (`core/casestate.py::settle`/`architect_resolve`, both unedited by this
-    wave) is honored the instant either clears the case, from either
-    module, with no cross-import and no second boolean to keep in sync."""
-    return any(c.get("kind") == "fleet_outage" and c.get("decision") is None
-              for c in (manifest.get("cases") or {}).values())
-
-
 def _ensure_installed(eng, manifest):
     """Lazily install `manifest["architect"]` via emit the FIRST time any of
     this module's own entry points (`enqueue`/`enqueue_triage`/
@@ -291,7 +277,7 @@ def enqueue(eng, manifest, view, landed_blocks):
     structurally never happens while dispatch is paused (nothing new lands
     with nothing new spawned), so no separate guard is needed there."""
     _ensure_installed(eng, manifest)
-    if not _fleet_paused(manifest):
+    if not casestate.fleet_paused(manifest):
         _enqueue_forward_jobs(eng, manifest, view)
     for block in landed_blocks:
         _enqueue_reconcile(eng, manifest, view, block)

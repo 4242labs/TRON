@@ -213,6 +213,23 @@ def parked_blocks(manifest):
     return {c["block"] for c in cases.values() if c.get("block") and c.get("decision") is None}
 
 
+def fleet_paused(manifest):
+    """Wave 19 (GAP-C, fleet-outage self-release): True while a still-open
+    fleet-outage case sits on file — derived LIVE off `manifest["cases"]`,
+    never a second, driftable boolean of its own. `core/architect.py`'s
+    clear-ahead forward-job scan and `core/switchboard.py::fill`'s
+    spawn-then-immediate-death signal both call THIS one function (block
+    01-38 T19 gate fix L2 — this module already houses `parked_blocks`, the
+    sibling `manifest["cases"]` query helper; before this fix each of those
+    two modules carried its OWN byte-identical copy of this body). An
+    operator resume or an architect self-resolve (`settle`/
+    `architect_resolve`, both here, unedited by this move) is honored the
+    instant either clears the case, from either caller, with no second
+    boolean to keep in sync."""
+    return any(c.get("kind") == "fleet_outage" and c.get("decision") is None
+              for c in (manifest.get("cases") or {}).values())
+
+
 def dispatch_excluded_blocks(manifest):
     """Blocks `core/tick.py` must hide from `core/switchboard.py::fill`'s
     dispatch view THIS tick: every still-parked block (an open case; its

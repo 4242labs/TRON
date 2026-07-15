@@ -58,8 +58,10 @@ BL0 block-less slice already proves works) rather than an immediate operator
 page; the architect's own `operator` verdict is what floors it onto the
 operator (wave 17's `reping`, also reused verbatim, unedited — a
 quota/auth outage is the operator's to fix, never the architect's or a
-worker's). `_fleet_paused` (below) derives "is dispatch currently paused"
-LIVE off `manifest["cases"]` every `fill` call — never a second, driftable
+worker's). `casestate.fleet_paused` (block 01-38 T19 gate fix L2 — the
+single source both this module and `core/architect.py` call, no longer a
+byte-duplicated local helper) derives "is dispatch currently paused" LIVE
+off `manifest["cases"]` every `fill` call — never a second, driftable
 boolean of its own — so the operator's `resume` (`core/casestate.py::
 settle`, unedited) or the architect resolving the case itself
 (`architect_resolve`, unedited) lifts the pause the SAME tick either clears
@@ -96,23 +98,12 @@ def _agent_id(block):
     return f"engineer-{block}"
 
 
-def _fleet_paused(manifest):
-    """Wave 19 (GAP-C): True while a still-open fleet-outage case sits on
-    file — derived LIVE off `manifest["cases"]`, never a second, driftable
-    boolean of its own (see module docstring). `core/architect.py` carries
-    an IDENTICAL, deliberately duplicated helper (never imported — keeps
-    that module's own dependency direction unchanged) so its own
-    clear-ahead forward-job scan honors the SAME pause."""
-    return any(c.get("kind") == "fleet_outage" and c.get("decision") is None
-              for c in (manifest.get("cases") or {}).values())
-
-
 def _record_fleet_death(eng, manifest, agent_id, block_id, exc):
     """Wave 19 (GAP-C): one fleet-wide spawn-then-immediate-death event —
     bumps `manifest["fleet"]["consecutive_deaths"]` and, past
     `fleet_outage_deaths` (`core/knobs.py`), self-releases: pauses dispatch
     + raises the ONE fleet-outage escalation, architect-first (never a
-    second one while this one is still open — guarded by `_fleet_paused`,
+    second one while this one is still open — guarded by `casestate.fleet_paused`,
     never a separate latch that could go stale)."""
     # Read the current fleet state (never a setdefault-install — the emit API's
     # own path navigation seeds the section on first write; T7).
@@ -132,7 +123,7 @@ def _record_fleet_death(eng, manifest, agent_id, block_id, exc):
                     f"{consecutive}")
 
     threshold = knobs_mod.load(eng.ctx).fleet_outage_deaths
-    if consecutive < threshold or _fleet_paused(manifest):
+    if consecutive < threshold or casestate.fleet_paused(manifest):
         return
 
     detail = (f"fleet outage: {consecutive} consecutive worker "
@@ -153,7 +144,7 @@ def _record_fleet_death(eng, manifest, agent_id, block_id, exc):
 def _record_fleet_progress(eng, manifest):
     """Wave 19 (GAP-C): a spawn that genuinely SUCCEEDED — "outage clearing"
     IS a subsequent spawn succeeding (the design's own words) — resets the
-    consecutive-death counter. Deliberately NOT gated on `_fleet_paused`:
+    consecutive-death counter. Deliberately NOT gated on `casestate.fleet_paused`:
     while paused, `fill` (below) never even attempts a spawn, so this is
     only ever reached post-resume, exactly where the reset belongs. Only
     emits (and only touches the manifest) when there is a live count to
@@ -206,7 +197,7 @@ def fill(eng, snapshot, view=None):
     #     while a fleet-outage case sits open (never re-spawning into the
     #     outage; see module docstring). Checked FIRST, before any free-slot
     #     accounting — a pause means zero dispatch, not a partial one. ──
-    if _fleet_paused(manifest):
+    if casestate.fleet_paused(manifest):
         if not manifest.get("paused"):
             emit.put(eng, manifest, "fleet_dispatch_paused", (), "paused", True)
         return []
@@ -275,7 +266,7 @@ def fill(eng, snapshot, view=None):
                       agent_id=agent_id, block=block["id"])
             _record_fleet_death(eng, manifest, agent_id, block["id"], exc)
             free -= 1
-            if _fleet_paused(manifest):
+            if casestate.fleet_paused(manifest):
                 if not manifest.get("paused"):
                     emit.put(eng, manifest, "fleet_dispatch_paused", (), "paused", True)
                 break
