@@ -94,6 +94,22 @@ EFFECTS = dict([
     # The admission door refused a report — full text + origin recorded
     # durably (`core/door.py`, R2 "a door refusal is recorded engine-side").
     _reg("door_refusal", "forensic"),
+    # A real AIDE (LLM advisor) call was made — bootup scope/counts advice or
+    # a runtime escalation brief/ask (block 01-38 T7 FINAL sub-commit,
+    # operator decision 260714: "a real AIDE invocation is a consequential
+    # action... it must be readable from events.jsonl", so a SIM can verify
+    # "AIDE fired live" without trusting a unit test as per-run evidence).
+    # T24 wires the real runtime AIDE lane INTO `core/*` and will call
+    # `emit.record(eng, "aide_invocation", ...)` at its own call site; TODAY
+    # the only real AIDE call site is the legacy `engine/judge.py::call_aide`
+    # (bootup, `engine/console.py`) — it writes this SAME event `type`
+    # directly via its own pre-existing `elog.event(...)` idiom (matching
+    # `_record_model_call`'s established pattern), since `engine/` is a
+    # separate tree from `core/` and this block's emit-API-routing invariant
+    # is `core/`-scoped only. Registered here so the vocabulary member is
+    # ONE canonical name regardless of which call site (today's legacy one,
+    # or T24's future `core/*` one) produces it.
+    _reg("aide_invocation", "forensic"),
     # An operator page was attempted over the real transport, with its
     # delivered/failed receipt (`core/engine.py::_page_operator`, R8).
     _reg("operator_page", "forensic"),

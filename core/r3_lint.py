@@ -396,6 +396,150 @@ def harness_files():
     return files
 
 
+def production_files():
+    """T7's completeness-lint surface (block 01-38 T7 FINAL sub-commit,
+    `test:<event_emission_completeness>`): every top-level `core/*.py`
+    PRODUCTION module — the live engine itself, as opposed to
+    `harness_files()`'s proof-harness surface (`*_rig.py` + `core/sim/*.py`,
+    the ADVERSARIAL-INJECTION concern R3 MODEL A polices above). Glob-
+    discovered, never hand-maintained, so a NEW production module is covered
+    automatically. `core/emit.py` is excluded: T7's own completeness
+    invariant makes it the SOLE legal manifest-writer in `core/` — a raw
+    write INSIDE emit.py is not a violation, it IS the one place the
+    mechanism is allowed to live. `__init__.py` is excluded trivially
+    (empty)."""
+    files = sorted(glob.glob(os.path.join(ROOT, "core", "*.py")))
+    return [
+        p for p in files
+        if not os.path.basename(p).endswith("_rig.py")
+        and os.path.basename(p) not in ("__init__.py", "emit.py")
+    ]
+
+
+# T7's completeness lint also needs to see raw writes onto a manifest SUB-
+# OBJECT already resolved BY REFERENCE — `core/emit.py::patch_obj`'s own
+# shape, deliberately used by several modules (`core/gate.py::advance`,
+# `core/sentry.py::pace`, `core/architect.py::advance`, ...) to hand a
+# caller `gate_state`/a worker record/a job dict directly, rather than the
+# manifest root + a path. The base substrate's ONLY seed (module docstring
+# rule 1: "any Name/Attribute whose bare name contains 'manifest'") is a
+# literal substring match and cannot see these — a by-reference parameter's
+# name carries no "manifest" text, and (documented module limit) cross-file
+# provenance is never traced, so `gate_state`'s true origin
+# (`core/snapshot.py`'s own `manifest["gates"]` alias) is invisible from
+# `core/gate.py`'s own source text alone.
+#
+# PRODUCTION_BYREF_PARAMS is the EXPLICIT, visible allowlist (same
+# transparency discipline as `KNOWN_RED` above — reviewable in source, never
+# a silent heuristic) of the parameter names this codebase's own T7
+# conversion established, BY CONVENTION, as ALWAYS a manifest-rooted
+# sub-object passed by reference — verified against every real
+# `emit.patch_obj(eng, effect, <name>, ...)` call site across `core/` at the
+# time this lint was authored (`grep -n 'emit\.patch_obj(eng, "[a-z_]*", '
+# core/*.py`, excluding `*_rig.py`). Each name is seeded as "manifest"-
+# tainted ONLY within the SCOPE of the function parameter that carries it
+# (`_seed_byref_params`, below) — never unscoped/global like the base
+# "manifest" substring seed — so a same-named LOCAL variable in an unrelated
+# function is a DIFFERENT scope key and is never touched by this. Adding a
+# new by-reference parameter name later (a future module's own `patch_obj`
+# caller) is a one-line addition here, exactly like adding a `KNOWN_RED`
+# entry — visible, not silent.
+PRODUCTION_BYREF_PARAMS = {
+    "gate_state",   # core/gate.py, core/sentry.py — a live manifest["gates"][block]
+    "worker",       # core/router.py — a live manifest["workers"][agent_id]
+    "wrec",         # core/tick.py — a live manifest["workers"][agent_id]
+    "w",            # core/liveness.py, core/reviewers.py, core/sentry.py — same
+    "d",            # core/architect.py — the current job/adhoc-entry sub-dict
+    "job",          # core/architect.py — a live architect_queue/current_job entry
+    "entry",        # core/architect.py — a job's own adhoc sub-entry
+    "e",            # core/architect.py — a log-review job's adhoc list entry
+    "arch",         # core/architect.py — the live manifest["architect"] dict
+}
+
+
+def _seed_byref_params(tree, bindings):
+    """Mutates `bindings` (the SAME dict `_build_ctx` returns) in place:
+    synthesizes one extra binding — `pname = manifest` — for every
+    function/lambda parameter whose bare name is in
+    `PRODUCTION_BYREF_PARAMS`, keyed to THAT parameter's own scope only. The
+    EXISTING union-taint fixed point (`_compute_taint`, unchanged) then
+    treats the parameter exactly as if it were literally named `manifest`
+    for the rest of that function's body — no other machinery needs to
+    change, since `_is_manifest_name("manifest")` is trivially true. The
+    synthetic seed value is a fresh `ast.Name(id="manifest")` node (never
+    parsed from real source, never carrying a real `lineno` — it is only
+    ever fed back into `_expr_taint`'s own Name case, never reported to a
+    caller directly)."""
+    marker = ast.Name(id="manifest", ctx=ast.Load())
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        scope_id = id(node)
+        args = node.args
+        all_params = (list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+                      + ([args.vararg] if args.vararg else [])
+                      + ([args.kwarg] if args.kwarg else []))
+        for a in all_params:
+            if a is not None and a.arg in PRODUCTION_BYREF_PARAMS:
+                bindings.setdefault(("var", scope_id, a.arg), []).append((marker, scope_id))
+
+
+# The completeness lint's own KNOWN_RED — EMPTY by design: after T7's full
+# module-by-module conversion (12 production modules, this lint's own
+# authoring commit), every raw manifest-rooted write in `core/` production
+# code has been routed through `core/emit.py`. Same transparency discipline
+# as the base `KNOWN_RED` above — `run_completeness` re-verifies every entry
+# every call, so a stale entry (now clean) or an unlisted offender (newly
+# red) both fail loud, never silently.
+COMPLETENESS_KNOWN_RED = {}
+
+
+def lint_source_completeness(source, path="<fixture>"):
+    """T7's completeness check (block 01-38 T7 FINAL sub-commit): every
+    manifest-rooted state write in a PRODUCTION `core/*.py` module — never a
+    rig, `lint_source`'s own adversarial-honesty concern — must route
+    through `core/emit.py`. Reuses `_check_manifest_stores` UNCHANGED (the
+    base `manifest` substring seed still fires exactly as it always has,
+    catching a raw `manifest[...] = ...` directly) plus the by-reference
+    parameter seeding above — the ONE addition this scope needs. Deliberately
+    does NOT run `_check_calls` (the `worker_inbox`/`operator_inbox`
+    fabricated-sender checks) — those are `harness_files()`'s own rig-
+    honesty concern, not a production-module completeness concern."""
+    tree = ast.parse(source, filename=path)
+    bindings, returns, container_bindings = _build_ctx(tree)
+    _seed_byref_params(tree, bindings)
+    nt, rt = _compute_taint(bindings, returns, container_bindings)
+    parent_scope = _build_parent_scope(tree)
+    local_classes = _local_class_names(tree)
+    return _check_manifest_stores(tree, nt, rt, bindings, local_classes, parent_scope, path)
+
+
+def lint_file_completeness(path):
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    return lint_source_completeness(source, path=path)
+
+
+def run_completeness(files=None):
+    """The completeness-lint driver — same shape as `run()` above, scoped to
+    `production_files()` and `COMPLETENESS_KNOWN_RED` instead of
+    `harness_files()`/`KNOWN_RED`."""
+    files = files if files is not None else production_files()
+    result = LintResult()
+    for path in files:
+        rel = os.path.relpath(path, ROOT)
+        violations = lint_file_completeness(path)
+        if violations:
+            result.violations_by_file[rel] = violations
+    for rel in COMPLETENESS_KNOWN_RED:
+        if rel not in result.violations_by_file:
+            result.stale_known_red.append(rel)
+    for rel in result.violations_by_file:
+        if rel not in COMPLETENESS_KNOWN_RED:
+            result.unlisted_offenders.append(rel)
+    return result
+
+
 # ═══════════════════════════ shared substrate ═══════════════════════════
 #
 # Every binding is stored as (target_key, value_expr, value_scope) — the

@@ -34,6 +34,20 @@ git/subprocess/LLM — `emit` touches none):
       all registered — a guard so a later sub-commit removing one from the
       registry (and silently un-typing its live event) fails here.
 
+  test:<event_emission_completeness>  (T7 FINAL sub-commit, AC-12) — the
+      completeness lint itself (`core/r3_lint.py::run_completeness`, scoped
+      to `production_files()`, never `harness_files()`'s rig surface):
+      EVERY production `core/*.py` module (never `core/emit.py` itself, the
+      one legal writer) is genuinely clean of raw manifest-rooted writes —
+      neither a literal `manifest[...] = ...` NOR a raw write onto a
+      by-reference sub-object (`gate_state`/a worker record/a job dict) that
+      bypasses this module. Proven honest (never vacuous) by two companion
+      mutation probes run against SYNTHETIC fixture source (never the real
+      tree) at C1/C2 below: a literal `manifest[...] = ...` is caught, and a
+      by-reference `gate_state[...] = ...` is caught too — so a PASS on the
+      real tree is the lint genuinely finding nothing, not a lint that can't
+      find anything.
+
 `ok(name, cond, detail)`; `main()` prints `PASS (n/m)`, exits non-zero on fail.
 """
 import os
@@ -44,7 +58,8 @@ _APP_ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(_APP_ROOT, "engine"))
 sys.path.insert(0, _HERE)
 
-import emit   # noqa: E402 — core/emit.py, the unit under test
+import emit      # noqa: E402 — core/emit.py, the unit under test
+import r3_lint    # noqa: E402 — core/r3_lint.py, T7's completeness-lint machinery
 
 _results = []
 
@@ -208,6 +223,57 @@ def main():
         ok(f"W1[{name}]: the pre-T7 live effect type {name!r} is registered in "
            f"the one closed vocabulary",
            name in emit.EFFECTS, f"EFFECTS={sorted(emit.EFFECTS)}")
+
+    # ── C1/C2: the completeness lint is honest, not vacuous (SYNTHETIC
+    #     fixture source only — never the real tree) ──
+    c1_src = ('def foo(manifest, block):\n'
+              '    manifest["gates"][block]["stage"] = "closed"\n')
+    c1_violations = r3_lint.lint_source_completeness(c1_src, path="<c1-fixture>")
+    ok("C1 (MUTATION PROBE — must be GREEN): a literal `manifest[...] = ...` "
+       "raw write in synthetic fixture source IS caught by the completeness "
+       "lint — proves the lint's `manifest`-name seed still fires",
+       len(c1_violations) == 1 and c1_violations[0].rule == "MANIFEST_DIRECT_WRITE",
+       f"violations={[str(v) for v in c1_violations]}")
+
+    c2_src = ('def advance(eng, block, gate_state):\n'
+              '    gate_state["stage"] = "closed"\n')
+    c2_violations = r3_lint.lint_source_completeness(c2_src, path="<c2-fixture>")
+    ok("C2 (MUTATION PROBE — must be GREEN): a raw write onto a BY-REFERENCE "
+       "sub-object parameter (`gate_state`, PRODUCTION_BYREF_PARAMS) in "
+       "synthetic fixture source IS caught — proves the by-reference seeding "
+       "genuinely extends coverage, not just the base `manifest`-name seed",
+       len(c2_violations) == 1 and c2_violations[0].rule == "MANIFEST_DIRECT_WRITE",
+       f"violations={[str(v) for v in c2_violations]}")
+
+    c3_src = ('import emit\n'
+              'def advance(eng, block, gate_state):\n'
+              '    emit.patch_obj(eng, "gate_escalated", gate_state, {"stage": "closed"})\n')
+    c3_violations = r3_lint.lint_source_completeness(c3_src, path="<c3-fixture>")
+    ok("C3 (NON-VACUITY CONTROL — must be GREEN): the IDENTICAL scenario, "
+       "routed genuinely through emit.patch_obj instead of a raw write, "
+       "stays CLEAN — C1/C2's RED is the lint finding a real violation, "
+       "never a lint that flags every by-reference parameter unconditionally",
+       len(c3_violations) == 0, f"violations={[str(v) for v in c3_violations]}")
+
+    c4_src = ('def helper():\n'
+              '    gate_state = {"local": 1}\n'
+              '    gate_state["local"] = 2\n')
+    c4_violations = r3_lint.lint_source_completeness(c4_src, path="<c4-fixture>")
+    ok("C4 (SCOPE-ISOLATION CONTROL — must be GREEN): a purely LOCAL variable "
+       "that happens to share a by-reference name but is never bound as a "
+       "function PARAMETER is NOT flagged — the by-reference seed is scoped "
+       "to the parameter binding, never a bare/global name match",
+       len(c4_violations) == 0, f"violations={[str(v) for v in c4_violations]}")
+
+    # ── test:<event_emission_completeness> (T7 FINAL sub-commit, AC-12) ──
+    completeness = r3_lint.run_completeness()
+    ok("test:<event_emission_completeness>: every production core/*.py module "
+       "(core/emit.py excluded — the one legal writer) is genuinely clean of "
+       "raw manifest-rooted writes, by-reference sub-object writes included — "
+       "0 files red, 0 stale KNOWN_RED, 0 unlisted offenders",
+       completeness.ok,
+       f"violations_by_file={ {k: [str(v) for v in vs] for k, vs in completeness.violations_by_file.items()} } "
+       f"stale={completeness.stale_known_red} unlisted={completeness.unlisted_offenders}")
 
     passed = sum(1 for _, c, _ in _results if c)
     print(f"\ncore.emit_rig: {'PASS' if passed == len(_results) else 'FAIL'} "

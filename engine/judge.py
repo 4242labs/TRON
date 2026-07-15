@@ -325,8 +325,22 @@ def call_aide(ctx, paths, mode, extra=None, block_files=None, model=None,
     — the ONE call shape every aide site reuses, never a per-caller copy. Returns
     the same (ok, output_dict_or_None, raw_attempts) shape as `call()`; ok=False
     (runtime-unavailable) means the caller proceeds unaided — never a heuristic
-    substitute (D-J reconciliation (e))."""
+    substitute (D-J reconciliation (e)).
+
+    Block 01-38 T7 FINAL sub-commit: a real AIDE invocation is a
+    consequential action (operator decision 260714) — this, the ONE shared
+    call shape every real AIDE site in the whole stack reuses, is therefore
+    the single chokepoint that ALSO writes the `aide_invocation` forensic
+    event (`core/emit.py`'s registry — see its own entry for the full
+    coordinate-with-T24 rationale), mirroring `_record_model_call`'s own
+    pre-existing `elog.event(...)` idiom one call up. Fires for every mode,
+    ok or not — a fail-open "AIDE unavailable" is still a genuine invocation
+    attempt, not a no-op."""
     context = build_aide_context(paths, block_files=block_files)
     payload = {"mode": mode, **(extra or {})}
-    return call("aide", payload, ctx, max_retries=max_retries, elog=elog, cid=cid,
-                context=context, model=model)
+    ok, out, raw_attempts = call("aide", payload, ctx, max_retries=max_retries, elog=elog,
+                                 cid=cid, context=context, model=model)
+    if elog is not None:
+        elog.event("aide_invocation", cid=cid, mode=mode, model=model, ok=bool(ok),
+                   retries=len(raw_attempts) - 1 if raw_attempts else 0)
+    return ok, out, raw_attempts
