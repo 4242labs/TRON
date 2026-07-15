@@ -704,6 +704,19 @@ class Engine:
         vocab.check_handshake(self.ctx.vocab_schema, events=self.events)
 
         self._models = dict(models or {})
+        # Block 01-38 T23 (ADR-0003 D-D fail-closed model resolution;
+        # Completion Gate: "Both headless runs resolve models fail-closed
+        # via the staged/knobs path... assert no silent-default model
+        # resolution"): every role roles.yaml declares must resolve EITHER
+        # via this session's own `models` override OR roles.yaml's own
+        # `model:` field — checked HERE, before any spawn/mutation, on the
+        # SAME path both the interactive bootup journey (`core/bootup.py`)
+        # and a headless caller's direct `eng.start(...)` call take (the
+        # harness bypasses the interactive console by design — this is the
+        # one seam neither caller can skip). `roles.RolesError` propagates
+        # uncaught, exactly like `BootupError` above — never a silent
+        # default (preserves the 01-21 credit-drain fix).
+        self._roles_config().validate_models(self._models)
         self.paths["worker_count"] = max(1, int(worker_count or 1))
 
         # A1/A2: refresh trunk (remote mode) or a genuine no-op local read;

@@ -242,6 +242,18 @@ EFFECTS = dict([
     _reg("engine_architect_spawned", "state"),
     # A6/A7: bootup wrote the live-session marker (`manifest["session"]`).
     _reg("engine_session_started", "state"),
+    # Block 01-38 T23 (`core/bootup.py`): the operator's phase/range scope
+    # answer resolved to NO trunk block ids (an unresolvable range endpoint,
+    # or a phase substring matching nothing) and the journey silently-widened
+    # to "all" per the legacy engine's own fallback (`engine/fsm.py::
+    # _in_scope_rows`). A silent default here is a known TRON killer
+    # (silent-defaults audit) — this forensic event makes the widening
+    # observable in `events.jsonl` (paired with an operator-visible print at
+    # the call site) instead of an invisible scope change. Fires BEFORE any
+    # manifest exists (pre-`Engine.start`), so it is forensic-only — no
+    # `manifest["scope"]` to patch yet; `engine_scope_set` right after in
+    # `Engine.start` records the ACTUAL resolved scope ("all") as usual.
+    _reg("bootup_scope_fallback", "forensic"),
 
     # ── core/switchboard.py — SWITCHBOARD's SPAWN half + GAP-C fleet-outage
     #     self-release (T7 sub-commit 6) ──
