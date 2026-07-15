@@ -156,6 +156,8 @@ def route(eng, manifest, worker_reports):
             _route_online(eng, manifest, workers, gates, rep)
         elif tag == "worker.wall":
             _route_wall(eng, manifest, rep)
+        elif tag == "worker.wall_retract":
+            _route_wall_retract(eng, manifest, rep)
         elif tag == "operator.decision":
             _route_decision(eng, manifest, rep)
         elif tag == "architect.reconciled":
@@ -378,6 +380,40 @@ def _route_wall(eng, manifest, rep):
         return
     casestate.open_case(eng, manifest, block, "worker.wall", detail,
                         worker_id=worker_id, kind="wall")
+
+
+def _route_wall_retract(eng, manifest, rep):
+    """T8 (block 01-38) — a worker withdraws its OWN still-open `worker.wall`
+    case (the wall-retract blind spot, historically the single biggest
+    clean-run killer). The retracting worker's identity is the typed
+    `core.intake.Origin` the report drained from (`_origin_id`, block 01-38
+    T2 — NEVER a message-borne id), the SAME distrust `_route_wall` itself
+    applies. The worker cannot name its own case (never told the id), so the
+    open case is found by CORRELATION on that Origin: its OWN
+    (`worker_id`-matched), still-open (`decision is None`), self-RAISED
+    (`source == "worker.wall"`) case.
+
+    Scoped to `source == "worker.wall"` deliberately — never a `sentry.cap`
+    idle-escalation or any other case source (a worker may withdraw only a
+    wall it raised itself). The architect (a worker-shaped sender) can never
+    reach here as a retracting worker: its own id would never own a
+    `worker.wall` case (R1a — `_route_wall` refuses to open one for it), so no
+    special guard is needed, but `casestate.self_retract`'s own four guards
+    re-verify everything regardless (defense-in-depth). A retract naming no
+    open self-owned wall case (already resolved, never raised, or another
+    agent's) is a LOGGED NO-OP — never a crash, never a wrong case cleared."""
+    worker_id = _origin_id(rep)
+    if not worker_id:
+        eng.log("flow", "router: worker.wall_retract with no resolvable origin "
+                        "-> logged, no-op (a retract must come from a real "
+                        "worker's own channel)")
+        return
+    # `casestate.self_retract` owns the case CORRELATION + all guards (it, not
+    # this module, is the single owner of case-state semantics — and reads a
+    # case's durable owner-id, which by T3's own rule lives in `casestate.py`,
+    # never in a required-clean reader like this one). This module only hands
+    # it the typed-Origin id (block 01-38 T2 — never a message-borne id).
+    casestate.self_retract(eng, manifest, worker_id)
 
 
 def _route_architect_reconciled(eng, manifest, rep):

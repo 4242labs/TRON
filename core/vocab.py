@@ -93,6 +93,24 @@ TAGS = {
     "worker.wall": Word(
         "worker.wall", "wall", ("block",), (WORKER,), BLOCKING,
         "a genuine impasse — architect-first triage, never a silent drop"),
+    "worker.wall_retract": Word(
+        # T8 (block 01-38) — the wall-retract blind spot, historically the
+        # single biggest clean-run killer (2 of 6 runs). A worker withdraws
+        # its OWN still-open worker.wall case — self-correction (it cleared
+        # the snag itself before any human/architect had to act). Class is
+        # PROGRESS, never BLOCKING: withdrawing an impasse is forward
+        # progress by construction (R5's partition — a retract can never
+        # also assert a new impasse). `slots=()` deliberately: the worker
+        # cannot name its own case_id (never told it) — the router recovers
+        # its own open wall case from the typed Origin (block 01-38 T2), the
+        # SAME durable worker->block binding `worker.wall` itself uses, never
+        # a message-borne id. NEVER trusted at face value: the retract routes
+        # the block back to a re-drivable gate stage and the ordinary gate
+        # ladder RE-PROVES it on trunk — the trunk verdict, not the retract,
+        # is what closes the block, so a false retract cannot false-green.
+        "worker.wall_retract", "wall_retract", (), (WORKER,), PROGRESS,
+        "a worker withdraws its OWN still-open worker.wall — self-correction, "
+        "re-drives the block (trunk re-proves it); never architect/operator"),
     "architect.reconciled": Word(
         "architect.reconciled", "reconciled", ("block",), (ARCHITECT,), PROGRESS,
         "forward/reconcile job done"),

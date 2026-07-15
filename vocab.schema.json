@@ -138,6 +138,14 @@
         "block"
       ],
       "verb": "wall"
+    },
+    "worker.wall_retract": {
+      "class": "progress-advancing",
+      "minters": [
+        "worker"
+      ],
+      "slots": [],
+      "verb": "wall_retract"
     }
   },
   "templates": [
@@ -185,7 +193,8 @@
     "review-done",
     "review_done",
     "verdict",
-    "wall"
+    "wall",
+    "wall_retract"
   ],
   "version": "1"
 }

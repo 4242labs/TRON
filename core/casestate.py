@@ -442,6 +442,87 @@ def architect_resolve(eng, manifest, case_id, verdict, note=None):
     return True
 
 
+def _own_open_wall_case(cases, worker_id):
+    """The (case_id, case) a worker's OWN still-open `worker.wall` resolves
+    to — matched by the case's DURABLE owner-id (`worker_id`, the typed-Origin
+    id the router hands in — never a message-borne id) AND `source ==
+    "worker.wall"` (a worker-RAISED wall, never a `sentry.cap`/other case) AND
+    still open (`decision is None`). This module owns the case-owner-id read by
+    T3's own rule (a durable record's own worker_id, never a forgeable sender
+    read). `open_case` is idempotent per block and a worker maps to one block,
+    so at most one such case exists; returns `(None, None)` when none does."""
+    for cid, c in cases.items():
+        if (c.get("worker_id") == worker_id
+                and c.get("source") == "worker.wall"
+                and c.get("decision") is None):
+            return cid, c
+    return None, None
+
+
+def self_retract(eng, manifest, worker_id):
+    """T8 (block 01-38): a worker WITHDRAWS its OWN still-open `worker.wall`
+    case — historically the single biggest clean-run killer (a worker raised
+    its own block over a transient snag, cleared the snag itself, and then had
+    NO way to say so; the case sat open and the run never reached a clean end,
+    2 of 6 runs). Called exclusively from `core/router.py::_route_wall_retract`
+    once a `worker.wall_retract` report is drained; `worker_id` is the typed
+    `core.intake.Origin` id the retract drained from (block 01-38 T2 — NEVER a
+    message-borne id, the SAME distrust `_route_wall` applies).
+
+    NEVER trusted at face value (the block's own root invariant, extended
+    here): a retract does NOT close the block. It clears the wall and returns
+    the block to normal dispatch via `_drop_gate_and_worker` — the SAME
+    re-drivable mechanism `architect_resolve`'s `scope_forward`/`answer` and
+    `settle`'s `resume`/`amend` already use — so a FRESH spawn re-drives it
+    and the ordinary gate ladder RE-PROVES it on trunk. The trunk verdict, not
+    the retract message, is what closes the block; a false retract (the snag
+    was NOT really cleared) simply walls again on the re-drive, never a
+    false-green.
+
+    The CORRELATION + SELF-source + source guards are `_own_open_wall_case`
+    (above): the retract only ever resolves the worker's OWN, still-open,
+    self-RAISED wall — never another agent's, never a `sentry.cap`
+    idle-escalation. Plus the NO-TAKE-BACK guard here: once the architect has
+    triaged the case to the operator (`owner` flipped to `"operator"` and THE
+    FLOOR fired its first page), the worker can no longer self-dismiss it — a
+    logged no-op, consistent with T21's "operator owns a delivered case, never
+    re-routed" rule. This guard is ALSO what makes the zero-pages guarantee
+    STRUCTURAL, not a race: a retract only ever succeeds while
+    `owner=="architect"`, i.e. while no page has gone out.
+
+    Returns `True` on a genuine retract, `False` for any guarded no-op."""
+    cases = manifest.get("cases") or {}
+    case_id, case = _own_open_wall_case(cases, worker_id)
+    if case is None:
+        eng.log("flow", f"casestate: self_retract from {worker_id!r} names no open "
+                        f"self-raised worker.wall case (already resolved, never "
+                        f"raised, or another agent's) — logged, no-op, no case "
+                        f"wrongly cleared")
+        return False
+    if case.get("owner") != "architect":
+        eng.log("flow", f"casestate: self_retract REFUSED — case {case_id!r} is "
+                        f"owner={case.get('owner')!r} (already delivered to the "
+                        f"operator; no take-back, T21) — logged, no-op, operator "
+                        f"keeps the case")
+        return False
+
+    block = case.get("block")
+    emit.patch(eng, manifest, "case_self_retracted", ("cases", case_id),
+               {"decision": "self_retracted", "settled_at": _now_iso()},
+               case_id=case_id, block=block, worker_id=worker_id)
+    # Re-drivable, NOT closed: drop the ESCALATED gate + worker record so a
+    # fresh spawn re-drives the block and the gate ladder re-proves it on
+    # trunk (the CLU ruling — the trunk verdict, never the retract, closes it).
+    _drop_gate_and_worker(eng, manifest, block)
+    eng.log("flow", f"casestate: case {case_id!r} SELF-RETRACTED by worker "
+                    f"{worker_id!r} — block {block!r} un-blocked, re-drivable "
+                    f"(fresh gate/re-dispatch next fill; trunk re-proves it), "
+                    f"operator NEVER paged")
+    emit.drop(eng, manifest, "case_cleared", ("cases",), case_id,
+              case_id=case_id)   # cleared, same call — "≤1 tick"
+    return True
+
+
 def open_operator_case(eng, manifest, block, source, detail, worker_id=None, kind=None):
     """Mint a case `owner="operator"` from BIRTH and page immediately — a
     legitimate direct-to-operator path for an escalation the architect itself

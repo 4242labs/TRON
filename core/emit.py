@@ -135,6 +135,18 @@ EFFECTS = dict([
     # The architect resolved a case itself (scope_forward/answer) — decided,
     # never paged.
     _reg("case_architect_resolved", "state"),
+    # T8 (block 01-38): a worker WITHDREW its OWN still-open worker.wall case
+    # — self-correction. Deliberately a DISTINCT effect from
+    # case_architect_resolved/case_settled so the event stream can tell "the
+    # worker un-did its own wall" apart from an architect/operator decision
+    # (T7's events-as-single-ground-truth spine — a SIM verifies self-retract
+    # fired live off THIS event, never a unit test). Clears the case's
+    # `decision` to "self_retracted"; the block is then made re-drivable
+    # (`block_redrivable`) so the gate ladder RE-PROVES it on trunk — the
+    # retract clears the wall, the trunk verdict closes the block. Zero
+    # operator pages by construction (only fires while owner=="architect",
+    # i.e. no page has gone out — a no-take-back guard, T21-consistent).
+    _reg("case_self_retracted", "state"),
     # A case record was cleared from `manifest["cases"]` (settled, ≤1 tick).
     _reg("case_cleared", "state"),
     # An operator reply settled a case (decision/settled_at/note applied).
