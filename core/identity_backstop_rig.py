@@ -187,6 +187,14 @@ def run_real_door_level():
 _DURABLE_ID_EXEMPT = {
     "architect.py", "casestate.py", "engine.py", "gate.py", "pipeline.py",
     "sentry.py", "switchboard.py", "tick.py",
+    # T12 (block 01-38): architect.py's behavior-preserving split — every
+    # sibling job-kind module inherits architect.py's own durable-id
+    # exemption (each reads a job/case/manifest record's own durable
+    # worker_id/agent_id the SAME way architect.py always did; none is a
+    # forgeable sender read — see T3's "Not in this task" list architect.py
+    # itself is already exempt under).
+    "architect_backstop.py", "architect_enqueue.py", "architect_forward.py",
+    "architect_log.py", "architect_reconcile.py", "architect_triage.py",
 }
 # `r3_lint.py`/`r3_guard.py` — the R3 honesty backstop's own static taint
 # analysis legitimately matches these tokens as AST-compared string

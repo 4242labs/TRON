@@ -21,19 +21,21 @@ tally would hide which backstop actually fired. `COUNTERS` below is the
 ONE place that maps a named counter to how it is found in the event
 stream; nothing downstream keeps a second hand-maintained copy.
 
-THE MAY-FIRE ARM (declared, mechanism-proven, not yet populated)
+THE MAY-FIRE ARM (declared + mechanism-proven at T9; its first real
+production member landed at T12)
 -------------------------------------------------------------------
-No `core/*.py` effect is classified `may_fire` yet as of T9 — every
-counter live in the engine today is a must-be-zero backstop. The
-PARTITION MECHANISM (declare a name + ceiling, tally it from the stream,
-fail past the ceiling, always print the value) is nonetheless fully
-implemented and mutation-proven here (`core/counters_rig.py` registers a
-synthetic probe counter the same way `core/emit_rig.py`'s own R2b proves
-the closed-registry check — a temporary table entry, removed in
-`finally`) — so a future task (T10-T12's designed-rare backstops: a
-bounded re-drive, a respawn ceiling, ...) only has to ADD an entry to
-`COUNTERS` below; the grading/printing machinery is already live and
-already proven.
+As of T9, no `core/*.py` effect was classified `may_fire` yet — every
+counter live in the engine was a must-be-zero backstop. The PARTITION
+MECHANISM (declare a name + ceiling, tally it from the stream, fail past
+the ceiling, always print the value) was nonetheless fully implemented and
+mutation-proven at T9 (`core/counters_rig.py` ALSO registers a synthetic
+probe counter the same way `core/emit_rig.py`'s own R2b proves the
+closed-registry check — a temporary table entry, removed in `finally` —
+independent of any real member) — so a future task (a designed-rare
+backstop: a bounded re-drive, a respawn ceiling, ...) only had to ADD an
+entry to `COUNTERS` below. T12 (`core/architect_backstop.py`'s
+`_backstop_refused_authoring`) did exactly that: `architect_refused_
+authoring_backstop` is the first real `may_fire` member.
 
 APPEND-ONLY (R4/AC-5b)
 -----------------------
@@ -83,8 +85,19 @@ _COUNTERS = (
              discriminator={"counter": "vocab_version_handshake_failed"}),
     _Counter("operator_page_permanent_fail", MUST_BE_ZERO, "must_be_zero",
              discriminator={"counter": "operator_page_permanent_fail"}),
-    # No may_fire entry yet — see module docstring. T10-T12 add real
-    # designed-rare backstops here as they're built.
+    # may-fire: a designed rare backstop, with a declared per-run ceiling —
+    # acceptance always PRINTS the count, and REJECTs only past the ceiling.
+    # T12 (block 01-38, `core/architect_backstop.py`): ADR-0006 R1d's
+    # started-then-refused-authoring backstop — the architect's order was
+    # genuinely delivered and it settled idle, yet authored no branch. This
+    # is the counter partition's FIRST real may_fire production member (the
+    # mechanism itself has been live+mutation-proven since T9 with zero
+    # members — see this module's own docstring). Ceiling=5: more than a
+    # handful of these in one run signals a systemic authoring problem, not
+    # isolated bad luck — still rare enough to page every time it fires
+    # (see `_backstop_refused_authoring`), just also counted+graded.
+    _Counter("architect_refused_authoring_backstop", MAY_FIRE,
+             "architect_refused_authoring_backstop_fired", ceiling=5),
 )
 
 COUNTERS = {c.name: c for c in _COUNTERS}

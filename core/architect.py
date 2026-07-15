@@ -86,12 +86,12 @@ kind, `triage` (PMT-TRIAGE) — the ONE place a raised wall/escalation
 (`worker.wall`, a `sentry.cap` escalation, a liveness `worker.stalled`
 recovery — every `core/casestate.py::open_case` caller — PLUS `core/
 classify.py`'s own `unclassified` result) lands FIRST, never an immediate
-operator page. `enqueue_triage` (below) is called from TWO places:
-`core/casestate.py::open_case` (a real casestate case behind it, `case_id`
-set) and `core/classify.py::_triage_unclassified` (case-less — raw free
-text with no block/gate to park, `case_id=None`). One job of triage
-throughput per tick, same FIFO discipline as `forward`/`reconcile`/`log`.
-`_advance_triage` (below) orders ONCE (`arch.triage`, a structured ask for a
+operator page. `enqueue_triage` is called from TWO places: `core/
+casestate.py::open_case` (a real casestate case behind it, `case_id` set)
+and `core/classify.py::_triage_unclassified` (case-less — raw free text
+with no block/gate to park, `case_id=None`). One job of triage throughput
+per tick, same FIFO discipline as `forward`/`reconcile`/`log`.
+`_advance_triage` orders ONCE (`arch.triage`, a structured ask for a
 verdict ∈ `{scope_forward, answer, operator}`), then waits for a routed
 `architect.triage_verdict` report (`core/router.py`, recorded into
 `manifest["triage_verdicts"]` — the SAME two-step "order then observe a
@@ -114,6 +114,71 @@ job's patch-id read, `core.landing.land_via_grant`/`.paperwork_case_id`
 forked) for the forward job's content-bound land. A plain manifest mutation
 otherwise, the same "gates is a direct alias onto the manifest" idiom every
 other `core/*.py` module already uses.
+
+═══════════════════════════════════════════════════════════════════════
+T12 SPLIT (block 01-38): this module is now a FACADE over per-job-kind
+sibling modules — behavior-preserving, `test:<coordinator_split>`. It was
+~1199 lines; the six job-kinds' own leaf logic moved out to:
+  `core/architect_enqueue.py`   — the `forward`-job clear-ahead scan + the
+                                   three cross-job-kind dedupe reads
+                                   (`_has_forward_job`/`_has_triage_job`/
+                                   `_has_reconcile_job`).
+  `core/architect_forward.py`   — the `forward` job-kind (`_forward_branch`,
+                                   `_advance_forward`).
+  `core/architect_reconcile.py` — the `reconcile` job-kind's order half
+                                   (`_next_reconcile_target`,
+                                   `_enqueue_reconcile`, `_order_reconcile`
+                                   — its COMPLETION half stays here, in
+                                   `advance`, exactly where it already lived
+                                   pre-split: reconcile never had its own
+                                   `_advance_reconcile`).
+  `core/architect_log.py`       — the `log` job-kind (`enqueue_log_review`,
+                                   `_advance_log`, `_adhoc_branch`).
+  `core/architect_triage.py`    — the `triage` job-kind (`enqueue_triage`,
+                                   `_order_triage`, `_advance_triage`,
+                                   `_next_triage_id`) — carries THE VERDICT
+                                   WIRE (see that module's own docstring);
+                                   its logic is RELOCATED VERBATIM, never
+                                   altered.
+  `core/architect_backstop.py`  — the ONE backstop part
+                                   (`_backstop_refused_authoring`, ADR-0006
+                                   R1d), now routed through the counter
+                                   partition (T9) as the first real
+                                   `may_fire`-class production member.
+
+THIS FILE keeps: the public entrypoints every importer resolves as
+`architect.<name>` (`ARCHITECT_WID`, `new_state`, `gated_blocks`, `enqueue`,
+`enqueue_triage`, `enqueue_log_review`, `advance`, plus the tunable
+constants `RESPAWN_CAP`/`REDELIVER_AFTER`/`NO_PROGRESS_BUDGET` — the last
+two re-exported from their sibling modules only where genuinely leaf-owned;
+see below) — PLUS the ADR-0009 delivery machinery (`_delivered`,
+`_turn_settled`, `_stamp_dispatch`, `_clock`, `_redeliver`,
+`_advance_delivery`, `_reset_delivery_state`) and the two tunables that
+gate it (`RESPAWN_CAP`, `NO_PROGRESS_BUDGET`; `REDELIVER_AFTER` alongside
+them for cohesion). This is a DELIBERATE deviation from a literal 7-way
+split: the delivery machinery is cross-cutting (called from the dispatcher
+itself AND from `architect_triage.py`), never itself one of the module's
+named job-kinds, and — load-bearing for behavior-preservation —
+`core/architect_rig.py`'s mutation-proof rigs monkeypatch
+`architect._redeliver`, `architect._advance_delivery`, `architect.
+RESPAWN_CAP`, `architect.NO_PROGRESS_BUDGET` DIRECTLY on this module's own
+namespace (`architect.<name> = mock`, restored in `finally`). Python
+resolves a bare-name call against the DEFINING module's own globals dict at
+CALL time (never a value/reference frozen at another module's import time),
+so a patch on `architect.<name>` is honored by every caller **in this same
+file** for free; a sibling module reads these same names via the live
+`architect` module OBJECT at call time (`architect.<name>`, never a
+`from architect import <name>` copy) for the identical reason — see `core/
+architect_triage.py`'s own docstring. Keeping the whole delivery cluster
+physically here, rather than splitting it into an 8th sibling, removes the
+ONLY place this split could have silently broken those mutation proofs.
+Every other job-kind's leaf function is never itself monkeypatched (only
+called) and was safe to relocate as a plain re-export.
+
+`advance()` remains the ONE dispatcher tying every job-kind together —
+exactly as it did pre-split ("architect-count... a single persistent
+architect in this brick").
+═══════════════════════════════════════════════════════════════════════
 """
 import os
 import sys
@@ -126,12 +191,14 @@ if _ENGINE_DIR not in sys.path:
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-import gitobs     # noqa: E402 — core/gitobs.py, the ONE git-observation seam
-import vocab      # noqa: E402 — core/vocab.py, emit template-id constants (block 01-37, T5/T7)
-import landing    # noqa: E402 — core/landing.py, Wave-1's ONE landing primitive
-import pipeline   # noqa: E402 — core/pipeline.py, in_flight_blocks (dedupe read)
-import casestate  # noqa: E402 — core/casestate.py, parked_blocks (dedupe read)
-import liveness   # noqa: E402 — core/liveness.py, the shared working-excluded integrator (R-G)
+import vocab      # noqa: E402 — core/vocab.py, emit template-id constants (T7's own _send_flag_digest)
+import landing    # noqa: E402 — core/landing.py — kept importable as `architect.landing` for
+                  # `core/architect_rig.py`'s own `architect.landing.land_via_grant` monkeypatch,
+                  # even though this file's own remaining code never calls it directly post-split
+                  # (the forward/log/triage job-kinds own the real land_via_grant call sites now).
+import casestate  # noqa: E402 — core/casestate.py, open_operator_case (R-G no-progress budget)
+import liveness   # noqa: E402 — core/liveness.py, working_excluded_integrate (R-G) — kept importable
+                  # as `architect.liveness` for the SAME monkeypatch-compatibility reason as `landing`.
 import emit       # noqa: E402 — core/emit.py, block 01-38 T7's single emit API
 
 ARCHITECT_WID = "architect"
@@ -139,6 +206,24 @@ ARCHITECT_WID = "architect"
 # Mirrors core/session.py's own IN_SCOPE_STATUSES verbatim (never forked into
 # a second constant this module could silently drift from).
 IN_SCOPE_STATUSES = ("to-do", "in-progress")
+
+# T12: the job-kind sibling modules (see the SPLIT section of this module's
+# own docstring above). Imported AFTER the constants above so a sibling's own
+# `import architect` + `architect.IN_SCOPE_STATUSES`/`architect.ARCHITECT_WID`
+# read (deferred to CALL time, never at either module's IMPORT time) resolves
+# even mid-circular-import.
+from architect_enqueue import _enqueue_forward_jobs                    # noqa: E402,F401
+from architect_forward import _forward_branch, _advance_forward        # noqa: E402,F401
+from architect_reconcile import _enqueue_reconcile, _order_reconcile   # noqa: E402
+from architect_triage import enqueue_triage, _order_triage, _advance_triage   # noqa: E402,F401
+from architect_log import enqueue_log_review, _advance_log             # noqa: E402,F401
+from architect_backstop import _backstop_refused_authoring             # noqa: E402
+
+# Re-exported ONLY so `architect.<name>` keeps resolving for external callers
+# (`core/architect_rig.py` calls `architect._order_triage`/`architect.
+# _forward_branch` directly; T12's own checkpoint names both as part of the
+# public-facing internal surface) — neither is called from this file's own
+# code (see the owning sibling module for the real call site).
 
 
 def new_state():
@@ -160,104 +245,6 @@ def gated_blocks(manifest):
     if cur and cur.get("kind") == "reconcile" and cur.get("block"):
         gated.add(cur["block"])
     return gated
-
-
-def _forward_branch(block):
-    return f"arch/{block}-forward"
-
-
-def _has_forward_job(manifest, block):
-    queue = manifest.get("architect_queue") or []
-    if any(j.get("kind") == "forward" and j.get("block") == block for j in queue):
-        return True
-    arch = manifest.get("architect") or {}
-    cur = arch.get("current_job")
-    return bool(cur and cur.get("kind") == "forward" and cur.get("block") == block)
-
-
-def _has_triage_job(manifest, case_id):
-    """Dedupe for a case-bearing triage job only (`case_id is not None`) —
-    a case-less one (`core/classify.py`'s unclassified path) is NEVER
-    deduped, same "no dedupe across independent occurrences" discipline
-    `enqueue_log_review` already keeps for its own findings."""
-    if case_id is None:
-        return False
-    queue = manifest.get("architect_queue") or []
-    if any(j.get("kind") == "triage" and j.get("case_id") == case_id for j in queue):
-        return True
-    arch = manifest.get("architect") or {}
-    cur = arch.get("current_job")
-    return bool(cur and cur.get("kind") == "triage" and cur.get("case_id") == case_id)
-
-
-def _has_reconcile_job(manifest, block):
-    queue = manifest.get("architect_queue") or []
-    if any(j.get("kind") == "reconcile" and j.get("block") == block for j in queue):
-        return True
-    arch = manifest.get("architect") or {}
-    cur = arch.get("current_job")
-    return bool(cur and cur.get("kind") == "reconcile" and cur.get("block") == block)
-
-
-def _enqueue_forward_jobs(eng, manifest, view):
-    """Clear-ahead (blueprint §1 SWITCHBOARD's own step, re-expressed here
-    for the architect's OWN queue): every in-scope roadmap row with no block
-    file yet gets a `forward` job — idempotent, never a second job for a
-    block already queued/current."""
-    for row in view:
-        if row.get("has_block_file"):
-            continue
-        if row.get("status") not in IN_SCOPE_STATUSES:
-            continue
-        block = row["id"]
-        if not block or _has_forward_job(manifest, block):
-            continue
-        job = {"kind": "forward", "block": block, "branch": _forward_branch(block),
-              "ordered": False, "case_id": None, "landed": False}
-        emit.append(eng, manifest, "architect_forward_job_enqueued", ("architect_queue",),
-                    job, block=block)
-        eng.log("flow", f"architect: clear-ahead enqueued forward for missing "
-                        f"block file {block!r}")
-
-
-def _next_reconcile_target(view, manifest, done_block):
-    """The next in-scope, not-done, has-a-file, not-yet-in-flight block AFTER
-    `done_block` by living-doc order — the one a just-landed block's drift
-    could invalidate (M-05). Skips (never targets, keeps looking forward):
-    an abandoned block (`core/casestate.py`'s permanent drop), a currently
-    PARKED block (an open case), and anything already in-flight (a live
-    worker or open gate — `core/pipeline.py::in_flight_blocks`, the SAME
-    definition dispatch eligibility itself uses) — only a clean, untouched
-    block is ever reconcile-targeted."""
-    abandoned = set(manifest.get("abandoned_blocks") or [])
-    parked = casestate.parked_blocks(manifest)
-    inflight = pipeline.in_flight_blocks(manifest)
-    rows = sorted(view, key=lambda r: r.get("order") or 1e9)
-    seen = False
-    for r in rows:
-        if r["id"] == done_block:
-            seen = True
-            continue
-        if not seen:
-            continue
-        bid = r["id"]
-        if bid in abandoned or bid in parked or bid in inflight:
-            continue
-        if r.get("status") in IN_SCOPE_STATUSES and r.get("has_block_file"):
-            return bid
-    return None
-
-
-def _enqueue_reconcile(eng, manifest, view, done_block):
-    reconciled = set(manifest.get("reconciled") or [])
-    nxt = _next_reconcile_target(view, manifest, done_block)
-    if not nxt or nxt in reconciled or _has_reconcile_job(manifest, nxt):
-        return
-    job = {"kind": "reconcile", "block": nxt, "after": done_block, "ordered": False}
-    emit.append(eng, manifest, "architect_reconcile_job_enqueued", ("architect_queue",),
-               job, block=nxt, after=done_block)
-    eng.log("flow", f"architect: {done_block!r} landed ✅ -> enqueued reconcile "
-                    f"for {nxt!r} (M-05) — its dispatch is gated until reconciled")
 
 
 def _fleet_paused(manifest):
@@ -310,71 +297,6 @@ def enqueue(eng, manifest, view, landed_blocks):
         _enqueue_reconcile(eng, manifest, view, block)
 
 
-def _next_triage_id(eng, manifest):
-    """A deterministic, monotonically-numbered triage-job id — a manifest-
-    persisted counter (`manifest["triage_seq"]`), never `uuid`/`random`
-    (mirrors `core/casestate.py::next_case_id`'s own idiom). This is the
-    correlation handle `manifest["triage_verdicts"]` is keyed by — NEVER
-    `case_id`, which is legitimately `None` for a case-less triage job
-    (`core/classify.py`'s unclassified path) and would otherwise collide
-    across two independent case-less jobs raised over the life of one run."""
-    n = int(manifest.get("triage_seq", 0)) + 1
-    emit.put(eng, manifest, "architect_triage_seq_advanced", (), "triage_seq", n)
-    return f"triage-{n}"
-
-
-def enqueue_triage(eng, manifest, case_id, source, block, detail, worker_id=None):
-    """Wave 18 (GAP-E): a raised wall/escalation becomes a PMT-TRIAGE job
-    FIRST — NEVER an immediate operator page. Called from `core/
-    casestate.py::open_case` (case-bearing, `case_id` set — worker.wall/
-    sentry.cap/liveness-stall) and `core/classify.py::_triage_unclassified`
-    (case-less, `case_id=None`, `block=None` — raw free text). Idempotent
-    for a case-bearing job only — see `_has_triage_job`'s own docstring."""
-    _ensure_installed(eng, manifest)
-    # R1a (ADR-0005) final backstop: the architect can never be the SOURCE of a
-    # triage — its own narration creates nothing. The call-site guards (classify /
-    # router, ahead of open_case) are primary; this is defense-in-depth so no
-    # future creation path can queue an architect-sourced triage. Its OWN in-flight
-    # triage resolves via the R1b idle backstop, never by self-enqueue.
-    if worker_id == ARCHITECT_WID:
-        eng.log("flow", "architect: enqueue_triage refused — sender is the architect "
-                        "itself (R1a self-source backstop); created nothing")
-        return
-    if _has_triage_job(manifest, case_id):
-        return
-    triage_id = _next_triage_id(eng, manifest)
-    job = {"kind": "triage", "triage_id": triage_id, "case_id": case_id,
-          "source": source, "block": block, "detail": detail,
-          "worker_id": worker_id, "ordered": False, "verdict": None,
-          "note": None, "adhoc": None, "resolved": False}
-    emit.append(eng, manifest, "architect_triage_job_enqueued", ("architect_queue",),
-               job, triage_id=triage_id, case_id=case_id, source=source, block=block)
-    eng.log("flow", f"architect: PMT-TRIAGE queued (triage_id={triage_id!r}, "
-                    f"case_id={case_id!r}, source={source!r}, "
-                    f"block={block!r}) — architect-first, never an immediate "
-                    f"operator page")
-
-
-def _order_triage(eng, job):
-    text = (f"[TRON]  architect — TRIAGE (triage_id={job['triage_id']!r}, "
-           f"case_id={job.get('case_id')!r}, source={job.get('source')!r}, "
-           f"block={job.get('block')!r}): {job.get('detail')}\nReply with a "
-           f"structured architect.triage_verdict (triage_id="
-           f"{job['triage_id']!r}, verdict in "
-           f"scope_forward|answer|operator[, note]).")
-    if not eng.dry:
-        eng.emit(
-            vocab.TPL_ARCH_TRIAGE, text,
-            slots={"detail": job.get("detail"), "sender": job.get("source"),
-                  "triage_id": job["triage_id"]},
-            worker_id=ARCHITECT_WID,
-            kind="arch.triage")
-    _stamp_dispatch(eng, job, text, "arch.triage", extra={"ordered": True})   # ADR-0009 R-B
-    eng.log("flow", f"architect[triage:{job['triage_id']}]: ordered triage "
-                    f"(source={job.get('source')!r}, dispatch_seq="
-                    f"{job.get('dispatch_seq')!r})")
-
-
 # ADR-0009 — restore the deliver-until-consumed dispatch invariant and
 # consolidate R1b/R1c/R1d onto it (§3, §6). R1c (the `arch_started`/
 # `cold_ticks`/`stall_paged` ladder above, `_architect_liveness_ladder`) is
@@ -389,11 +311,11 @@ def _order_triage(eng, job):
 #
 # `_LOW_CONFIDENCE_TRIAGE_SOURCES` (the R1b idle-GUESS's own genuine/
 # low-confidence source split) is DELETED here (block 01-37, T10,
-# ADR-0012 §6(b)) along with the guess itself (`_advance_triage`, below) —
-# structured-only reporting means a settled architect turn always carries a
-# real verdict; the classify-layer `unclassified` source this constant
-# named no longer exists either (T8 retired the free-text grader that
-# produced it).
+# ADR-0012 §6(b)) along with the guess itself (`architect_triage.py::
+# _advance_triage`) — structured-only reporting means a settled architect
+# turn always carries a real verdict; the classify-layer `unclassified`
+# source this constant named no longer exists either (T8 retired the
+# free-text grader that produced it).
 
 # R-C/R-E/R-G tunables (ordering constraint, R-G): RESPAWN_CAP * (respawn-
 # settle + turn-latency) < NO_PROGRESS_BUDGET < the run's own wall-clock
@@ -654,407 +576,6 @@ def _reset_delivery_state(eng, d):
         "unconsumed_work_excluded": 0, "respawns": 0, "no_progress_paged": False})
 
 
-def _backstop_refused_authoring(eng, manifest, cur):
-    """ADR-0006 R1d (ADR-0009: re-keyed onto `_turn_settled`/R-D): a
-    STARTED-then-REFUSED forward/log job — the architect's order was
-    genuinely DELIVERED (`_turn_settled`) and it settled idle, yet
-    `land_via_grant` still reports `"fail-closed"` (its patch-id is
-    unresolvable == it authored NO branch, prose instead of a file).
-    Resolve LOUD: page the operator once and free the architect. Never poll
-    a never-authored branch to budget (the log/forward wedge A3), and — for
-    a log-review — never silently DROP the reviewer's findings by
-    benign-clearing. Clearing `current_job` at the call site is the
-    once-guard (the job is gone next tick, so `open_operator_case`'s
-    non-idempotency can't storm). A cold/dead architect whose order was
-    NEVER delivered at all is not here — R-G's no-progress budget
-    (`_advance_delivery`) owns that window."""
-    kind = cur.get("kind")
-    detail = (f"architect ordered a {kind!r} job for {cur.get('block')!r} and "
-              f"settled idle having authored NO branch (land grant fail-closed) "
-              f"— started-then-refused authoring; routed to operator (ADR-0006 "
-              f"R1d), never a silent wedge or a dropped log-review finding")
-    casestate.open_operator_case(eng, manifest, cur.get("block"),
-                                 f"architect.{kind}_refused", detail,
-                                 worker_id=ARCHITECT_WID, kind="stall")
-    eng.log("flow", f"architect[{kind}:{cur.get('block')}]: refused authoring "
-                    f"(fail-closed + settled idle) -> operator (R1d)")
-
-
-def _advance_triage(eng, manifest, job):
-    """One triage-job step (GAP-E, wave 18) — see module docstring for the
-    full order-then-observe-then-apply shape. Sets `job["resolved"] = True`
-    (the ONE thing `advance`, below, reads to free the architect back to
-    idle) only once the verdict's own effect has genuinely landed — a
-    `scope_forward` verdict never resolves until its adhoc block is
-    genuinely observed `"landed"` (real ancestry), never on a message
-    alone."""
-    import casestate   # lazy — casestate.py itself lazily imports this
-                       # module (see its own module docstring); both are
-                       # always fully loaded by the time either is CALLED
-
-    if job.get("resolved"):
-        # Idempotent: `advance` clears current_job the tick after resolved is set,
-        # so the live engine never re-enters — but never re-apply a verdict (e.g.
-        # re-page an operator case) if a caller ticks a resolved job again.
-        return
-
-    if not job.get("ordered"):
-        _order_triage(eng, job)
-        return
-
-    if job.get("verdict") is None:
-        verdicts = manifest.get("triage_verdicts") or {}
-        v = verdicts.get(job["triage_id"])
-        if v is None:
-            # No structured verdict yet (R1b, ADR-0009 re-keyed onto R-D).
-            # Arm only once the architect's order is genuinely DELIVERED
-            # (`_turn_settled`: read_hwm >= dispatch_seq, held while
-            # provably mid-turn) — never a wall-clock/idle-tick debounce.
-            # While NOT yet delivered, drive the R-C/R-E/R-G recovery loop
-            # (respawn/re-deliver/no-progress-budget) instead of just idling.
-            if not _turn_settled(eng, job):
-                if job.get("dispatch_seq") is not None and not _delivered(eng, job):
-                    _advance_delivery(eng, manifest, job)
-                return
-            _reset_delivery_state(eng, job)   # R-G: genuine delivery flip — reset the budget
-            # T10 (ADR-0012 §6(b), the guess-from-silence backstop DELETED):
-            # under structured-only + the closed verdict wire (T9), a
-            # genuinely completed architect turn always carries a real
-            # `report.sh --tag verdict ...` reply — R1b's old idle-GUESS
-            # (fabricating "operator"/"answer" from `job.get("source")`
-            # alone) is now dead code by the design's own premise, and
-            # worse, a content guess. A settled turn with NO structured
-            # verdict is instead a genuine delivery gap: bounded RE-ORDER
-            # (the SAME `RESPAWN_CAP` idiom R-C already uses for a stuck
-            # DELIVERY, reused rather than a second cap), never a guess;
-            # past the cap, the operator is paged LOUD (never fabricated
-            # content) — "a truly-dead architect surfaces via the liveness
-            # budget as a page" (supersedes the HANDOVER "R1b byte-for-byte"
-            # note per ADR §6(b)).
-            reorders = job.get("_verdict_reorders", 0) + 1
-            emit.patch_obj(eng, "architect_triage_reorder_bumped", job,
-                           {"_verdict_reorders": reorders}, triage_id=job["triage_id"])
-            if reorders > RESPAWN_CAP:
-                note = (
-                    f"architect's triage order (triage_id={job['triage_id']!r}) was "
-                    f"DELIVERED and re-ordered {reorders} time(s) with NO structured "
-                    f"architect.triage_verdict ever routed — never guessed; paged "
-                    f"LOUD instead (T10)")
-                emit.patch_obj(eng, "architect_triage_reorder_exhausted", job,
-                               {"verdict": "operator", "note": note}, triage_id=job["triage_id"])
-                eng.log("flow", f"architect[triage:{job['triage_id']}]: {job['note']}")
-            else:
-                eng.log("flow", f"architect[triage:{job['triage_id']}]: order "
-                                f"DELIVERED with no structured verdict yet (re-order "
-                                f"{reorders}/{RESPAWN_CAP}) — re-ordering, never guessing")
-                emit.patch_obj(eng, "architect_triage_reorder_retried", job,
-                               {"ordered": False}, triage_id=job["triage_id"])
-                _order_triage(eng, job)
-                return
-        else:
-            _reset_delivery_state(eng, job)   # R-G: a routed report proves delivery too
-            verdict = v.get("verdict")
-            if verdict not in ("scope_forward", "answer", "operator"):
-                eng.log("flow", f"architect[triage:{job['triage_id']}]: "
-                                f"unrecognized verdict {verdict!r} — falling back "
-                                f"to 'operator' (never silently dropped — the one "
-                                f"safe default, still reaches a human)")
-                verdict = "operator"
-            emit.patch_obj(eng, "architect_triage_verdict_recorded", job,
-                           {"verdict": verdict, "note": v.get("note")}, triage_id=job["triage_id"])
-
-    # ADR-0008 — stale-wall revalidation (covers BOTH the R1b idle-backstop
-    # operator verdict AND a structured `triage_verdict="operator"`: both set
-    # verdict="operator" and converge here). A genuine LANDING worker.wall whose
-    # block has already closed out on trunk is moot — revalidate against durable
-    # trunk truth (the gate stage, which survives branch teardown) and retire it
-    # benignly rather than paging the operator about a wall that no longer holds.
-    if job["verdict"] == "operator" and pipeline.stale_landing_wall(
-            manifest, job.get("source"), job.get("worker_id"), job.get("detail")):
-        stale_note = ("stale landing worker.wall — block closed on trunk; "
-                      "operator NOT paged (ADR-0008)")
-        emit.patch_obj(eng, "architect_triage_verdict_downgraded_stale", job,
-                       {"verdict": "answer", "note": stale_note}, triage_id=job["triage_id"])
-        eng.log("flow", f"architect[triage:{job['triage_id']}]: STALE landing worker.wall "
-                        f"revalidated (worker={job.get('worker_id')!r} block CLOSED on "
-                        f"trunk) — downgraded operator->answer, operator NOT paged (ADR-0008)")
-
-    if job["verdict"] in ("answer", "operator"):
-        if job.get("case_id") is not None:
-            casestate.architect_resolve(eng, manifest, job["case_id"], job["verdict"],
-                                        note=job.get("note"))
-        elif job["verdict"] == "operator":
-            casestate.open_operator_case(eng, manifest, job.get("block"),
-                                         job.get("source"), job.get("detail"),
-                                         worker_id=job.get("worker_id"))
-        elif job.get("worker_id") and not eng.dry:
-            eng._to_worker(
-                job["worker_id"],
-                job.get("note") or f"[TRON]  architect answer on triage "
-                                   f"({job.get('source')}): see guidance.",
-                "architect.answer")
-        emit.patch_obj(eng, "architect_triage_resolved", job, {"resolved": True},
-                       triage_id=job["triage_id"])
-        eng.log("flow", f"architect[triage:{job['triage_id']}]: verdict "
-                        f"{job['verdict']!r} applied — job done")
-        return
-
-    # scope_forward — author + land ONE real adhoc block, THEN resolve the
-    # original case (if any) — never before the adhoc genuinely lands.
-    entry = job.get("adhoc")
-    if entry is None:
-        seq = manifest.get("adhoc_seq") or {}
-        n = int(seq.get("triage", 0)) + 1
-        emit.put(eng, manifest, "architect_adhoc_seq_advanced", ("adhoc_seq",), "triage", n)
-        adhoc_id = f"adhoc-triage-{n}"
-        entry = {"block": adhoc_id, "branch": _adhoc_branch(adhoc_id),
-                 "finding": job.get("detail"), "case_id": None, "landed": False,
-                 "ordered": False}
-        emit.patch_obj(eng, "architect_triage_adhoc_created", job, {"adhoc": entry},
-                       triage_id=job["triage_id"])
-
-    if not entry["ordered"]:
-        text = (f"[TRON]  architect — scope_forward on triage "
-               f"(triage_id={job['triage_id']!r}): author + land ONE "
-               f"upcoming adhoc block ({entry['block']}, meta/blocks/"
-               f"{entry['block']}.md, Status: 📋 To do, plus its "
-               f"pipeline.md row) — I land it once it resolves, then "
-               f"resolve the original wall/escalation.")
-        if not eng.dry:
-            eng._to_worker(ARCHITECT_WID, text, "arch.log-review")
-        # R-B: `entry` is its OWN order-requiring sub-state, a fresh dict
-        # separate from `job`'s own `dispatch_seq` namespace — stamping it
-        # here satisfies "NULLED on every transition" by construction (a
-        # freshly-created dict already starts `dispatch_seq=None`).
-        _stamp_dispatch(eng, entry, text, "arch.log-review", extra={"ordered": True})
-        eng.log("flow", f"architect[triage:{job['triage_id']}]: ordered "
-                        f"adhoc {entry['block']!r} (dispatch_seq="
-                        f"{entry.get('dispatch_seq')!r})")
-        return
-
-    truth_ref = eng._truth_ref()
-    patch_id = gitobs.patch_id(eng.paths["root"], entry["branch"], truth_ref, eng.dry)
-    # Content-bound to the CURRENT patch-id, never a stale cached id (T2-17 fix;
-    # single-source in landing.stage_case_id, shared with core/gate.py).
-    land_case_id = landing.stage_case_id(entry.get("case_id"), "triage-forward",
-                                         entry["branch"], patch_id)
-    emit.patch_obj(eng, "architect_triage_adhoc_case_bound", entry,
-                   {"case_id": land_case_id}, triage_id=job["triage_id"])
-
-    outcome = landing.land_via_grant(eng, land_case_id, entry["block"], entry["branch"],
-                                     ARCHITECT_WID, "arch.log-review",
-                                     "architect-triage-forward")
-    if outcome == "landed":
-        emit.patch_obj(eng, "architect_triage_adhoc_landed", entry, {"landed": True},
-                       triage_id=job["triage_id"])
-        eng.log("flow", f"architect[triage:{job['triage_id']}]: adhoc "
-                        f"{entry['block']!r} landed — resolving the original "
-                        f"wall/escalation (never paging the operator)")
-        if job.get("case_id") is not None:
-            casestate.architect_resolve(eng, manifest, job["case_id"],
-                                        "scope_forward", note=job.get("note"))
-        emit.patch_obj(eng, "architect_triage_resolved", job, {"resolved": True},
-                       triage_id=job["triage_id"])
-    elif outcome == "pending":
-        eng.log("flow", f"architect[triage:{job['triage_id']}]: grant live "
-                        f"for {land_case_id}, awaiting land.sh")
-    else:
-        eng.log("flow", f"architect[triage:{job['triage_id']}]: {outcome} "
-                        f"(case {land_case_id}, branch not authored yet?)")
-
-
-def _advance_forward(eng, manifest, job):
-    """One forward-job step: order once (side effect, idempotent — mirrors
-    `core/gate.py`'s own "order once, then poll" stages), then every
-    subsequent call re-checks the branch and attempts the content-bound
-    land via the Wave-1 primitive, reused verbatim. `job["landed"]` is set
-    ONLY once `land_via_grant` itself reports `"landed"` (real ancestry
-    observed) — never on a message alone."""
-    block = job["block"]
-    branch = job.get("branch") or _forward_branch(block)
-    if job.get("branch") != branch:
-        emit.patch_obj(eng, "architect_forward_branch_bound", job, {"branch": branch},
-                       block=block)
-
-    if not job.get("ordered"):
-        text = (f"[TRON]  architect — block {block!r} is missing its block file. "
-               f"Author it on {branch} (meta/blocks/{block}.md, Status: 📋 To do) "
-               f"and push — I land it once it resolves.")
-        if not eng.dry:
-            eng.emit(vocab.TPL_ARCH_FORWARD, text, slots={"block": block},
-                    worker_id=ARCHITECT_WID, kind=vocab.TPL_ARCH_FORWARD)
-        _stamp_dispatch(eng, job, text, "arch.forward", extra={"ordered": True})   # ADR-0009 R-B
-        eng.log("flow", f"architect[forward:{block}]: ordered authoring on {branch} "
-                        f"(dispatch_seq={job.get('dispatch_seq')!r})")
-        return
-
-    truth_ref = eng._truth_ref()
-    patch_id = gitobs.patch_id(eng.paths["root"], branch, truth_ref, eng.dry)
-    # Content-bound to the CURRENT patch-id, never a stale cached id (T2-17 fix;
-    # single-source in landing.stage_case_id).
-    case_id = landing.stage_case_id(job.get("case_id"), "forward", branch, patch_id)
-    emit.patch_obj(eng, "architect_forward_case_bound", job, {"case_id": case_id}, block=block)
-
-    outcome = landing.land_via_grant(eng, case_id, block, branch, ARCHITECT_WID,
-                                     "arch.forward", "architect-forward")
-    # ADR-0006 R1d: record the grant poll's verdict for `advance`'s backstop.
-    # "fail-closed" = the branch's patch-id is unresolvable / no grant minted =
-    # the architect authored NOTHING (prose instead of a branch); "pending" =
-    # authored & landing (must keep polling, never backstop mid-land).
-    emit.patch_obj(eng, "architect_forward_outcome_recorded", job, {"last_outcome": outcome},
-                   block=block)
-    if outcome == "landed":
-        emit.patch_obj(eng, "architect_forward_landed", job, {"landed": True}, block=block)
-        eng.log("flow", f"architect[forward:{block}]: block file landed via "
-                        f"{branch} -> dispatchable")
-    elif outcome == "pending":
-        eng.log("flow", f"architect[forward:{block}]: grant live for {case_id}, "
-                        f"awaiting land.sh")
-    else:
-        eng.log("flow", f"architect[forward:{block}]: {outcome} (case {case_id}, "
-                        f"branch not authored yet?)")
-
-
-def _adhoc_branch(adhoc_id):
-    return f"arch/{adhoc_id}-logreview"
-
-
-def enqueue_log_review(eng, manifest, typ, findings):
-    """Wave 10 (`core/reviewers.py`): a `<type>` review's DONE-REVIEW gate
-    just attested (`reviewers.on_review_done`'s second hand-back) — queue
-    the architect's forward-looking `log-review` job: turn the review's
-    findings into UPCOMING adhoc block files, or none (a clean review).
-    Idempotent bookkeeping only (`manifest["architect"]`/`architect_queue`
-    may not exist yet — the very FIRST architect_queue write of the whole
-    run, if this project has no missing block files and no reconcile ever
-    fired); one `log` job per attested review cycle, never deduped against
-    a prior one (each cycle's findings are independent, unlike `forward`/
-    `reconcile`'s block-keyed dedupe)."""
-    _ensure_installed(eng, manifest)
-    job = {"kind": "log", "type": typ, "findings": list(findings or []),
-          "ordered": False, "adhoc": [], "landed_all": False}
-    emit.append(eng, manifest, "architect_log_job_enqueued", ("architect_queue",), job,
-               type=typ, findings=len(findings or []))
-    eng.log("flow", f"architect: log-review queued for the {typ} review "
-                    f"({len(findings or [])} finding(s))")
-
-
-def _advance_log(eng, manifest, job):
-    """One `log`-job step: order ONCE (mints the adhoc block ids + branch
-    names for every finding, up front, off a manifest-persisted per-type
-    sequence — `manifest["adhoc_seq"]`, mirroring `core/casestate.py::
-    next_case_id`'s own "deterministic, monotonic, never uuid/random"
-    idiom), then every subsequent call re-checks each still-unlanded entry's
-    branch and attempts its content-bound land via the Wave-1 primitive,
-    reused verbatim — exactly `_advance_forward`'s own "order once, then
-    poll+land every entry" shape, generalized over a LIST instead of one
-    block. Zero findings (a clean review) needs no order at all — the job
-    completes on this SAME call, nothing ever queued or landed. `job[
-    "landed_all"]` is set ONLY once EVERY entry's `land_via_grant` has
-    itself reported `"landed"` (real ancestry observed) — never on a
-    message alone, and never for a job still holding un-authored entries."""
-    if not job.get("ordered"):
-        findings = job.get("findings") or []
-        entries = []
-        if findings:
-            typ = job.get("type") or "adhoc"
-            seq = manifest.get("adhoc_seq") or {}
-            n = int(seq.get(typ, 0))
-            for finding in findings:
-                n += 1
-                adhoc_id = f"adhoc-{typ}-{n}"
-                entries.append({"block": adhoc_id, "branch": _adhoc_branch(adhoc_id),
-                                "finding": finding, "case_id": None, "landed": False})
-            emit.put(eng, manifest, "architect_adhoc_seq_advanced", ("adhoc_seq",), typ, n)
-        if not entries:
-            emit.patch_obj(eng, "architect_log_ordered", job,
-                           {"adhoc": entries, "ordered": True, "landed_all": True},
-                           type=job.get("type"))
-            eng.log("flow", f"architect[log:{job.get('type')}]: clean review — "
-                            f"no findings, nothing queued")
-            return
-        emit.patch_obj(eng, "architect_log_ordered", job,
-                       {"adhoc": entries, "ordered": True}, type=job.get("type"))
-        text = (f"[TRON]  architect — log-review for the {job.get('type')} "
-               f"review: author + land {len(entries)} upcoming adhoc block "
-               f"file(s), one per finding ({', '.join(e['block'] for e in entries)}), "
-               f"each on its OWN branch (meta/blocks/<id>.md, Status: 📋 To do, "
-               f"plus its pipeline.md row) — I land each once it resolves.")
-        if not eng.dry:
-            eng._to_worker(ARCHITECT_WID, text, "arch.log-review")
-        _stamp_dispatch(eng, job, text, "arch.log-review")   # ADR-0009 R-B
-        eng.log("flow", f"architect[log:{job.get('type')}]: ordered "
-                        f"{len(entries)} adhoc block(s): "
-                        f"{[e['block'] for e in entries]} (dispatch_seq="
-                        f"{job.get('dispatch_seq')!r})")
-        return
-
-    entries = job.get("adhoc") or []
-    if not entries:
-        emit.patch_obj(eng, "architect_log_poll_recorded", job,
-                       {"landed_all": True, "last_outcome": "landed"}, type=job.get("type"))
-        return
-
-    truth_ref = eng._truth_ref()
-    tick_outcomes = []
-    for e in entries:
-        if e.get("landed"):
-            continue
-        block, branch = e["block"], e["branch"]
-        patch_id = gitobs.patch_id(eng.paths["root"], branch, truth_ref, eng.dry)
-        # Content-bound to the CURRENT patch-id, never a stale cached id (T2-17
-        # fix; single-source in landing.stage_case_id).
-        case_id = landing.stage_case_id(e.get("case_id"), "logreview", branch, patch_id)
-        emit.patch_obj(eng, "architect_log_entry_case_bound", e, {"case_id": case_id},
-                       block=block)
-        outcome = landing.land_via_grant(eng, case_id, block, branch, ARCHITECT_WID,
-                                         "arch.log-review", "architect-logreview")
-        tick_outcomes.append(outcome)
-        if outcome == "landed":
-            emit.patch_obj(eng, "architect_log_entry_landed", e, {"landed": True}, block=block)
-            eng.log("flow", f"architect[log:{job.get('type')}]: adhoc block "
-                            f"{block!r} landed via {branch} -> dispatchable")
-        elif outcome == "pending":
-            eng.log("flow", f"architect[log:{job.get('type')}]: grant live for "
-                            f"{case_id}, awaiting land.sh")
-        else:
-            eng.log("flow", f"architect[log:{job.get('type')}]: {outcome} (case "
-                            f"{case_id}, branch not authored yet?)")
-
-    landed_all = all(e.get("landed") for e in entries)
-    # ADR-0006 R1d: aggregate the tick's poll verdict for `advance`'s backstop.
-    # All landed -> done; ANY entry still authoring/landing ("pending") holds the
-    # poll (never backstop mid-land); otherwise every un-landed entry is
-    # "fail-closed" (nothing authored) -> the architect refused to author its
-    # ordered adhoc block(s) — a started-then-refused log-review that must NOT
-    # silently drop the reviewer's findings.
-    if landed_all:
-        last_outcome = "landed"
-    elif "pending" in tick_outcomes:
-        last_outcome = "pending"
-    else:
-        last_outcome = "fail-closed"
-    emit.patch_obj(eng, "architect_log_poll_recorded", job,
-                   {"landed_all": landed_all, "last_outcome": last_outcome},
-                   type=job.get("type"))
-
-
-def _order_reconcile(eng, job):
-    """One reconcile-job order: a structured `arch.reconcile` message, sent
-    once. No content-check of this module's own (no LLM in this brick — see
-    module docstring) — completion is observed exclusively via a LATER
-    `architect.reconciled` report `core/router.py` routes into `manifest
-    ["reconciled"]`; this function never mutates that itself."""
-    text = (f"[TRON]  architect — reconcile {job['block']!r} against "
-           f"{job.get('after')!r}'s just-landed drift and report "
-           f"architect.reconciled once clear.")
-    if not eng.dry:
-        eng.emit(vocab.TPL_ARCH_RECONCILE, text,
-                slots={"block": job["block"], "after": job.get("after")},
-                worker_id=ARCHITECT_WID, kind=vocab.TPL_ARCH_RECONCILE)
-    _stamp_dispatch(eng, job, text, "arch.reconcile", extra={"ordered": True})   # ADR-0009 R-B
-
-
 def advance(eng, manifest):
     """Called AFTER `core/switchboard.py::fill` each tick (`core/tick.py`) —
     see module docstring for why this positioning (not before fill) is what
@@ -1089,11 +610,11 @@ def advance(eng, manifest):
                                {"status": "idle", "current_job": None},
                                block=cur.get("block"), kind="reconcile")
             elif _turn_settled(eng, cur):
-                # R1b-style backstop for reconcile (mirrors _advance_triage,
-                # ADR-0009 re-keyed onto `_turn_settled`/R-D): the architect's
-                # reconcile order was genuinely DELIVERED and it settled idle
-                # with NO `architect.reconciled` routed — a real-LLM NO-OP
-                # reconcile ("no forward impact") whose free-text classify
+                # R1b-style backstop for reconcile (mirrors `architect_triage.py`'s
+                # own `_advance_triage`, ADR-0009 re-keyed onto `_turn_settled`/R-D):
+                # the architect's reconcile order was genuinely DELIVERED and it
+                # settled idle with NO `architect.reconciled` routed — a real-LLM
+                # NO-OP reconcile ("no forward impact") whose free-text classify
                 # couldn't tag as a structured reconciled report. Tie
                 # completion to ENGINE STATE (genuine delivery + settled),
                 # never to parsed prose: mark the block reconciled so 01-xx's

@@ -442,6 +442,15 @@ EFFECTS = dict([
     # R5: the batched visibility-flag digest was sent and its queue drained
     # (`manifest["architect_flags"]` reset to empty).
     _reg("architect_flags_digest_sent", "state"),
+    # T12 (block 01-38, `core/architect_backstop.py`): ADR-0006 R1d's
+    # started-then-refused-authoring backstop genuinely fired — a designed-
+    # rare defensive path (a bounded RESPAWN_CAP already governs the
+    # respawn/redeliver loop; this is the SEPARATE "the order was delivered
+    # and settled idle, yet nothing was authored" refusal). Forensic-only
+    # (no state of its own — `casestate.open_operator_case`, called right
+    # after, is the state half). The counter partition's (T9, `core/
+    # counters.py`) first REAL `may_fire`-class production member.
+    _reg("architect_refused_authoring_backstop_fired", "forensic", counter_class="may_fire"),
 ])
 
 

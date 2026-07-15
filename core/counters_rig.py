@@ -1,9 +1,12 @@
 """core.counters_rig — mutation-proof lock for `core/counters.py`, the R4
 counter partition (block 01-38 T9, AC-5a/5b).
 
-  P1  the declared partition matches the pinned must-be-zero name set today
-      (no `may_fire` counter is live yet — see `core/counters.py`'s own
-      docstring for why).
+  P1  the declared partition matches the pinned must-be-zero name set today,
+      AND (T12, tightened — was "may_fire_names() is empty") the may_fire
+      set is EXACTLY the one real production member T12 added
+      (`architect_refused_authoring_backstop`, `core/architect_backstop.py`)
+      — named, not just non-empty, so a second silently-added may_fire
+      counter would still be caught.
   P2  `evaluate([])` — a clean run — ACCEPTs, every must-be-zero counter
       printed at 0, no reasons.
   P3  a real must-be-zero counter firing (via its REAL `core/emit.py` call
@@ -88,11 +91,12 @@ class _Eng:
 
 
 def main():
-    # ── P1: the declared partition matches the pin (no may_fire live yet) ──
+    # ── P1: the declared partition matches the pin (T12: may_fire now has its
+    #    first real, NAMED production member — tightened, never loosened) ──
     p1 = (counters.must_be_zero_names() == counters.MUST_BE_ZERO_PINNED
-          and counters.may_fire_names() == frozenset())
-    ok("P1: must_be_zero_names() == the pinned set; may_fire_names() is empty "
-       "(no designed-rare backstop is classified yet — T10-T12's job)", p1,
+          and counters.may_fire_names() == frozenset({"architect_refused_authoring_backstop"}))
+    ok("P1: must_be_zero_names() == the pinned set; may_fire_names() == exactly "
+       "the T12 real production member (architect_refused_authoring_backstop)", p1,
        f"must_be_zero={counters.must_be_zero_names()} may_fire={counters.may_fire_names()}")
 
     # ── P2: a clean run ACCEPTs, every must-be-zero counter printed at 0 ──
