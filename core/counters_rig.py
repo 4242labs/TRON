@@ -210,7 +210,7 @@ def main():
     emit.EFFECTS[PROBE_EFFECT] = emit._Effect(PROBE_EFFECT, "forensic",
                                               counter_class="may_fire")
     counters.COUNTERS[PROBE_COUNTER] = counters._Counter(
-        PROBE_COUNTER, counters.MAY_FIRE, PROBE_EFFECT, ceiling=2)
+        PROBE_COUNTER, PROBE_EFFECT, ceiling=2)
     try:
         # E1: 0 fires -> under ceiling, ACCEPT, printed
         ok_e1, lines_e1, reasons_e1 = counters.evaluate([])
@@ -253,6 +253,56 @@ def main():
     ok("E5: the temporary probe was fully removed (fixture hygiene, never "
        "left classifying a real effect)",
        PROBE_EFFECT not in emit.EFFECTS and PROBE_COUNTER not in counters.COUNTERS)
+
+    # ── D1-D3: L1 (block 01-38 T19 gate fix) — single-source class
+    #     derivation makes emit-vs-counters drift structurally impossible ──
+    # D1: every LIVE declared counter's cls agrees with the emit registry's
+    #     own counter_class for the effect it rides (the wiring is live, not
+    #     just true by luck at one historical edit).
+    d1 = all(c.cls == emit.EFFECTS[c.effect].counter_class for c in counters.COUNTERS.values())
+    ok("D1: every declared counter's cls matches emit.EFFECTS[effect]"
+       ".counter_class — the class is DERIVED, never a second independent "
+       "declaration", d1,
+       f"mismatches={[c.name for c in counters.COUNTERS.values() if c.cls != emit.EFFECTS[c.effect].counter_class]}")
+
+    # D2 (MUTATION PROOF): a counter can no longer be declared for an effect
+    #     whose emit-side counter_class disagrees with (or lacks) a counter
+    #     class — there is no `cls=` constructor arg left to paper over the
+    #     mismatch; the ONLY way to "drift" pre-fix (declare cls=MAY_FIRE for
+    #     an effect emit itself never tagged may_fire, or tagged
+    #     must_be_zero) is now a hard construction-time ValueError.
+    DRIFT_EFFECT = "_probe_drift_effect"
+    emit.EFFECTS[DRIFT_EFFECT] = emit._Effect(DRIFT_EFFECT, "forensic", counter_class=None)
+    try:
+        drifted = False
+        try:
+            counters._Counter("_probe_drift_counter", DRIFT_EFFECT, ceiling=1)
+            drifted = True   # would mean a non-counter effect silently became a counter
+        except ValueError:
+            pass
+        ok("D2 (MUTATION PROOF): constructing a counter for an emit effect "
+           "whose counter_class is None (not registered as a counter at "
+           "all) raises loud, never silently defaulting to a class — drift "
+           "is structurally unrepresentable, not just untested",
+           not drifted)
+    finally:
+        del emit.EFFECTS[DRIFT_EFFECT]
+
+    # D3: the converse — an effect emit DOES tag may_fire is picked up with
+    #     NO cls= argument at all, proving the derivation is genuinely live
+    #     (not a leftover default), mirrored against the real production
+    #     member so this isn't only a synthetic probe.
+    real = counters.COUNTERS["architect_refused_authoring_backstop"]
+    d3 = (real.cls == counters.MAY_FIRE
+          == emit.EFFECTS["architect_refused_authoring_backstop_fired"].counter_class)
+    ok("D3: the real may_fire production counter's cls is exactly emit's "
+       "own registered counter_class for its effect (live derivation, real "
+       "member, not just the synthetic D1/D2 probes)", d3, f"real.cls={real.cls}")
+
+    ok("test:<counter_class_no_drift> (L1): emit-vs-counters class agreement "
+       "is structural (derived), a mismatch-by-construction is impossible "
+       "(D2), and the real may_fire member proves the wiring live (D3)",
+       d1 and not drifted and d3)
 
     # ── I1: INTEGRATION — the real core/sim/live.py acceptance gate wiring ──
     sys.path.insert(0, _SIM_DIR)

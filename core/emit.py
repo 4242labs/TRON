@@ -111,16 +111,15 @@ EFFECTS = dict([
     # operator decision 260714: "a real AIDE invocation is a consequential
     # action... it must be readable from events.jsonl", so a SIM can verify
     # "AIDE fired live" without trusting a unit test as per-run evidence).
-    # T24 wires the real runtime AIDE lane INTO `core/*` and will call
-    # `emit.record(eng, "aide_invocation", ...)` at its own call site; TODAY
-    # the only real AIDE call site is the legacy `engine/judge.py::call_aide`
-    # (bootup, `engine/console.py`) — it writes this SAME event `type`
-    # directly via its own pre-existing `elog.event(...)` idiom (matching
-    # `_record_model_call`'s established pattern), since `engine/` is a
-    # separate tree from `core/` and this block's emit-API-routing invariant
-    # is `core/`-scoped only. Registered here so the vocabulary member is
-    # ONE canonical name regardless of which call site (today's legacy one,
-    # or T24's future `core/*` one) produces it.
+    # The only real AIDE call site today is the legacy `engine/judge.py::
+    # call_aide` (bootup, `engine/console.py`) — it writes this SAME event
+    # `type` directly via its own pre-existing `elog.event(...)` idiom
+    # (matching `_record_model_call`'s established pattern), a REGISTERED
+    # EXCEPTION to the emit-chokepoint invariant: `engine/` is a separate
+    # tree from `core/` and this block's emit-API-routing invariant is
+    # `core/`-scoped only. No `core/*` call site produces this event today.
+    # Registered here so the vocabulary member is ONE canonical name
+    # regardless of which tree ever produces it.
     _reg("aide_invocation", "forensic"),
     # An operator page was attempted over the real transport, with its
     # delivered/failed receipt (`core/engine.py::_page_operator`, R8).

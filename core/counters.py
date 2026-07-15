@@ -46,20 +46,55 @@ Removing or renaming one of these names is an operator decision, never a
 silent drop — `check_append_only()` (proven by `core/counters_rig.py`'s
 `test:<counter_append_only_pinned>`) fails loud the moment any pinned name
 is no longer present in the live `COUNTERS` table.
+
+SINGLE-SOURCE CLASS DERIVATION (block 01-38 T19 gate fix L1)
+--------------------------------------------------------------
+Before this fix, a `_Counter`'s `cls` (must_be_zero/may_fire) was a SECOND,
+independently-typed declaration living here, alongside `core/emit.py`'s own
+`_Effect.counter_class` on the effect the counter rides — two sources of
+one fact, agreement asserted only by convention/comment, free to drift. Now
+a `_Counter` DERIVES its class from `emit.EFFECTS[effect].counter_class` —
+`core/emit.py` (the effect registry) is the sole declarer; this module only
+NAMES individual counters and reads the stream. `emit.EFFECTS[...]
+.counter_class` is also read directly by `core/coordinator_split_rig.py`
+and `core/counters_rig.py` (S5a-style assertions) — so the field stays on
+`_Effect` (OPTION A only; dropping it would break those two read sites).
+`COUNTER_CLASSES` below is likewise imported from `core/emit.py`, not
+re-declared, collapsing the (formerly triplicated) closed-set frozenset to
+one definition.
 """
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import emit   # noqa: E402 — core/emit.py, the effect registry a counter's class derives from
 
 MUST_BE_ZERO = "must_be_zero"
 MAY_FIRE = "may_fire"
-COUNTER_CLASSES = frozenset({MUST_BE_ZERO, MAY_FIRE})
+COUNTER_CLASSES = emit.COUNTER_CLASSES   # single-source: emit.py is the sole declarer
 
 
 class _Counter:
     __slots__ = ("name", "cls", "effect", "discriminator", "ceiling")
 
-    def __init__(self, name, cls, effect, discriminator=None, ceiling=None):
+    def __init__(self, name, effect, discriminator=None, ceiling=None):
+        # DERIVE cls from the emit effect registry (single source, R4/L1) —
+        # never accepted as a second, independently-typed constructor arg.
+        eff = emit.EFFECTS.get(effect)
+        if eff is None:
+            raise ValueError(f"core.counters: counter {name!r} rides emit "
+                             f"effect {effect!r}, which is not registered in "
+                             f"core/emit.py's EFFECTS")
+        cls = eff.counter_class
         if cls not in COUNTER_CLASSES:
-            raise ValueError(f"core.counters: {cls!r} is not a declared counter "
-                             f"class ({sorted(COUNTER_CLASSES)})")
+            raise ValueError(f"core.counters: counter {name!r} rides emit "
+                             f"effect {effect!r} whose counter_class={cls!r} "
+                             f"is not a declared counter class "
+                             f"({sorted(COUNTER_CLASSES)}) — register "
+                             f"counter_class on the emit effect first")
         if cls == MAY_FIRE and ceiling is None:
             raise ValueError(f"core.counters: may_fire counter {name!r} declared "
                              f"with no per-run ceiling — R4 requires one, never a "
@@ -78,13 +113,13 @@ class _Counter:
 # multiplexed generic `must_be_zero` effect, a `discriminator` naming the
 # specific `counter=` payload value that call site stamps).
 _COUNTERS = (
-    _Counter("emit_missing_template", MUST_BE_ZERO,
+    _Counter("emit_missing_template",
              "engine_emit_missing_template_counted"),
-    _Counter("router_catch_all", MUST_BE_ZERO,
+    _Counter("router_catch_all",
              "router_catch_all_counted"),
-    _Counter("vocab_version_handshake_failed", MUST_BE_ZERO, "must_be_zero",
+    _Counter("vocab_version_handshake_failed", "must_be_zero",
              discriminator={"counter": "vocab_version_handshake_failed"}),
-    _Counter("operator_page_permanent_fail", MUST_BE_ZERO, "must_be_zero",
+    _Counter("operator_page_permanent_fail", "must_be_zero",
              discriminator={"counter": "operator_page_permanent_fail"}),
     # T22 (block 01-38, `core/landing.py::land_via_grant`): a content-bound
     # case-id's FIRST-EVER observation already reads "landed" on trunk with
@@ -94,7 +129,7 @@ _COUNTERS = (
     # prior/later landing of DIFFERENT content would carry a DIFFERENT
     # content-bound case-id). A primary path (the landing gate) silently
     # bypassed — must-be-zero, per R4.
-    _Counter("grantless_land_detected", MUST_BE_ZERO, "must_be_zero",
+    _Counter("grantless_land_detected", "must_be_zero",
              discriminator={"counter": "grantless_land_detected"}),
     # may-fire: a designed rare backstop, with a declared per-run ceiling —
     # acceptance always PRINTS the count, and REJECTs only past the ceiling.
@@ -107,7 +142,7 @@ _COUNTERS = (
     # handful of these in one run signals a systemic authoring problem, not
     # isolated bad luck — still rare enough to page every time it fires
     # (see `_backstop_refused_authoring`), just also counted+graded.
-    _Counter("architect_refused_authoring_backstop", MAY_FIRE,
+    _Counter("architect_refused_authoring_backstop",
              "architect_refused_authoring_backstop_fired", ceiling=5),
 )
 
