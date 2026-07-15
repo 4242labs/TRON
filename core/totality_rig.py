@@ -321,9 +321,93 @@ def run_outbound():
                name in referenced, f"referenced={sorted(referenced)}")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# STRUCTURAL BACKSTOP — no core/*.py `.emit(` call site may EVER pass a
+# literal string as its template_id, permanently (CLU directive, post-T14
+# challenge): the six-site R2 violation this task fixed was invisible to
+# `engine/lint.py`'s L27 because its regex is single-line-only and every
+# violating call was the multi-line `eng.emit(\n    "literal", ...)` shape.
+# `engine/lint.py` is also on the fsm.py-retirement path — once it retires,
+# core/ must own this guard itself, not just have fixed the six sites it
+# happened to find. Real AST (this rig's own established method), never a
+# regex — a wrapped literal is exactly as visible to `ast.walk` as an
+# inline one. `core/door_fixtures_rig.py`'s F3 fixture is a DELIBERATE
+# exception (a literal, unregistered id, on purpose, to prove
+# UnknownTemplateError raises loud) — excluded by file, not by weakening
+# the rule for production modules.
+# ══════════════════════════════════════════════════════════════════════════
+def _literal_emit_id_sites():
+    """Every core/*.py production `.emit(...)` call site whose FIRST
+    positional argument is a literal string constant — AST-walked, so a
+    multi-line call (`eng.emit(\\n    "literal", ...)`) is caught exactly
+    like a single-line one; engine/lint.py's L27 (a line-regex) cannot see
+    the multi-line shape, which is precisely how the six sites this task
+    fixed went undetected. Returns `[(path, lineno, literal_value), ...]`."""
+    hits = []
+    for path in _production_files():
+        tree = _parse(path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "emit"):
+                continue
+            if not node.args:
+                continue
+            a0 = node.args[0]
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                hits.append((os.path.relpath(path, APP_ROOT), a0.lineno, a0.value))
+    return hits
+
+
+def run_no_literal_emit_ids():
+    hits = _literal_emit_id_sites()
+    ok("STRUCTURAL BACKSTOP: zero core/*.py production `.emit(...)` call "
+       "sites pass a literal string as template_id (every one must "
+       "reference a vocab.TPL_* constant, R2) — AST-checked, multi-line "
+       "safe, permanent (never regresses to the six-site gap this task "
+       "fixed, even after engine/lint.py's L27 eventually retires with "
+       "fsm.py)",
+       not hits, f"hits={hits}")
+
+    # MUTATION NON-VACUITY: the scanner genuinely fires on a hostile scratch
+    # file using the exact multi-line shape that evaded L27 — proves this is
+    # a real, discriminating AST check, not a vacuous always-pass.
+    import tempfile
+    hostile_src = (
+        "class C:\n"
+        "    def f(self, eng):\n"
+        "        eng.emit(\n"
+        "            \"hostile.literal.id\",\n"
+        "            \"fallback\",\n"
+        "        )\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix="_literal_emit_hostile.py",
+                                      delete=False) as fh:
+        fh.write(hostile_src)
+        hostile_path = fh.name
+    try:
+        tree = _parse(hostile_path)
+        hostile_hits = []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "emit" and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                hostile_hits.append(node.args[0].value)
+    finally:
+        os.remove(hostile_path)
+    ok("STRUCTURAL BACKSTOP MUTATION-NONVACUITY: the same scanner DOES "
+       "fire on a hostile multi-line `.emit(\\n \"literal\", ...)` scratch "
+       "file — a real, discriminating check, not vacuously always-green",
+       hostile_hits == ["hostile.literal.id"], f"hostile_hits={hostile_hits}")
+
+
 def main():
     run_inbound()
     run_outbound()
+    run_no_literal_emit_ids()
 
     passed = sum(1 for _, c, _ in _results if c)
     print(f"\ncore.totality_rig: {'PASS' if passed == len(_results) else 'FAIL'} "
