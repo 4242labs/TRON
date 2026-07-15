@@ -110,6 +110,18 @@ def validate_trunk(root, merged_sha, test_command, test_env=None, ci_check_name=
                                 scratch_root=scratch_root)
 
 
+def root_head_detached(root, dry=False):
+    """Delegates to `trunk.root_head_detached` — block 01-38 T22 (01-32's
+    ADR-0002 D1 detection arm, confirmed absent from `core/*` at T22 and
+    ported minimal+clean): True iff the project ROOT checkout's HEAD is
+    genuinely DETACHED (never on a branch) — local no-remote mode requires
+    this permanently true so the trunk ref can advance by `update-ref` CAS
+    with no working-tree race; `core/landing.py::check_root_detached` reads
+    this every tick to catch a re-attach even on a tick that attempts no
+    landing at all."""
+    return trunk.root_head_detached(root, dry)
+
+
 def last_touching_sha(root, ref, path):
     """Last commit sha touching `path` on `ref`, or '' if none/unresolvable.
     A tiny read-only read (mirrors the first half of `trunk.record_commit_ok`'s

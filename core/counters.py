@@ -13,8 +13,9 @@ Two of `core/emit.py`'s must-be-zero EFFECTS are already one-counter-per-
 effect (`engine_emit_missing_template_counted`, `router_catch_all_counted`).
 The third, generic `must_be_zero` forensic effect is MULTIPLEXED: distinct
 call sites (`core/vocab.py`'s handshake failure, `core/casestate.py`'s
-permanent page-fail) share one effect *type* but name a distinct semantic
-backstop in their own `counter=` payload field. Acceptance needs to read
+permanent page-fail, `core/landing.py`'s grantless-land bypass — T22) share
+one effect *type* but name a distinct semantic backstop in their own
+`counter=` payload field. Acceptance needs to read
 and print each backstop BY NAME ("did the vocab handshake ever fail?" vs
 "did a page ever permanently fail?") — collapsing them to one effect-level
 tally would hide which backstop actually fired. `COUNTERS` below is the
@@ -85,6 +86,16 @@ _COUNTERS = (
              discriminator={"counter": "vocab_version_handshake_failed"}),
     _Counter("operator_page_permanent_fail", MUST_BE_ZERO, "must_be_zero",
              discriminator={"counter": "operator_page_permanent_fail"}),
+    # T22 (block 01-38, `core/landing.py::land_via_grant`): a content-bound
+    # case-id's FIRST-EVER observation already reads "landed" on trunk with
+    # NEITHER a consumed receipt NOR a live grant ever on file for it — the
+    # exact signature of an out-of-band bypass (a worker running raw git
+    # instead of `land.sh`, ADR-0002 D2), never a legitimate route (a genuine
+    # prior/later landing of DIFFERENT content would carry a DIFFERENT
+    # content-bound case-id). A primary path (the landing gate) silently
+    # bypassed — must-be-zero, per R4.
+    _Counter("grantless_land_detected", MUST_BE_ZERO, "must_be_zero",
+             discriminator={"counter": "grantless_land_detected"}),
     # may-fire: a designed rare backstop, with a declared per-run ceiling —
     # acceptance always PRINTS the count, and REJECTs only past the ceiling.
     # T12 (block 01-38, `core/architect_backstop.py`): ADR-0006 R1d's
@@ -107,6 +118,7 @@ MUST_BE_ZERO_PINNED = frozenset({
     "router_catch_all",
     "vocab_version_handshake_failed",
     "operator_page_permanent_fail",
+    "grantless_land_detected",
 })
 
 

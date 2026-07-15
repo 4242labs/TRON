@@ -230,6 +230,8 @@ def land_via_grant(eng, case_id, block, branch, wid, kind, scope):
                         f"land.sh's identical consumed-receipt arm)")
 
     if _observe_landed(eng, branch, truth_ref):
+        if not consumed and not grants.read_live(eng.ctx.grants_dir, case_id):
+            _report_grantless_land(eng, case_id, block, branch, scope)
         _consume_grant_administratively(eng, case_id)
         eng.log("flow", f"land[{case_id}] {scope}: observed landed -> consumed")
         return "landed"
@@ -248,3 +250,109 @@ def land_via_grant(eng, case_id, block, branch, wid, kind, scope):
         eng.log("flow", f"land[{case_id}] {scope}: landed same-tick -> consumed")
         return "landed"
     return "pending"
+
+
+def _report_grantless_land(eng, case_id, block, branch, scope):
+    """T22 (block 01-38, AC-18) — grantless-land detection, confirmed ABSENT
+    from `core/*` (fsm.py's own elaborate `_drive_gate` bypass-check arm was
+    never ported) and re-expressed here MINIMAL, at the ONE seam every
+    landing already goes through: this exact content-bound `case_id`'s
+    FIRST-EVER observation already reads "landed" on trunk with NEITHER a
+    consumed receipt NOR a live grant EVER on file for it. Since
+    `paperwork_case_id`/`stage_case_id` bind identity to the branch's OWN
+    CURRENT patch-id (this module's own root fix), a genuine prior/later
+    landing of DIFFERENT content for the same role/branch would carry a
+    DIFFERENT case-id — this is the structural signature of an out-of-band
+    bypass (a worker running raw git instead of `meta/scripts/land.sh`,
+    ADR-0002 D2), never a legitimate route this primitive itself took.
+
+    Counted unconditionally (must-be-zero, R4 — `core/counters.py`'s
+    `grantless_land_detected`, the SAME surfacing mechanism every other
+    must-be-zero backstop uses: acceptance REJECTS the run by this exact
+    name, never a silent absorb into an ordinary "landed" outcome).
+    Deliberately does NOT ALSO open an architect-first case here: this
+    function runs from deep inside `gate.advance`'s own merge/record/close
+    stage functions, mid-transition — mutating `gate_state["stage"]` from
+    here would race the stage function's OWN imminent write to that exact
+    field (e.g. `_advance_merge`'s `"stage": STAGE_TRUNK` a few lines after
+    this returns), clobbering whichever write lands second. The counter is
+    the safe, non-mutating surfacing path; a future task that wants this to
+    ALSO park the block architect-first should thread the signal back
+    THROUGH the calling stage function's own `emit.patch_obj`, never mutate
+    `gate_state` from two places in the same call."""
+    eng.log("flow", f"land[{case_id}] {scope}: GRANTLESS LAND — {block!r} on "
+                    f"{branch!r} is already on trunk with NO consumed receipt "
+                    f"and NO live grant ever on file for this content-bound "
+                    f"case-id — an out-of-band bypass (ADR-0002 D2 violation), "
+                    f"counted (must-be-zero, R4); acceptance rejects the run by "
+                    f"this exact counter name")
+    emit.record(eng, "must_be_zero", counter="grantless_land_detected",
+               case_id=case_id, block=block, branch=branch, scope=scope)
+
+
+def _find_open_pseudo_case(manifest, block):
+    """The `(case_id, case)` of the OPEN (still-undecided) case parked
+    against a block-less/synthetic pseudo-block id, or `(None, None)` when
+    none is open — the same "at most one open case per block id" premise
+    `casestate.open_case`'s own idempotent guard already establishes,
+    just read here rather than re-derived."""
+    for cid, c in (manifest.get("cases") or {}).items():
+        if c.get("block") == block and c.get("decision") is None:
+            return cid, c
+    return None, None
+
+
+def check_root_detached(eng, manifest):
+    """T22 (block 01-38, AC-18) — 01-32's ADR-0002 D1 detection arm,
+    confirmed ABSENT from `core/*` (fsm.py-only: `_check_root_detached`) and
+    ported here MINIMAL, never copied: a local no-remote-mode root must stay
+    DETACHED (never re-attached to a branch) so the trunk ref can advance by
+    `update-ref` CAS with no working-tree race — `land.sh`'s own
+    `require_detached` refusal is the structural write-time backstop; this
+    is the ACTIVE per-tick READ (`core/tick.py` calls this once per tick,
+    early — before `route`/`act`, so a re-attach is caught even on a tick
+    that attempts no landing at all) that catches a re-attach and routes it
+    the SAME way any other violation is routed. Remote-mode roots are never
+    required to detach (the cost scopes to local no-remote mode only,
+    mirrors `core/gitobs.py::refresh`'s own remote-mode no-op); `eng.dry`
+    is a genuine no-op too (nothing to violate).
+
+    Reuses the EXISTING architect-first case machinery
+    (`casestate.open_case`, lazily imported — `core/gate.py` imports THIS
+    module, so a module-level `import casestate` here would cycle back
+    through `casestate -> gate -> landing`; deferred exactly like
+    `casestate.py`'s own documented `import architect`), never a new
+    escalation mechanism: a block-less, worker-less pseudo-case
+    (`block="root-reattach"`, `source="root.reattached"` — the SAME
+    `open_case` idempotent-per-block guard means a second call while still
+    attached is a genuine no-op, never a duplicate case). Self-heals in the
+    F-1 spirit: once detachment is restored, an OPEN case still
+    architect-owned (never yet delivered to the operator — T21's own
+    no-take-back rule extends here too, deliberately) is resolved via
+    `casestate.architect_resolve`'s existing `"answer"` verdict — no bespoke
+    close path of this module's own."""
+    remote = eng.paths.get("remote") or "none"
+    if eng.dry or remote not in ("none", ""):
+        return
+    import casestate   # lazy — see docstring above for the cycle this avoids
+
+    pseudo_block = "root-reattach"
+    existing_id, existing = _find_open_pseudo_case(manifest, pseudo_block)
+    attached = not gitobs.root_head_detached(eng.paths["root"], eng.dry)
+
+    if attached:
+        if existing_id is not None:
+            return   # idempotent — already an open case, never a duplicate
+        casestate.open_case(
+            eng, manifest, pseudo_block, "root.reattached",
+            "the project root is checked out on a branch again — ADR-0002 "
+            "D1 violation: the local-mode root must stay detached so the "
+            "trunk ref can advance by update-ref CAS with no working-tree "
+            "race; landing holds until detachment is restored",
+            worker_id=None)
+        return
+
+    if existing_id is not None and existing.get("owner") == "architect":
+        casestate.architect_resolve(
+            eng, manifest, existing_id, "answer",
+            note="root-reattach self-healed — detachment restored")

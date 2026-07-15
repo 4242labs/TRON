@@ -130,6 +130,7 @@ if _HERE not in sys.path:
 import state        # noqa: E402 — core/state.py
 import snapshot     # noqa: E402 — core/snapshot.py, the per-tick immutable view
 import gate         # noqa: E402 — core/gate.py, the DONE ladder this host drives
+import landing      # noqa: E402 — core/landing.py, T22's per-tick root-detach check
 import router       # noqa: E402 — core/router.py, wave 5's structured ASSIGN
 import switchboard  # noqa: E402 — core/switchboard.py, wave 5's SPAWN
 import pipeline     # noqa: E402 — core/pipeline.py, wave 6's ONE pipeline-view read per tick
@@ -188,6 +189,16 @@ def tick(eng):
     # harmless on any duck-typed `eng` stand-in (every `core/*_rig.py`
     # fixture) that never reads it.
     eng._manifest = snap.manifest
+
+    # ── T22 (01-32 ADR-0002 D1 detection arm): an ACTIVE per-tick read —
+    #     local-mode roots must stay DETACHED; catches a re-attach even on a
+    #     tick that attempts no landing at all. Run BEFORE route/act so a
+    #     re-attach this tick holds landing before any land_via_grant call
+    #     below even runs. A genuine no-op in remote mode / dry (see its own
+    #     docstring) — harmless on every duck-typed `eng` stand-in that
+    #     never sets `eng.paths["remote"]` (reads "none", the local-mode
+    #     default every pre-existing `core/*_rig.py` fixture already is) ──
+    landing.check_root_detached(eng, snap.manifest)
 
     # ── route (structured — NO LLM/classify in this brick): ASSIGN any
     #     worker that reported online this tick, before deciding what to
