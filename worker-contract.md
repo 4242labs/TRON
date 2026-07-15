@@ -10,7 +10,9 @@ Every reply to the Orchestrator goes through the report command your spawn messa
 (`report.sh --intake <your intake path> <your worker id> "<message>"` — `--intake` is
 REQUIRED and always comes FIRST; copy the exact command your spawn message gave you, never
 retype or reconstruct the path yourself). A reply that is not on the channel does not
-exist to the Orchestrator — turn output is never read.
+exist to the Orchestrator — turn output is never read. Narrating your plan, status, or
+findings in your reply text — however clear or confident it reads — moves nothing and is
+seen by no one; only a `report.sh` invocation is an act. Until you run it, you are silent.
 
 ## 2. One message, one act — tagged
 A gate reply carries its verb as data, so nothing is guessed:

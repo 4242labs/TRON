@@ -313,21 +313,40 @@ def _pulse(eng, root, manifest, loop_i, started_at):
     return {"os_procs": procs, "cases": len(cases), "pages": len(pages)}
 
 
-def _courier(eng, manifest, delivered):
+def _courier(eng, manifest, delivered, prose=True):
     """THE COURIER — harvest each worker's turn OUTPUT into the engine inbox.
 
-    Delivery must NOT depend on the LLM choosing to run `report.sh` (a real
-    agent replies in prose instead — the tron-06 wall). So each loop, read
-    every worker's `timeline.jsonl` `turn_done` events and append any not-yet-
-    delivered turn text to that worker's OWN private intake (`core.intake`,
-    block 01-38 T1 — the courier knows exactly which `wid` it is harvesting,
-    a durable engine-side record, never a claim) as a free-text `{text,
-    sender}` report — exactly the shape `report.sh` free-text produces,
-    which `core.classify` then resolves. A structured `report.sh --tag`
-    line (when the agent DID run it) still lands directly, in the SAME
-    intake, and its deterministic tag wins; the courier is the robust
-    fallback, never the only path. `delivered` (a set of `(wid, seq)`)
-    dedupes across loops so a turn is couriered once."""
+    HISTORICAL DESIGN (`prose=True`, the default — preserves every existing
+    caller's behavior, e.g. every scripted `core/sim/*_rig.py` drive that
+    depends on this exact scrape): read every worker's `timeline.jsonl`
+    `turn_done` events and append any not-yet-delivered turn text to that
+    worker's OWN private intake (`core.intake`, block 01-38 T1) as a
+    free-text `{text, sender}` report — exactly the shape `report.sh`
+    free-text once produced. `core.classify` is now STRUCTURED-ONLY
+    (`worker-contract.md` §2, block 01-37/ADR-0012): an untagged, unbranched
+    line has no verb to resolve, so `core.door.refuse` records it and opens
+    an architect-first `door_refusal` case EVERY time — and a real agent
+    narrates prose CONSTANTLY (an LLM turn always produces turn-text), so
+    this scrape manufactures an endless refuse -> architect-triage ->
+    re-dispatch churn out of ordinary narration ("FYI — online, standing
+    by"). That is the T19 live-run killer this knob exists to suspend.
+
+    `prose=False` (block 01-38 T19 — the LIVE host-cli run's own default,
+    threaded from `run_live(courier_prose=...)`): harvests NOTHING and
+    returns 0 immediately. An agent's turn-text becomes genuinely invisible
+    to the engine — pure silence, never a manufactured report. This does
+    NOT touch the INDEPENDENT structured path: a real `report.sh --tag
+    <verb>` invocation (or `--branch`) lands directly in the SAME intake
+    file, written by the script subprocess itself, never through this
+    function — `core/sim/report_channel_rig.py` proves that path start to
+    finish with no courier involved at all. Suspending this scrape is the
+    ONLY way an agent moves engine state while `prose=False`: run
+    `report.sh`, or say nothing to the engine.
+
+    `delivered` (a set of `(wid, seq)`) dedupes across loops so a turn is
+    couriered once, when prose harvesting is on."""
+    if not prose:
+        return 0
     workers = manifest.get("workers") or {}
     # Harvest the persistent ARCHITECT too — it is pool-EXCLUDED (never in
     # manifest["workers"]), so a workers-only loop would never deliver its
@@ -459,7 +478,7 @@ def _install_fleet_outage_injection(eng, ctx, started_at, inject_after_min):
 def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
              poll_sec=DEFAULT_POLL_SEC, scope="all", max_loops=100000,
              adapter="host-cli", operator_proxy=False, expect_pages=0,
-             inject_fleet_outage_after=None):
+             inject_fleet_outage_after=None, courier_prose=True):
     """Boot + drive a real-LLM E2E SIM to a clean session-end (or a pause
     condition). Returns a structured result dict. ALWAYS tears the real fleet
     down. See module docstring for the clock, PULSE, and pause semantics.
@@ -485,7 +504,19 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
     installed right after `eng` is constructed (before `eng.start()`), so it
     covers the whole run including bootup's own first dispatch. `None` (the
     default) installs nothing at all — zero behavior change for every other
-    caller of this function."""
+    caller of this function.
+
+    `courier_prose` (block 01-38 T19 — the prose-channel suspension, default
+    `True`): threaded straight into `_courier`'s own `prose` argument every
+    loop — see that function's docstring for the full rationale (an LLM's
+    raw turn-narration scraped into its own intake as an untagged report is
+    what the structured-only door refuses forever, the endless
+    refuse->triage->re-dispatch churn that never reaches `gate.local`).
+    Defaulting `True` here preserves every existing direct caller of this
+    function unchanged (every `core/sim/*_rig.py` scripted drive still gets
+    the scrape it depends on). The CLI (`main()`, below) is the ONE caller
+    that flips its own default to suspended for the real host-cli run — see
+    `--courier-prose`'s own help text."""
     if scaffold_src:
         os.environ["TRON_REAL_SCAFFOLD_SRC"] = scaffold_src
 
@@ -541,7 +572,7 @@ def run_live(scaffold_src=None, worker_count=1, budget_min=60.0,
             # THE COURIER runs BEFORE observe so this tick sees the harvested
             # reports — delivery never depends on the agent running report.sh.
             try:
-                n = _courier(eng, state.load(ctx), delivered)
+                n = _courier(eng, state.load(ctx), delivered, prose=courier_prose)
                 if n:
                     print(f"  courier: delivered {n} turn-output report(s) to the inbox", flush=True)
             except Exception as e:   # noqa: BLE001 — the courier must never kill the loop
@@ -761,6 +792,20 @@ def build_parser():
                         "Omitted (default None) installs nothing — zero behavior change "
                         "for every other caller. Use `--workers` >= 2 so \"full fleet\" "
                         "is meaningful.")
+    ap.add_argument("--courier-prose", action="store_true", dest="courier_prose",
+                    default=False,
+                    help="block 01-38 T19: RE-ENABLE the courier's raw turn-output "
+                        "scrape (see `_courier`'s own docstring). SUSPENDED BY "
+                        "DEFAULT for this live host-cli run: an agent's turn-"
+                        "narration is scraped into its own intake as an untagged "
+                        "report, which the structured-only door (`worker-contract.md` "
+                        "§2) refuses every time -> endless refuse/triage/re-dispatch "
+                        "churn, `gate.local` never opens. Suspended, an agent moves "
+                        "engine state ONLY by running `report.sh --tag <verb>` — a "
+                        "structured report.sh call still lands regardless of this "
+                        "flag (an independent write path, never routed through the "
+                        "courier). Pass this flag only to restore the old scrape-"
+                        "fallback behavior for debugging.")
     return ap
 
 
@@ -1092,7 +1137,8 @@ def main(argv=None):
                               scope=args.scope, adapter=args.adapter,
                               operator_proxy=args.operator_proxy,
                               expect_pages=args.expect_pages,
-                              inject_fleet_outage_after=args.inject_fleet_outage_after)
+                              inject_fleet_outage_after=args.inject_fleet_outage_after,
+                              courier_prose=args.courier_prose)
         except LiveRunError as e:
             print(f"REFUSED: {e}", file=sys.stderr)
             exit_code = 2
