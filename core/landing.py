@@ -169,8 +169,17 @@ def _order_land(eng, wid, block, case_id, branch, kind="gate.land"):
 
 def _observe_landed(eng, branch, truth_ref):
     """Ported verbatim from `land.py::_observe_landed`: has `branch`'s tip
-    already reached trunk? Committed-ref read only, never working-tree/say-so."""
+    already reached trunk? Committed-ref read only, never working-tree/say-so.
+    T19 live-finding fix: in live (non-dry) mode, an unresolvable tip (branch
+    never authored / already gone with no receipt) is NEVER treated as
+    landed — `is_ancestor("")`'s `True` is a dry-mode vacuous-truth
+    convenience, not a real observation; see the guard below."""
     tip = gitobs.tip_sha(eng.paths["root"], branch, eng.dry)
+    if not eng.dry and not tip:
+        return False   # unresolvable branch tip (never authored / gone with no
+                       # receipt): is_ancestor("") is a DRY-mode vacuous truth,
+                       # NEVER a real landing. A since-deleted-post-land branch
+                       # is caught upstream by the consumed-receipt arm (land_via_grant).
     return gitobs.is_ancestor(eng.paths["root"], tip, truth_ref, eng.dry)
 
 

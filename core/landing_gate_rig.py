@@ -358,6 +358,47 @@ def _grant_lifecycle_and_write_boundary():
               for e in eng.events.log),
        "no grantless event for the covered (GL4) case")
 
+    # ── GL11: T19 live-finding fix — an administrative no-op forward
+    #    (architect_triage.py's `scope_forward` adhoc-forward lane) on a
+    #    branch that was NEVER authored must NEVER read "landed". Mirrors
+    #    architect_triage.py:290's own `stage_case_id(entry.get("case_id"),
+    #    "triage-forward", entry["branch"], patch_id)` call exactly, with
+    #    both the branch tip AND the patch-id genuinely unresolvable (never
+    #    authored) — the SAME shape that false-fired `grantless_land_detected`
+    #    on the T19 live trivial run. Both arms in the SAME gate: GL5b above
+    #    proves a genuine out-of-band bypass (resolvable tip) STILL fires the
+    #    counter by name; GL11 proves an unauthored branch (unresolvable tip)
+    #    stays silent — never landed, never counted. ──
+    unauthored_branch = "arch/adhoc-triage-unauthored-logreview"
+    ok("GL11pre (NON-VACUITY — must be GREEN): the unauthored branch genuinely "
+       "has no tip at all — trunk.tip_sha resolves to '' (never created, not a "
+       "stale/deleted one)",
+       trunk.tip_sha(root, unauthored_branch, False) == "",
+       f"tip_sha={trunk.tip_sha(root, unauthored_branch, False)!r}")
+    land_case_id = landing.stage_case_id(None, "triage-forward", unauthored_branch, "")
+    events_before_gl11 = len(eng.events.log)
+    outcome_gl11 = landing.land_via_grant(eng, land_case_id, "GL-UNAUTHORED",
+                                          unauthored_branch, lr.WID, "test", "gl")
+    grantless_events_gl11 = [e for e in eng.events.log[events_before_gl11:]
+                             if e["type"] == "must_be_zero"
+                             and e["payload"].get("counter") == "grantless_land_detected"]
+    ok("GL11 (T19 LIVE-FINDING FIX, THE KILLER — must be GREEN): an unauthored "
+       "branch (unresolvable tip) never reads 'landed' — outcome is 'fail-closed' "
+       "(no grant, patch-id also unresolvable), NOT 'landed', and ZERO "
+       "grantless_land_detected events fire for this case-id — the exact false-fire "
+       "the T19 trivial live run hit (`arch/adhoc-triage-unauthored-logreview` never "
+       "authored -> old is_ancestor('') vacuous-True -> false 'landed' -> false "
+       "grantless-land REJECT)",
+       outcome_gl11 == "fail-closed" and len(grantless_events_gl11) == 0,
+       f"outcome_gl11={outcome_gl11} grantless_events_gl11={grantless_events_gl11}")
+
+    ok_eval_gl11, lines_gl11, reasons_gl11 = counters.evaluate(eng.events.log[events_before_gl11:])
+    ok("GL11b (ACCEPTANCE STAYS GREEN FOR THIS SEGMENT — must be GREEN): "
+       "counters.evaluate over just this case's events never names "
+       "grantless_land_detected as a rejection reason",
+       not any("grantless_land_detected" in r for r in reasons_gl11),
+       f"ok_eval_gl11={ok_eval_gl11} reasons_gl11={reasons_gl11}")
+
     # ── GL7/GL8: root-reattach detected + self-heals (T22 production
     #    addition), real git, the FULL architect-first case machinery
     #    (needs a more complete duck-typed eng — gate_full_rig's own, which
