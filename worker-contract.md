@@ -7,12 +7,14 @@ off. Read it fully at spawn; the Orchestrator's orders assume you have.
 
 ## 1. The channel
 Every reply to the Orchestrator goes through the report command your spawn message named
-(`report.sh <your worker id> "<message>"`). A reply that is not on the channel does not
+(`report.sh --intake <your intake path> <your worker id> "<message>"` — `--intake` is
+REQUIRED and always comes FIRST; copy the exact command your spawn message gave you, never
+retype or reconstruct the path yourself). A reply that is not on the channel does not
 exist to the Orchestrator — turn output is never read.
 
 ## 2. One message, one act — tagged
 A gate reply carries its verb as data, so nothing is guessed:
-`report.sh <id> --tag <verb> [--block <id>] [--branch <name>] "<message>"`
+`report.sh --intake <path> <id> --tag <verb> [--block <id>] [--branch <name>] "<message>"`
 Verbs: `done` · `recorded` · `wall` · `review-done` · `clean` · `flag`.
 The architect additionally answers a TRIAGE order with `verdict` (§7) — no other role sends it.
 One VERB per message — never two. Modifiers ride freely on any message: `--branch <name>`
@@ -89,10 +91,17 @@ Every wall routes to the architect first, who either answers it directly, scopes
 as upcoming work, or — its own call, never yours to flag — raises it to the operator. You
 never need to say which of those it is; just report the wall.
 
+`wall` and `flag` are engineer/reviewer verbs — the architect does not have them. If you are
+the architect and a forward/reconcile order is missing information you cannot resolve from
+the Project Docs given, there is no separate escalation word for that order type: use your
+best judgment and report your own ordered verb (`reconciled`, etc.) with the gap named plainly
+in your note, exactly as you would for any other outcome. (A TRIAGE order is different — that
+one always answers through the verdict wire, §7, never `wall`.)
+
 ## 7. The architect's verdict wire
 This section is for the architect role only. A TRIAGE order names a `triage_id` and asks for
-a verdict; answer with `report.sh architect --tag verdict --triage-id <id> --verdict
-<scope_forward|answer|operator> "<note>"` — `scope_forward` when it's upcoming work to scope
+a verdict; answer with `report.sh --intake <path> architect --tag verdict --triage-id <id>
+--verdict <scope_forward|answer|operator> "<note>"` — `scope_forward` when it's upcoming work to scope
 and land, `answer` when you can resolve it directly (say how, in `<note>`), `operator` when
 it's genuinely the operator's call. Always reply with the verdict wire, never a plain-text
 answer alone — a triage order that goes unanswered eventually pages the operator on its own,

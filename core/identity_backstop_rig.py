@@ -195,6 +195,13 @@ _DURABLE_ID_EXEMPT = {
     # itself is already exempt under).
     "architect_backstop.py", "architect_enqueue.py", "architect_forward.py",
     "architect_log.py", "architect_reconcile.py", "architect_triage.py",
+    # T15 (block 01-38): a real-model conformance harness (not `_rig.py`-
+    # suffixed ON PURPOSE — l1.sh must never auto-run a real, token-
+    # spending model call). Its one read, `case.get("worker_id")`, is the
+    # SAME durable-case-owner shape architect.py/gate.py/etc. are already
+    # exempt for: checking which of ITS OWN synthetic fixture worker ids a
+    # refusal case belongs to, never a claim read off an inbound message.
+    "prompt_conformance.py",
 }
 # `r3_lint.py`/`r3_guard.py` — the R3 honesty backstop's own static taint
 # analysis legitimately matches these tokens as AST-compared string
