@@ -14,14 +14,17 @@
 # core/r3_guard.py itself hardcodes no path. Today that policy is
 # operator-inbox.jsonl only: R8 (ADR-0012 §2) already forbids ANY rig from
 # writing it, under any circumstance, so blanket-protecting it can never
-# legitimately trip a rig. worker-inbox.jsonl is DELIBERATELY NOT protected
-# yet — several rigs still write it in-process (append_jsonl) as a currently-
-# LEGAL shape (a real worker sender, or no sender key — see core/r3_lint.py's
-# payload-safety proof), and blanket-protecting it would false-RED every one
-# of them. That is the one piece of the R3 pivot still gated on an operator
-# ruling (MODEL A: route every rig through scripts/report.sh instead, then
-# protect worker-inbox.jsonl too) — flipping it later is a ONE-LINE change to
-# R3_GUARD_PROTECT below, never a code change.
+# legitimately trip a rig. worker-inbox.jsonl is NOT in R3_GUARD_PROTECT
+# because block 01-38 T1 already DELETED the legacy shared drop-box from the
+# live core/ path entirely (the root invariant — no core/*.py reader is left
+# for a guard to defend; mutation-proven by core/hostile_minter_rig.py's
+# drop-box-removed assertion) — not because a ruling is outstanding. R3
+# MODEL A (route every rig through the real door) is the operator-approved
+# model as of 2026-07-14 (blocks/01-38-the-engine-close.md's binding-rules
+# section); this is settled, not pending. If the frozen legacy engine/fsm.py
+# path (out of core/'s scope) ever needs the SAME runtime protection for its
+# own worker-inbox.jsonl, that is a ONE-LINE change to R3_GUARD_PROTECT below
+# — never a code change here.
 #
 # A rig's own instance dir is minted at RUNTIME (tempfile.mkdtemp(), a random
 # suffix this script can't predict) — TMPDIR is pointed at a fresh sandbox for

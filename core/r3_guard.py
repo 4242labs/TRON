@@ -45,10 +45,18 @@ specs, each one of:
 This module hardcodes NOTHING about which paths are "the" ingress files —
 not `worker-inbox.jsonl`, not `operator-inbox.jsonl`. `scripts/l1.sh` is
 the ONE place that policy lives today (operator_inbox only — see its own
-comment for why worker_inbox is deliberately NOT yet in that list: it is
-the one piece of the R3 pivot still awaiting an operator ruling on MODEL
-A/B). Flipping that policy later is a ONE-LINE CHANGE to what `l1.sh`
-exports into `R3_GUARD_PROTECT` — never a code change here.
+comment: `worker-inbox.jsonl` is not in that list because block 01-38 T1
+already deleted the legacy shared drop-box from the live `core/` path
+entirely, mutation-proven by `core/hostile_minter_rig.py`'s drop-box-
+removed assertion — there is no `core/` reader left for `R3_GUARD_PROTECT`
+to defend, so blanket-protecting the file would guard nothing real. R3
+MODEL A (route every rig through the real door) is the operator-approved
+model (2026-07-14, `blocks/01-38-the-engine-close.md`'s binding-rules
+section) — this is no longer an open ruling). If the frozen legacy
+`engine/fsm.py` path (out of scope for `core/`) ever needs the SAME
+runtime protection for its own `worker-inbox.jsonl`, that is a ONE-LINE
+CHANGE to what `l1.sh` exports into `R3_GUARD_PROTECT` — never a code
+change here.
 
 DESIGN: DENY-BY-DEFAULT OVER EVERY AUDIT EVENT — THE TERMINAL FIX (block
 01-40 T1, EIGHTH hostile review). Every one of the seven prior review
