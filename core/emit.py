@@ -182,6 +182,11 @@ EFFECTS = dict([
     _reg("case_page_permfailed", "state"),
     # R8 "seen" receipt: a genuine inbound reply named an open case.
     _reg("case_seen", "state"),
+    # T21 (block 01-38): a worker-loss re-drive (settle's resume/amend, or the
+    # architect's own scope_forward/answer) wrote a durable handover briefing
+    # for this block — `manifest["handover"][block]` — for the NEXT dispatch
+    # to read (full context/timeline/why-dropped), instead of a blank re-assign.
+    _reg("handover_recorded", "state"),
 
     # ── core/gate.py — the DONE-gate ladder (T7 sub-commit 3) ──
     # These patch the live `gate_state` (a manifest["gates"][block] sub-object
@@ -284,6 +289,10 @@ EFFECTS = dict([
     # T4/AC-5: the must-be-zero router catch-all counter fired (an unroutable tag
     # reached route()) — `manifest["counters"]["router_catch_all"]` bumped.
     _reg("router_catch_all_counted", "state", counter_class="must_be_zero"),
+    # T21 (block 01-38): a pending `manifest["handover"][block]` briefing was
+    # read AND consumed (dropped) by this block's next ASSIGN — never reused
+    # for a later, unrelated drop of the same block.
+    _reg("handover_consumed", "state"),
 
     # ── core/reviewers.py — cadence PULL reviewers + the DONE-REVIEW gate
     #     (T7 sub-commit 8) ──

@@ -220,7 +220,7 @@ def dispatch_excluded_blocks(manifest):
     return parked_blocks(manifest) | set(manifest.get("abandoned_blocks") or [])
 
 
-def _drop_gate_and_worker(eng, manifest, block):
+def _drop_gate_and_worker(eng, manifest, block, handover=None):
     """The shared 'un-block, re-drivable' mechanism `resume`/`amend`/
     `abandon` all use: drop the block's (now-terminal) gate AND any worker
     record still naming it, so `core/pipeline.py::in_flight_blocks` and
@@ -229,10 +229,42 @@ def _drop_gate_and_worker(eng, manifest, block):
     still under `worker_count`, per `core/tick.py`'s own act-before-fill
     ordering) mints a genuinely FRESH dispatch, never a half-resurrected
     stale `gate_state`. Both drops route through the one emit API (block
-    01-38 T7): each real drop writes one `block_redrivable` event."""
+    01-38 T7): each real drop writes one `block_redrivable` event.
+
+    `handover` (T21, block 01-38 — full worker-death handover): an optional
+    `{"worker_id", "source", "detail", "disposition"}` dict. When given, a
+    durable `manifest["handover"][block]` briefing is written BEFORE the gate
+    is dropped (so this call captures the terminal `gate_state`'s own
+    `branch` while it still exists) — the record the block's NEXT dispatch
+    reads (`core/router.py::_assign_worker`) to brief the replacement with
+    full context (the prior worker id, the branch, WHY it was dropped, and an
+    explicit re-verify-current-state instruction) instead of a blank
+    re-assign, and to re-target on BLOCK/BRANCH state rather than address
+    anything to the id of a worker that no longer exists. `put`, never
+    `append` — only the MOST RECENT drop of a block is ever relevant to its
+    next assign, so a later drop simply overwrites an unconsumed one; a
+    durable `manifest`-rooted section, so it survives an intervening
+    fleet-outage pause for free (nothing here special-cases a hold — `core/
+    switchboard.py::fill`'s pause check never touches this section).
+    Deliberately OMITTED by callers where a replacement briefing would be
+    meaningless: `abandon` (the block is never re-dispatched, ever — a
+    handover nobody will ever read) and `self_retract` (the SAME still-alive
+    worker keeps going; there is no replacement to brief)."""
     if not block:
         return
     gates = manifest.get("gates")
+    gate_state = gates.get(block) if gates else None
+    if handover is not None:
+        emit.put(eng, manifest, "handover_recorded", ("handover",), block, {
+            "block": block,
+            "dead_worker_id": handover.get("worker_id"),
+            "branch": (gate_state or {}).get("branch"),
+            "source": handover.get("source"),
+            "detail": handover.get("detail"),
+            "disposition": handover.get("disposition"),
+            "dropped_at": _now_iso(),
+        }, block=block, dead_worker_id=handover.get("worker_id"),
+           disposition=handover.get("disposition"))
     if gates is not None and block in gates:
         emit.drop(eng, manifest, "block_redrivable", ("gates",), block,
                   block=block, what="gate")
@@ -388,6 +420,23 @@ def architect_resolve(eng, manifest, case_id, verdict, note=None):
                         f"case {case_id!r} (verdict={verdict!r}, already "
                         f"decided {case.get('decision')!r}) — logged, no-op")
         return False
+    if verdict == "operator" and case.get("owner") == "operator":
+        # T21 page-dedup-per-case: a verdict="operator" case stays OPEN
+        # (`decision` is never set by the branch below — see its own
+        # docstring), so the `decision is not None` guard above cannot catch
+        # a SECOND `architect_resolve(..., "operator")` call for a case that
+        # was already escalated (a duplicate triage resolution, a race
+        # between two triggering conditions for the same case, or a rig/
+        # caller re-driving an already-resolved job). Refused here — the
+        # operator is paged AT MOST ONCE per case id, whichever condition
+        # triggers it; THE FLOOR's own `reping` (a SEPARATE, intentional,
+        # budgeted re-ping ladder for an unanswered page) is the only thing
+        # that ever pages an operator-owned case again.
+        eng.log("flow", f"casestate: architect_resolve verdict='operator' for "
+                        f"case {case_id!r} REFUSED — already operator-owned "
+                        f"(paged once already) — logged, no-op, never a "
+                        f"second first-page for the same case (T21 page-dedup)")
+        return False
 
     block = case.get("block")
     worker_id = case.get("worker_id")
@@ -433,7 +482,9 @@ def architect_resolve(eng, manifest, case_id, verdict, note=None):
                     f"guidance, re-drive.",
             "architect.answer")
 
-    _drop_gate_and_worker(eng, manifest, block)
+    _drop_gate_and_worker(eng, manifest, block, handover={
+        "worker_id": worker_id, "source": case.get("source"),
+        "detail": case.get("detail"), "disposition": verdict})
     eng.log("flow", f"casestate: case {case_id!r} ARCHITECT-{verdict.upper()} "
                     f"— block {block!r} un-blocked, re-drivable (fresh gate/"
                     f"re-dispatch next fill), operator NEVER paged")
@@ -837,7 +888,9 @@ def settle(eng, manifest, case_id, verb, note=None):
                 note or f"[TRON]  operator amendment on case {case_id} — "
                         f"see the operator's note and re-drive.",
                 "operator.amend")
-        _drop_gate_and_worker(eng, manifest, block)
+        _drop_gate_and_worker(eng, manifest, block, handover={
+            "worker_id": worker_id, "source": case.get("source"),
+            "detail": case.get("detail"), "disposition": verb})
         eng.log("flow", f"casestate: case {case_id!r} {verb.upper()}D — block "
                         f"{block!r} un-blocked, re-drivable (fresh gate/"
                         f"re-dispatch next fill)")

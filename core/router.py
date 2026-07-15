@@ -203,6 +203,54 @@ def _is_review_pseudo_block(block):
     return isinstance(block, str) and block.startswith("review:")
 
 
+def _handover_briefing(manifest, block):
+    """T21 (block 01-38) — full worker-death handover: if `core/casestate.py::
+    _drop_gate_and_worker` left a durable briefing for THIS block
+    (`manifest["handover"][block]` — written on a worker-loss re-drive:
+    settle's resume/amend, or the architect's own scope_forward/answer),
+    render it as an APPENDIX to the SAME `assign.worker` message body — no
+    new vocab slot, the existing `assignment` slot just carries more text.
+    Empty string when there is nothing to hand over (an ordinary first-ever
+    ASSIGN) — the common case stays byte-identical to before this task.
+
+    Framed on BLOCK/BRANCH state throughout, never the dead worker's id (T21:
+    "orders re-target on block/branch state, not the dead worker id") — the
+    branch name is the one thing this replacement and its predecessor
+    legitimately share; its own agent-id is freshly minted per dispatch
+    (`core/switchboard.py::_agent_id`) and never referenced here as a target."""
+    handover = (manifest.get("handover") or {}).get(block)
+    if not handover:
+        return ""
+    branch = handover.get("branch")
+    branch_line = (f"Your branch is likely already `{branch}` — check it out "
+                   f"before creating a new one." if branch else
+                   "Check for an existing branch for this block before creating a new one.")
+    return (
+        f"\n\nHANDOVER (this block was previously in flight and dropped for "
+        f"re-drive — full context, not a blank restart):\n"
+        f"- Why: {handover.get('detail') or '(no detail recorded)'} "
+        f"(source={handover.get('source')!r}, resolved as "
+        f"{handover.get('disposition')!r} at {handover.get('dropped_at')})\n"
+        f"- {branch_line} It may already carry real work from the prior "
+        f"attempt — DO NOT trust it blindly.\n"
+        f"- EXPLICITLY RE-VERIFY the current state before proceeding: review "
+        f"what is actually on the branch (or absent, if none), confirm it "
+        f"still applies, and re-run the local acceptance suite yourself — "
+        f"never assume the prior attempt's last claimed state still holds.\n"
+        f"- Your pending order stands unchanged: build this block end to "
+        f"end and report a structured `done` once the local suite passes.")
+
+
+def _consume_handover(eng, manifest, block):
+    """Clear a consumed handover record — T21: read + consumed EXACTLY ONCE,
+    by this block's own next ASSIGN, never left to leak into a LATER,
+    unrelated drop of the same block. Absent-safe (an ordinary first-ever
+    ASSIGN has nothing to consume)."""
+    if block and block in (manifest.get("handover") or {}):
+        emit.drop(eng, manifest, "handover_consumed", ("handover",), block,
+                  block=block)
+
+
 def _route_online(eng, manifest, workers, gates, rep):
     """`worker.online` — the worker's first check-in. Its job is ONE thing:
     ASSIGN (tell the worker WHAT to build), exactly once. It does NOT require a
@@ -258,12 +306,14 @@ def _route_online(eng, manifest, workers, gates, rep):
                       f"your OWN feature branch (a `--branch <name>` report) "
                       f"and report a structured `done` when the local "
                       f"acceptance suite passes.")
+        assignment += _handover_briefing(manifest, block)
         eng.emit(
             "assign.worker",
             assignment,
             slots={"assignment": assignment, "merge_path": ""},
             worker_id=agent_id,
             kind="PMT-ASSIGN")
+    _consume_handover(eng, manifest, block)
     emit.patch_obj(eng, "worker_assigned", worker, {"assigned": True},
                    agent_id=agent_id, block=block)
     eng.log("flow", f"router: ASSIGN {agent_id!r} -> block {block!r} "
