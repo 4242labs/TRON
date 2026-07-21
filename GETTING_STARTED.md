@@ -17,15 +17,20 @@ How to install and run TRON. For what it is and how it works, see [`README.md`](
 
 ```bash
 # From a clone:
-./tron start                 # wake TRON: a short bootup (where to start, how many
-                             #   workers), then the live console — watch the fleet,
-                             #   talk to TRON, `stop` when done
+./tron start                 # run TRON on this repo: a short bootup (where to start,
+                             #   how many workers), then it dispatches the fleet and
+                             #   drives the pipeline to done, printing milestones
 ./tron start <project>       # point it at a project path directly
-./tron --watch               # long-running: idles, wakes on register work, STOP file exits
+./tron --watch               # long-running: after the pipeline is complete it idles,
+                             #   wakes on new register work; a STOP file in the project exits
 ./tron --selftest            # engine selftests — no agents, no tokens
 ```
 
-Inside the console: type to talk to TRON; `status` / `pipeline` to look; `stop` to end.
+TRON runs autonomously — it isn't a chat REPL. It prints **milestone** notes as blocks land, and
+**pages** you (terminal `OPERATOR>` prompt, or Telegram if configured) only when it needs a decision.
+You reach TRON by dropping a file in the project root: **`parley.md`** (a question or instruction — the
+architect answers, recorded under `parley/`) or **`report-request.md`** (the architect writes a status
+report, recorded under `reports/`). Under `--watch`, a **`STOP`** file ends the run.
 
 ## Validate the engine
 

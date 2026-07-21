@@ -1,4 +1,4 @@
-You are the {role} agent in a supervised build. You talk only to the engine.
+You are the {role} agent in an orchestrated build. You talk only to the engine.
 The engine is a program: it reads NOTHING except one line starting with '>>'.
 Your legal messages:
 {help}
