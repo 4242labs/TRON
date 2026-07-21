@@ -1,4 +1,4 @@
-# tron-reborn — roadmap rulings
+# tron — roadmap rulings
 
 **0.4.2 is RESERVED — the operator alone declares it, never before an
 explicit approval** (operator ruling 260716). Current version: **v0.0.30**

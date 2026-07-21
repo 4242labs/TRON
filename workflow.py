@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the dev process as data.
+"""tron — the dev process as data.
 
 workflow.toml COMPOSES the process (phases, actors, personas, closing
 words, gates, transitions, limits); the engine EXECUTES it — tron.py is
@@ -263,7 +263,7 @@ def render(flow=None):
     flow = flow or parse_file()
     lim = limits(flow)
     lines = [
-        "# tron-reborn — the workflow",
+        "# tron — the workflow",
         "",
         "> GENERATED from `workflow.toml` (the single source of the process).",
         "> Edit there, then run `python3 workflow.py --write`. Selftests fail",

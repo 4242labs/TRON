@@ -1,4 +1,4 @@
-# tron-reborn — v0.1 scope
+# tron — v0.1 scope
 
 **Goal:** prove the agent-to-agent and phase transitions over ONE block, full cycle, and deliver the product.
 **Design rule:** as simple as possible. No layer exists unless a v0.1 transition needs it.
@@ -54,7 +54,7 @@ A single terminal invocation runs the full cycle on the demo project unattended 
 ## Layout
 
 ```
-tron-reborn/
+tron/
   SCOPE-v0.1.md   # this file
   GLOSSARY.md     # the vocabulary document — GENERATED from glossary.py
   glossary.py     # the vocabulary: single-source dict + parser

@@ -1,4 +1,4 @@
-# tron-reborn — the dev process, as data. THE single source of the flow.
+# tron — the dev process, as data. THE single source of the flow.
 #
 # This file COMPOSES the process; the engine EXECUTES it (tron.py walks
 # this table). Every name used here — gates, prompts, personas, words —
@@ -12,7 +12,7 @@
 # engine copies the active file next to every run transcript.
 
 version = 1
-name = "build-review-merge"       # the process REBORN proved v0.1–v0.8
+name = "build-review-merge"       # the process proven across v0.1–v0.8
 
 [limits]                          # per-block caps; the operator's bounds
 phase_turns = 40                  # agent turns per phase, then operator

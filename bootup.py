@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the operator bootup journey (FROZEN).
+"""tron — the operator bootup journey (FROZEN).
 
 Every question, option, and AIDE line below is the frozen operator
 journey, VERBATIM (operator law: none of them changes without an

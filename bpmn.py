@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the workflow as a BPMN diagram, generated.
+"""tron — the workflow as a BPMN diagram, generated.
 
 workflow.toml is the single source of the process; this module derives
 the interactive BPMN diagram from the SAME parsed table workflow.py

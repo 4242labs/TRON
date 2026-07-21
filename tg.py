@@ -1,4 +1,4 @@
-"""tron-reborn — the Telegram line to the operator.
+"""tron — the Telegram line to the operator.
 
 The operator is elsewhere; that is the product. When `.env` (engine root)
 carries TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, milestone notes and pages

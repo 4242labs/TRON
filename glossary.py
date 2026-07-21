@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the vocabulary. THE single source of truth.
+"""tron — the vocabulary. THE single source of truth.
 
 Every word the engine understands is defined here and nowhere else. The
 human-readable document GLOSSARY.md is GENERATED from this module
@@ -103,7 +103,7 @@ def parse(reply, role):
 # ---------------------------------------------------------- GLOSSARY.md
 def render():
     lines = [
-        "# tron-reborn — the vocabulary",
+        "# tron — the vocabulary",
         "",
         "> GENERATED from `glossary.py` (the single source of truth).",
         "> Edit there, then run `python3 glossary.py --write`.",

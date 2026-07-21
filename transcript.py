@@ -1,4 +1,4 @@
-"""tron-reborn — transcript + terminal I/O.
+"""tron — transcript + terminal I/O.
 
 Everything any LLM agent says (and everything the engine says to it) is
 logged verbatim, one file per run, under runs/. The operator's terminal

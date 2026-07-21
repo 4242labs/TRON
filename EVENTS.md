@@ -1,4 +1,4 @@
-# tron-reborn — the event vocabulary
+# tron — the event vocabulary
 
 > GENERATED from `events.py` (the single source). Edit the EVENTS
 > table there, then run `python3 events.py --write`. Selftests

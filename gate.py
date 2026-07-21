@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the truth gate.
+"""tron — the truth gate.
 
 A DONE claim is never taken on the agent's word: the engine checks the
 repository itself. Gate: the claimed branch exists and carries commits

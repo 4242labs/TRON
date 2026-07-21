@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn v0.1 — a minimal deterministic supervisor: one block, full cycle.
+"""tron v0.1 — a minimal deterministic orchestrator: one block, full cycle.
 
 OPERATOR runs this in a terminal. The engine spawns a worker + an architect
 (and, on DONE, a reviewer) as persistent CLI agent sessions. Agents talk back

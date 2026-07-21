@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the pipeline: the permanent block register.
+"""tron — the pipeline: the permanent block register.
 
 `pipeline.md` in the project root is orchestration TRUTH: every block with
 its id, dependencies, status (todo → doing → done; done = the engine has

@@ -1,4 +1,4 @@
-"""tron-reborn — agents.
+"""tron — agents.
 
 An agent is a persistent `claude -p --resume` CLI session, cwd-locked to
 its arena. Identity is by construction: the engine knows which session it
