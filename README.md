@@ -100,7 +100,8 @@ Found a bug or have an idea? [Open an issue](https://github.com/4242labs/tron/is
 
 ## License
 
-Open source — [AGPL-3.0](LICENSE). | Commercial — contact **ahoy[at]42labs.io**.
+TRON is dual-licensed — open source under [AGPL-3.0](LICENSE), or a [commercial license](LICENSING.md)
+for closed-source / SaaS use (**ahoy[at]42labs.io**).
 
 ---
 If it earned its keep, [coffee is appreciated](https://buymeacoffee.com/42piratas). ☕
