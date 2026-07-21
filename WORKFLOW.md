@@ -1,4 +1,4 @@
-# tron-reborn — the workflow
+# tron — the workflow
 
 > GENERATED from `workflow.toml` (the single source of the process).
 > Edit there, then run `python3 workflow.py --write`. Selftests fail

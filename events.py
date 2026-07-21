@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the typed event log: one machine-readable truth per run.
+"""tron — the typed event log: one machine-readable truth per run.
 
 Every engine decision lands as ONE JSON line in runs/<run>.events.jsonl
 — a closed vocabulary (EVENTS below is the single source; EVENTS.md is
@@ -103,7 +103,7 @@ def tally(records):
 # --------------------------------------------------------------- the doc
 def render():
     lines = [
-        "# tron-reborn — the event vocabulary",
+        "# tron — the event vocabulary",
         "",
         "> GENERATED from `events.py` (the single source). Edit the EVENTS",
         "> table there, then run `python3 events.py --write`. Selftests",

@@ -1,4 +1,4 @@
-# tron-reborn
+# tron
 
 A deterministic workflow engine for a fleet of LLM builders. The process
 is DATA — both spines: `workflow.toml` composes the pass spine (how a block

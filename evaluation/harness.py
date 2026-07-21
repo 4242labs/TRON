@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the SIM harness: run one SIM many times, measure it.
+"""tron — the SIM harness: run one SIM many times, measure it.
 
 A PROJECT template (sims/templates/project-NN/ — plain files, no git;
 01 smallest, 03 largest) is seeded into a FRESH git project per SIM; the
@@ -62,7 +62,7 @@ def seed(template, dest, parallel=None):
             sys.exit("engine workflow.toml has no single max_parallel line")
         (dest / "workflow.toml").write_text(flow)
     git(dest, "init", "-qb", "main")
-    git(dest, "config", "user.email", "sim@tron-reborn")
+    git(dest, "config", "user.email", "sim@tron")
     git(dest, "config", "user.name", "sim-seed")
     git(dest, "add", ".")
     git(dest, "commit", "-qm", "seed: sim template")

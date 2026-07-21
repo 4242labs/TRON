@@ -1,4 +1,4 @@
-"""tron-reborn — prompt loader.
+"""tron — prompt loader.
 
 Every boilerplate the engine ever says to an LLM lives under prompts/,
 one file per prompt. `{gateway}` in a template composes the shared

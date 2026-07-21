@@ -1,4 +1,4 @@
-# tron-reborn — the vocabulary
+# tron — the vocabulary
 
 > GENERATED from `glossary.py` (the single source of truth).
 > Edit there, then run `python3 glossary.py --write`.

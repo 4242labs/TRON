@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tron-reborn — the roster: session manifesto + pro-active user report.
+"""tron — the roster: session manifesto + pro-active user report.
 
 One live, engine-owned state: every agent session (role, session id, what
 it is taking care of) and every block's journey. Every mutation — and
