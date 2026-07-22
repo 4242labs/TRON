@@ -52,7 +52,8 @@ edits — details and the manual `git clone` route in the [Getting Started](http
   trunk. Finished work is never reopened; remediation is always a new block ahead.
 - **Engineers build; reviewers check.** Engineers and reviewers share a worker pool (you set its size).
   Each block runs in a fresh engine-made worktree arena on its own branch; judges read the delivery in
-  their **own** detached checkout pinned to the engine-attested sha.
+  their **own** detached checkout pinned to the engine-attested sha. The personas these agents run on
+  (`engine/prompts/persona_*.md`) are a **default set you can edit or replace** for your own project.
 - **The gate never trusts a claim.** "Reports done" is only a trigger. The gate runs the definition of
   done on the *evidence* — commits + untouched trunk + engine-run tests + an acceptance challenge; the
   worker owns the merge inside the single engine-wide window; the engine lands, re-validates **on trunk**,

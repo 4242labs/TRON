@@ -23,6 +23,7 @@ docs. Per-project or machine-specific assumptions live in seeded instances, neve
    ```bash
    python3 engine/tron.py --selftest
    python3 engine/gate.py
+   python3 engine/tg.py            # Telegram formatting/wiring
    python3 engine/workflow.py      # --write regenerates docs/WORKFLOW.md
    python3 engine/glossary.py      # --write regenerates docs/GLOSSARY.md
    python3 engine/events.py        # --write regenerates docs/EVENTS.md

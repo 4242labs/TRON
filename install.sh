@@ -20,7 +20,7 @@
 #   TRON_REPO   git URL to clone       (default: https://github.com/4242labs/tron.git)
 #   TRON_REF    branch/tag to check out(default: the repo default branch)
 #
-#   e.g.  curl -fsSL https://tron.42labs.io/seed.sh | TRON_REF=v0.4.2 sh
+#   e.g.  curl -fsSL https://tron.42labs.io/seed.sh | TRON_REF=v0.4.1 sh
 #
 # Source of truth: this file lives at the root of 4242labs/tron. The pretty
 # URL above is a redirect to it — there is no second copy to drift.
