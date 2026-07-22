@@ -13,8 +13,10 @@ guidelines (tron-app/docs/bpmn.md): token-driven track grid, integer
 (col,row), one lane per actor + an ENGINE lane for gates and landings,
 gateways always marked, no edge labels (node names carry semantics).
 
-The generated files are NOT published anywhere yet — the tron-www sync
-hook is deliberately absent until 0.4.2 (operator ruling 260716).
+The generated files are published on the marketing site: tron-www fetches
+workflow.html + workflow.bpmn fresh from this canon at deploy time (see its
+.github/workflows/deploy.yml), so the live diagram at tron.42labs.io/workflow
+can never drift from the flow.
 """
 
 import base64
@@ -551,7 +553,7 @@ def render_html(flow=None):
         f'    </article>' for c in cards)
     tpl = """<!DOCTYPE html>
 <!-- GENERATED from workflow.toml by bpmn.py - do not edit;
-     regenerate: python3 bpmn.py -(-)write. NOT published until 0.4.2.
+     regenerate: python3 bpmn.py -(-)write. Served at tron.42labs.io/workflow.
      Skin: the live 42labs tron-app workflow diagram (same vendored bpmn-js
      viewer + design tokens + logomark), baked in so --write is stable. -->
 <html lang="en">
