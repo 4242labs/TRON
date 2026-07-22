@@ -46,5 +46,9 @@ jobs:
           run engine/workflow.py
           run engine/bpmn.py
           run engine/glossary.py
+          run engine/agents.py
+          run engine/bootup.py
+          run engine/pipeline.py
+          run engine/roster.py
           run evaluation/harness.py --selftest
           exit $fail
