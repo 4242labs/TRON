@@ -35,9 +35,9 @@ curl -fsSL https://tron.42labs.io/seed.sh | sh
 ```
 
 Clones into `~/.tron`, puts `tron` on your `PATH`, then `tron start`. Idempotent, no `sudo`, no rc
-edits — details and the manual `git clone` route in [`GETTING_STARTED.md`](GETTING_STARTED.md).
+edits — details and the manual `git clone` route in the [Getting Started](https://github.com/4242labs/tron/wiki/Getting-Started) wiki.
 
-> **New here?** [`GETTING_STARTED.md`](GETTING_STARTED.md) — requirements, the commands, and the file layout.
+> **New here?** The [wiki](https://github.com/4242labs/tron/wiki) is the manual — [Getting Started](https://github.com/4242labs/tron/wiki/Getting-Started) covers requirements, the commands, and the file layout.
 
 ---
 
@@ -73,7 +73,7 @@ edits — details and the manual `git clone` route in [`GETTING_STARTED.md`](GET
 tron/
 ├── tron                # launcher — `tron start [project]`
 ├── install.sh          # the `curl … | sh` installer (the pretty URL redirects here)
-├── README.md · GETTING_STARTED.md · LICENSE · VERSION
+├── README.md · CONTRIBUTING.md · LICENSE · VERSION
 ├── engine/             # the deterministic engine
 │   ├── tron.py         #   the flow driver + dispatch + WAKE
 │   ├── workflow.toml   #   THE process, as data (pass spine + limits)
