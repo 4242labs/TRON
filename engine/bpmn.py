@@ -82,7 +82,7 @@ LOGO_SVG = (
 # self-contained data URI so the standalone file carries its own icon.
 FAVICON = "data:image/svg+xml;base64," + base64.b64encode((
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 33 27">'
-    + "".join(f'<path fill="#E2711D" d="{d}"/>'
+    + "".join(f'<path fill="#A84500" d="{d}"/>'
               for d in re.findall(r'class="logo__mark" d="([^"]+)"', LOGO_SVG))
     + '</svg>').encode()).decode()
 
@@ -571,7 +571,7 @@ def render_html(flow=None):
     --copper-border:#F5C9A1; --copper-deep:#AA4D08;
     --blue-dark:#2563EB; --sky:#EFF6FF;
     --emerald:#16A34A; --emerald-dark:#166534;
-    --accent:var(--copper); --logo:var(--copper-dark);
+    --accent:var(--copper); --logo:#A84500; --fg:#191510;
     --font-heading:'Space Grotesk',system-ui,sans-serif;
     --font-body:'IBM Plex Sans',system-ui,sans-serif;
     --font-mono:'Geist Mono',ui-monospace,monospace;
@@ -590,7 +590,7 @@ def render_html(flow=None):
     color:var(--charcoal); text-transform:uppercase; letter-spacing:.02em;}
   .logolink{display:inline-flex; align-items:center;}
   .logo__svg{height:26px; width:auto; display:block;}
-  .logo__mark{fill:var(--accent);} .logo__type{fill:var(--logo);}
+  .logo__mark{fill:var(--logo);} .logo__type{fill:var(--fg);}
   .hsep{width:1px; height:18px; background:var(--border-cool);}
   .topctl{display:flex; align-items:center; gap:8px;}
   .zoomctl{display:flex; gap:6px;}
