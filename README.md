@@ -74,7 +74,7 @@ edits — details and the manual `git clone` route in the [Getting Started](http
 tron/
 ├── tron                # launcher — `tron start [project]`
 ├── install.sh          # the `curl … | sh` installer (the pretty URL redirects here)
-├── README.md · CONTRIBUTING.md · LICENSE · VERSION
+├── README.md · CONTRIBUTING.md · LICENSE · LICENSING.md · VERSION
 ├── engine/             # the deterministic engine
 │   ├── tron.py         #   the flow driver + dispatch + WAKE
 │   ├── workflow.toml   #   THE process, as data (pass spine + limits)
@@ -88,12 +88,22 @@ tron/
 │   └── prompts/        #   every engine/persona prompt, one file each
 ├── docs/               # GENERATED reference: GLOSSARY.md · EVENTS.md · WORKFLOW.md; voice.md
 ├── workflow/           # GENERATED interactive BPMN diagram (vendored bpmn-js)
-└── evaluation/         # the SIM validation suite (harness + templates)
+├── evaluation/         # the SIM validation suite (harness + templates)
+└── paper/              # the preprint + evidence bundle (event logs, probes)
 ```
 
 Change discipline: a new word goes in `engine/glossary.py` (`--write` regenerates the doc); a new
 boilerplate is a new file under `engine/prompts/`; a process change is a `engine/workflow.toml` edit that
 must survive the lint. Nothing is defined twice.
+
+## Research
+
+TRON's design and validation are written up in a preprint — *Demoting the Master
+Control Program: Deterministic Orchestration of a Fleet of LLM Agents*. The paper
+and the full evidence bundle (typed event logs, ablations, and two
+third-party-oracle probes — MIT 6.5840 MapReduce and Raft) live under
+[`paper/`](paper/); the [Validation &amp; Research](https://github.com/4242labs/tron/wiki/Validation-and-Research)
+wiki page summarizes the results and how to cite.
 
 ## Contributing
 
