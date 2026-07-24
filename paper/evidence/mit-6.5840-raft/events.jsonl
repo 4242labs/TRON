@@ -1,0 +1,58 @@
+{"ts": 1784831652.054, "t": "run_start", "project": "mit-6.5840-raft-tron", "flow": "build-review-merge", "total": 4, "todo": 4, "ablate": []}
+{"ts": 1784831667.028, "t": "dispatch", "block": "block-01", "deps": [], "in_flight": 1}
+{"ts": 1784831667.08, "t": "phase", "block": "block-01", "phase": "build", "window": false}
+{"ts": 1784831969.703, "t": "gate", "block": "block-01", "phase": "build", "ok": true, "evidence": "1 commit(s) on feat/block-01 beyond main:"}
+{"ts": 1784832023.527, "t": "phase", "block": "block-01", "phase": "review", "window": false}
+{"ts": 1784832217.027, "t": "verdict", "block": "block-01", "phase": "review", "word": "APPROVED", "passed": true, "cycle": 1}
+{"ts": 1784832237.692, "t": "phase", "block": "block-01", "phase": "merge", "window": true}
+{"ts": 1784832286.238, "t": "gate", "block": "block-01", "phase": "merge", "ok": true, "evidence": "feat/block-01 contains the trunk"}
+{"ts": 1784832286.253, "t": "land", "block": "block-01", "phase": "merge", "sha": "9a29020569b1"}
+{"ts": 1784832303.01, "t": "trunk_check", "block": "block-01", "ok": true, "cmd": "bash run-oracle.sh 3A"}
+{"ts": 1784832303.01, "t": "phase", "block": "block-01", "phase": "wrap", "window": true}
+{"ts": 1784832348.807, "t": "gate", "block": "block-01", "phase": "wrap", "ok": true, "evidence": "logs/block-01-session.md committed, tree clean"}
+{"ts": 1784832348.82, "t": "land", "block": "block-01", "phase": "wrap", "sha": "1de15238a65c"}
+{"ts": 1784832364.982, "t": "trunk_check", "block": "block-01", "ok": true, "cmd": "bash run-oracle.sh 3A"}
+{"ts": 1784832365.012, "t": "block_done", "block": "block-01", "done": 1, "total": 4}
+{"ts": 1784832365.012, "t": "dispatch", "block": "block-02", "deps": ["01"], "in_flight": 1}
+{"ts": 1784832365.062, "t": "phase", "block": "block-02", "phase": "build", "window": false}
+{"ts": 1784832990.984, "t": "gate", "block": "block-02", "phase": "build", "ok": true, "evidence": "1 commit(s) on feat/block-02 beyond main:"}
+{"ts": 1784833029.565, "t": "phase", "block": "block-02", "phase": "review", "window": false}
+{"ts": 1784833701.896, "t": "verdict", "block": "block-02", "phase": "review", "word": "APPROVED", "passed": true, "cycle": 1}
+{"ts": 1784833724.697, "t": "phase", "block": "block-02", "phase": "merge", "window": true}
+{"ts": 1784833880.162, "t": "gate", "block": "block-02", "phase": "merge", "ok": true, "evidence": "feat/block-02 contains the trunk"}
+{"ts": 1784833880.196, "t": "land", "block": "block-02", "phase": "merge", "sha": "905919b072df"}
+{"ts": 1784833949.637, "t": "trunk_check", "block": "block-02", "ok": true, "cmd": "bash run-oracle.sh 3B"}
+{"ts": 1784833949.637, "t": "phase", "block": "block-02", "phase": "wrap", "window": true}
+{"ts": 1784834037.934, "t": "gate", "block": "block-02", "phase": "wrap", "ok": true, "evidence": "logs/block-02-session.md committed, tree clean"}
+{"ts": 1784834037.943, "t": "land", "block": "block-02", "phase": "wrap", "sha": "905919b072df"}
+{"ts": 1784834103.966, "t": "trunk_check", "block": "block-02", "ok": true, "cmd": "bash run-oracle.sh 3B"}
+{"ts": 1784834104.006, "t": "block_done", "block": "block-02", "done": 2, "total": 4}
+{"ts": 1784834104.006, "t": "dispatch", "block": "block-03", "deps": ["02"], "in_flight": 1}
+{"ts": 1784834104.061, "t": "phase", "block": "block-03", "phase": "build", "window": false}
+{"ts": 1784835087.326, "t": "gate", "block": "block-03", "phase": "build", "ok": true, "evidence": "2 commit(s) on feat/block-03 beyond main:"}
+{"ts": 1784835104.175, "t": "phase", "block": "block-03", "phase": "review", "window": false}
+{"ts": 1784835492.194, "t": "verdict", "block": "block-03", "phase": "review", "word": "APPROVED", "passed": true, "cycle": 1}
+{"ts": 1784835509.668, "t": "phase", "block": "block-03", "phase": "merge", "window": true}
+{"ts": 1784835961.372, "t": "gate", "block": "block-03", "phase": "merge", "ok": true, "evidence": "feat/block-03 contains the trunk"}
+{"ts": 1784835961.385, "t": "land", "block": "block-03", "phase": "merge", "sha": "54271cc7f291"}
+{"ts": 1784836171.461, "t": "trunk_check", "block": "block-03", "ok": true, "cmd": "bash run-oracle.sh 3C"}
+{"ts": 1784836171.462, "t": "phase", "block": "block-03", "phase": "wrap", "window": true}
+{"ts": 1784836417.692, "t": "gate", "block": "block-03", "phase": "wrap", "ok": true, "evidence": "logs/block-03-session.md committed, tree clean"}
+{"ts": 1784836417.706, "t": "land", "block": "block-03", "phase": "wrap", "sha": "6bf14c10b5fa"}
+{"ts": 1784836633.552, "t": "trunk_check", "block": "block-03", "ok": true, "cmd": "bash run-oracle.sh 3C"}
+{"ts": 1784836633.582, "t": "block_done", "block": "block-03", "done": 3, "total": 4}
+{"ts": 1784836633.583, "t": "dispatch", "block": "block-04", "deps": ["03"], "in_flight": 1}
+{"ts": 1784836633.636, "t": "phase", "block": "block-04", "phase": "build", "window": false}
+{"ts": 1784838752.303, "t": "gate", "block": "block-04", "phase": "build", "ok": true, "evidence": "1 commit(s) on feat/block-04 beyond main:"}
+{"ts": 1784839200.715, "t": "phase", "block": "block-04", "phase": "review", "window": false}
+{"ts": 1784839688.196, "t": "verdict", "block": "block-04", "phase": "review", "word": "APPROVED", "passed": true, "cycle": 1}
+{"ts": 1784839709.193, "t": "phase", "block": "block-04", "phase": "merge", "window": true}
+{"ts": 1784840557.751, "t": "gate", "block": "block-04", "phase": "merge", "ok": true, "evidence": "feat/block-04 contains the trunk"}
+{"ts": 1784840557.765, "t": "land", "block": "block-04", "phase": "merge", "sha": "8982297e4be4"}
+{"ts": 1784840971.504, "t": "trunk_check", "block": "block-04", "ok": true, "cmd": "bash run-oracle.sh 3D"}
+{"ts": 1784840971.504, "t": "phase", "block": "block-04", "phase": "wrap", "window": true}
+{"ts": 1784841408.635, "t": "gate", "block": "block-04", "phase": "wrap", "ok": true, "evidence": "logs/block-04-session.md committed, tree clean"}
+{"ts": 1784841408.648, "t": "land", "block": "block-04", "phase": "wrap", "sha": "540c9bb450d6"}
+{"ts": 1784841817.73, "t": "trunk_check", "block": "block-04", "ok": true, "cmd": "bash run-oracle.sh 3D"}
+{"ts": 1784841817.764, "t": "block_done", "block": "block-04", "done": 4, "total": 4}
+{"ts": 1784841831.434, "t": "run_done", "delivered": 4}
