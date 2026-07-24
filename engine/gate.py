@@ -48,6 +48,22 @@ def trunk_test_cmd(block_text):
     return _cmd_line(block_text, "trunk-test:")
 
 
+def test_timeout(block_text, default=300):
+    """Seconds the engine allows the block's test command to run before it
+    is killed as a hang: a 'test-timeout: <seconds>' line, or `default`.
+    The default suits fast suites; a slow but legitimately long third-party
+    suite (e.g. one with its own multi-minute budget) declares a larger
+    value so the gate judges the suite by its result, not by the clock."""
+    raw = _cmd_line(block_text, "test-timeout:")
+    if raw is None:
+        return default
+    try:
+        secs = int(raw.split()[0])
+        return secs if secs > 0 else default
+    except (ValueError, IndexError):
+        return default
+
+
 def run_tests(cwd, cmd, timeout=300):
     """(ok, output tail) — the engine runs the block's tests in the arena."""
     try:

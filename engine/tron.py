@@ -32,7 +32,7 @@ import workflow
 from agents import Agent, kill_strays
 from gate import (add_arena, contains_trunk, git, judge_copy, merge_to_main,
                   orphan_branch, remove_arena, run_tests, test_cmd,
-                  trunk_sha, trunk_test_cmd, verify_done)
+                  test_timeout, trunk_sha, trunk_test_cmd, verify_done)
 from glossary import glossary_help, parse
 from prompts import prompt
 from transcript import halt, operator, say
@@ -324,6 +324,7 @@ def run_block(path, arena, name, block, trunk, architect, flow):
     is the LLM's, the engine only authorizes). Returns the branch, LANDED.
     """
     branch, tag, tests = f"feat/{name}", f"{name}|", test_cmd(block)
+    gate_to = test_timeout(block)
     lim = workflow.limits(flow)
     phases = {p["id"]: p for p in flow["phase"]}
 
@@ -484,7 +485,7 @@ def run_block(path, arena, name, block, trunk, architect, flow):
                     ok, evidence = gate_verify(ph, path, arena, name, branch,
                                                trunk, f)
                     if ok and tests:
-                        t_ok, out = run_tests(arena, tests)
+                        t_ok, out = run_tests(arena, tests, timeout=gate_to)
                         bsay("gate", f"engine ran tests in the arena: "
                              f"{'GREEN' if t_ok else 'RED'} — {tests}")
                         if not t_ok:
@@ -552,7 +553,7 @@ def run_block(path, arena, name, block, trunk, architect, flow):
                                 sha=ev[:12])
                     roster.block(name, f"landed ({ev[:12]})")
                     if tests:
-                        t_ok, out = run_tests(path, tests)
+                        t_ok, out = run_tests(path, tests, timeout=gate_to)
                         bsay("merge", f"engine re-validated ON TRUNK: "
                              f"{'GREEN' if t_ok else 'RED'} — {tests}")
                         events.emit("trunk_check", block=name, ok=t_ok,
@@ -566,7 +567,7 @@ def run_block(path, arena, name, block, trunk, architect, flow):
                         # on the landed trunk — final landing, ON the trunk
                         tcmd = trunk_test_cmd(block)
                         if tcmd:
-                            t_ok, out = run_tests(path, tcmd)
+                            t_ok, out = run_tests(path, tcmd, timeout=gate_to)
                             bsay("merge", f"trunk-only validation: "
                                  f"{'GREEN' if t_ok else 'RED'} — {tcmd}")
                             events.emit("trunk_check", block=name, ok=t_ok,

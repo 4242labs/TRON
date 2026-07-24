@@ -29,7 +29,7 @@ ACTORS = ("worker", "reviewer")             # vocabulary roles a phase may seat
 GATES = ("verify_done", "verify_merged",    # engine verbs a work phase may cite
          "verify_wrapped")
 LIMITS = {"phase_turns": 40, "review_cycles": 2, "gate_fails": 2,
-          "turn_seconds": 900, "max_parallel": 2}
+          "turn_seconds": 3600, "max_parallel": 2}
 REQUIRED = {
     "work":    ("actor", "assign", "word", "gate", "bounce", "next"),
     "verdict": ("actor", "assign", "pass_word", "reject_word", "fix",
