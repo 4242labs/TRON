@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.2](https://github.com/4242labs/TRON/compare/v0.4.1...v0.4.2) (2026-07-22)
+## [0.4.2](https://github.com/4242labs/TRON/compare/v0.4.1...v0.4.2) (2026-07-24)
 
 
 ### Features
@@ -47,6 +47,7 @@
 * **engine:** F-1/S-3+R-6 unified paperwork lander — per-role allowlists (paperwork_paths), reviewer landing stage, architect FIFO, session-residue sweep; retires PMT-CLOSE worker-side landing (tron-13 D1) ([426f108](https://github.com/4242labs/TRON/commit/426f108264351bc2db18e0c6f29cf355ba3a6085))
 * **engine:** F-4/R-7 operator re-ping ladder + named resumable safe-park, park visibility on every pull surface (tron-13 D4) ([0fa8944](https://github.com/4242labs/TRON/commit/0fa894483d8666066ea4816bf21d8ba96ffe2240))
 * **engine:** S-2-full declarative admission table + lint L22; A-2 structured reports channel (report.sh --tag, zero-LLM gate ladder) (tron-13 D2) ([d9e78e8](https://github.com/4242labs/TRON/commit/d9e78e876e13c40a032d6a305d0296b7db7f0e24))
+* **gate:** per-block test-timeout directive + raise turn budget for slow suites ([f7401f4](https://github.com/4242labs/TRON/commit/f7401f4e9b93eed2e46bc0d49f24508c0fa4b0a9))
 * **modes:** add SCAFFOLD mode — /tron-scaffold stands up a new project ([5675452](https://github.com/4242labs/TRON/commit/56754527d82cbd71a6e6816962e117505937339a))
 * **modes:** add TRON-ALFREDO — the generalist mode ([#153](https://github.com/4242labs/TRON/issues/153)) ([8e2572c](https://github.com/4242labs/TRON/commit/8e2572cf4222a2560f2992d5a18a64105fb9dc03))
 * **modes:** add tron-app/modes with flynn (ex-super-m) and clu personas ([d88672a](https://github.com/4242labs/TRON/commit/d88672afd01418526a1537ec8a01b8769b6765c1))
