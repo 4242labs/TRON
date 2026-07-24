@@ -1,0 +1,18 @@
+{"ts": 1784810508.113, "t": "run_start", "project": "mit-6.5840-tron", "flow": "build-review-merge", "total": 1, "todo": 1, "ablate": []}
+{"ts": 1784810508.115, "t": "recover", "what": "strays_killed", "pids": [138995]}
+{"ts": 1784810508.128, "t": "recover", "what": "doing_requeued", "block": "block-01", "orphan": ""}
+{"ts": 1784810525.836, "t": "dispatch", "block": "block-01", "deps": [], "in_flight": 1}
+{"ts": 1784810525.894, "t": "phase", "block": "block-01", "phase": "build", "window": false}
+{"ts": 1784811228.487, "t": "gate", "block": "block-01", "phase": "build", "ok": true, "evidence": "1 commit(s) on feat/block-01 beyond main:"}
+{"ts": 1784811306.042, "t": "phase", "block": "block-01", "phase": "review", "window": false}
+{"ts": 1784811810.14, "t": "verdict", "block": "block-01", "phase": "review", "word": "APPROVED", "passed": true, "cycle": 1}
+{"ts": 1784811832.173, "t": "phase", "block": "block-01", "phase": "merge", "window": true}
+{"ts": 1784812018.239, "t": "gate", "block": "block-01", "phase": "merge", "ok": true, "evidence": "feat/block-01 contains the trunk"}
+{"ts": 1784812018.252, "t": "land", "block": "block-01", "phase": "merge", "sha": "c7c1f4b62743"}
+{"ts": 1784812098.318, "t": "trunk_check", "block": "block-01", "ok": true, "cmd": "bash run-oracle.sh"}
+{"ts": 1784812098.318, "t": "phase", "block": "block-01", "phase": "wrap", "window": true}
+{"ts": 1784812218.882, "t": "gate", "block": "block-01", "phase": "wrap", "ok": true, "evidence": "logs/block-01-session.md committed, tree clean"}
+{"ts": 1784812218.896, "t": "land", "block": "block-01", "phase": "wrap", "sha": "a8527aaa4c85"}
+{"ts": 1784812291.481, "t": "trunk_check", "block": "block-01", "ok": true, "cmd": "bash run-oracle.sh"}
+{"ts": 1784812291.534, "t": "block_done", "block": "block-01", "done": 1, "total": 1}
+{"ts": 1784812305.097, "t": "run_done", "delivered": 1}
