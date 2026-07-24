@@ -23,7 +23,7 @@ MODELS = {
     "player": "claude-sonnet-5",
 }
 CLAUDE = "claude"             # the CLI binary (selftests substitute a fake)
-TURN_TIMEOUT_S = 15 * 60      # default wall-clock budget per turn
+TURN_TIMEOUT_S = 60 * 60      # default wall-clock budget per turn
 PROBE_TIMEOUT_S = 3 * 60
 PROBE = ("liveness probe from the engine — your last turn overran its "
          "wall-clock budget and was interrupted. Reply with ONE line: what "
